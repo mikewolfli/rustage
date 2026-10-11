@@ -1,0 +1,7 @@
+[package]
+name = "rustage"
+version = "0.1.0"
+edition = "2024"
+description = "A desktop visual UI designer for Rust-Widgets"
+license = "MIT"
+publish = false

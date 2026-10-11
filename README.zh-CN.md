@@ -9,8 +9,8 @@
 
 ## 项目状态
 
-rustage 目前处于**设计与规划阶段**。仓库包含架构、工程原则、实施路线图和贡献基础设施，
-**尚无可运行设计器、Cargo 应用工程或已发布安装包**。
+rustage 目前处于**设计与规划阶段**。仓库现已包含最小 Rust 可执行程序骨架，但
+**尚无可运行的可视化设计器或已发布安装包**。该骨架不包含 GUI 框架或第三方依赖。
 
 以下能力均为规划，不表示已经实现或通过平台验证。
 完整路线图包含 28 个功能域、224 项实施任务、20 个里程碑及对应验收标准。
@@ -71,6 +71,9 @@ rustage/
 │   ├── plan/             # 原则、白皮书、路线图
 │   ├── README.md         # 文档索引
 │   └── github.md         # 仓库管理说明
+├── src/                  # 最小可执行入口与 CLI 边界
+├── Cargo.toml            # Rust 包配置
+├── Cargo.lock            # Rust 依赖锁定文件
 ├── tools/                # 无第三方依赖的文档检查及测试
 ├── README.md             # 英文概览
 ├── README.zh-CN.md       # 中文概览
@@ -87,12 +90,16 @@ rustage/
 ```sh
 git clone https://github.com/mikewolfli/rustage.git
 cd rustage
+cargo run
+cargo run -- --help
+cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 ```
 
-文档检查需要 **Node.js 22 或更新版本**及 Git，无 npm 依赖。
-当前没有 `cargo run` 入口；实际应用与工具链确认后再加入 Rust 构建和测试工作流。
+Rust 骨架使用 2024 edition，且没有第三方依赖。文档检查需要
+**Node.js 22 或更新版本**及 Git，无 npm 依赖。当前可执行程序仅报告项目状态，
+并支持帮助与版本选项；尚不会启动设计器窗口。
 
 ## 贡献与支持
 

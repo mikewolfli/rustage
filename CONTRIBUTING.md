@@ -5,10 +5,11 @@
 ## Current stage
 
 This repository contains design documents and contribution infrastructure,
-not a runnable application. Contributions may include design reviews,
-documentation fixes, reproducible upstream API evidence, and roadmap refinement.
-Confirm the relevant baseline decisions before introducing a Cargo application,
-dependencies, a toolchain, or new public architecture.
+plus a minimal Rust executable scaffold. It does not yet contain a runnable
+designer. Contributions may include design reviews, documentation fixes,
+reproducible upstream API evidence, and roadmap refinement. Confirm the relevant
+baseline decisions before adding GUI frameworks, dependencies, or new public
+architecture.
 
 ## Before starting
 
@@ -38,22 +39,23 @@ Contributors retain their rights; no copyright assignment is required.
 
 ## Checks available today
 
-Use Git and Node.js 22 or newer. No npm packages are required:
+Use Git, Rust, and Node.js 22 or newer. No npm packages or Rust third-party
+crates are required:
 
 ```sh
+cargo fmt --check
+cargo test
+cargo run -- --help
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 git diff --check
 ```
 
-Checks cover local Markdown file links, whitespace, conflict markers, required
+Rust checks cover the current executable scaffold only; they do not establish
+that a GUI designer or any output target is implemented. Documentation checks
+cover local Markdown file links, whitespace, conflict markers, required
 community files, and roadmap task dependencies. They do not fetch external URLs,
 validate heading anchors, or replace design review.
-
-There is no Cargo application yet. Do not claim that `cargo check` or an
-application run passed when no such project exists.
-Add Rust formatting, compilation, tests, and target artifact checks when the
-actual implementation and toolchain are established.
 
 ## Documentation and implementation expectations
 

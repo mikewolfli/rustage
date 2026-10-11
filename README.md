@@ -9,10 +9,10 @@
 
 ## Project status
 
-rustage is currently in the **design and planning stage**. This repository
-contains the architecture, engineering principles, implementation roadmap,
-and contribution infrastructure. It does **not** yet contain a runnable
-designer, a Cargo application, or released installation packages.
+rustage is currently in the **design and planning stage**. The repository now
+includes a minimal Rust executable scaffold, but it does **not** yet contain a
+runnable visual designer or released installation packages. The scaffold has
+no GUI framework or third-party dependencies.
 
 Capabilities below are planned, not claims of implemented or verified support.
 The roadmap defines 28 functional domains, 224 implementation tasks,
@@ -82,6 +82,9 @@ rustage/
 │   ├── plan/             # Principles, whitepaper, and roadmap
 │   ├── README.md         # Documentation index
 │   └── github.md         # Repository administration guide
+├── src/                  # Minimal executable entry point and CLI boundary
+├── Cargo.toml            # Rust package manifest
+├── Cargo.lock            # Locked Rust dependencies
 ├── tools/                # Dependency-free documentation checks and tests
 ├── README.md             # English overview
 ├── README.zh-CN.md       # Chinese overview
@@ -98,13 +101,17 @@ rustage/
 ```sh
 git clone https://github.com/mikewolfli/rustage.git
 cd rustage
+cargo run
+cargo run -- --help
+cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 ```
 
+The Rust scaffold uses the 2024 edition and has no third-party dependencies.
 Documentation checks require **Node.js 22 or newer** and Git, with no npm
-dependencies. There is no `cargo run` command yet. Rust build/test workflows
-will be added when a real application and confirmed toolchain exist.
+dependencies. The executable currently reports its status and supports help
+and version options; it does not launch a designer window.
 
 ## Contributing and support
 

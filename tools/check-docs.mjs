@@ -90,6 +90,105 @@ export function checkRoadmap(text) {
     visited.add(id);
   }
   for (const id of tasks.keys()) visit(id);
+  const domains = new Set([...tasks.keys()].map(id => id.slice(1, 3)));
+  const totals = text.match(/共 \*\*(\d+) 个功能域、(\d+) 项实施任务、(\d+) 个里程碑、(\d+) 条用户旅程\*\*/);
+  const milestones = [...text.matchAll(/^\| (MS\d{2}) [^|\n]*\|([^|\n]+)\|([^|\n]+)\|/gm)];
+  if (totals) {
+    const actual = [
+      domains.size,
+      tasks.size,
+      new Set(milestones.map(match => match[1])).size,
+      new Set([...text.matchAll(/^\| (J\d{2}) /gm)].map(match => match[1])).size,
+    ];
+    actual.forEach((count, index) => {
+      if (count !== Number(totals[index + 1])) {
+        errors.push(`roadmap: declared total ${index + 1} is ${totals[index + 1]}, found ${count}`);
+      }
+    });
+  }
+  if (milestones.length > 0) {
+    const phases = new Map();
+    const future = [...text.matchAll(/^\| (FUTURE) [^|\n]*\|([^|\n]+)\|/gm)];
+    const entries = new Map(milestones.map(([, id, , entry]) => {
+      const dependencies = new Set();
+      for (const [range] of entry.matchAll(/MS\d{2}(?:[–-]MS\d{2})?/g)) {
+        const [start, end = start] = range.split(/[–-]/);
+        for (let index = Number(start.slice(2)); index <= Number(end.slice(2)); index += 1) {
+          dependencies.add(`MS${String(index).padStart(2, '0')}`);
+        }
+      }
+      return [id, dependencies];
+    }));
+    function dependsOn(phase, required, visited = new Set()) {
+      if (phase === required) return true;
+      if (visited.has(phase)) return false;
+      visited.add(phase);
+      return [...(entries.get(phase) ?? [])]
+        .some(dependency => dependsOn(dependency, required, visited));
+    }
+    for (const [, milestone, scope] of [...milestones, ...future]) {
+      const references = scope.matchAll(/\b([FT])(\d{2})(?:\.(\d{2}))?(?:[–-]([FT])(\d{2})(?:\.(\d{2}))?)?/g);
+      for (const [, kind, domain, task, endKind, endDomain, endTask] of references) {
+        if ((kind === 'F' && task)
+          || (endKind && (kind !== endKind || Boolean(task) !== Boolean(endTask)))) {
+          errors.push(`roadmap: invalid task scope in ${milestone}`);
+          continue;
+        }
+        const start = Number(domain) * 100 + Number(task ?? 0);
+        const end = Number(endDomain ?? domain) * 100 + Number(endTask ?? task ?? 99);
+        const matches = [...tasks.keys()].filter(id => {
+          const value = Number(id.slice(1, 3)) * 100 + Number(id.slice(4));
+          return value >= start && value <= end;
+        });
+        const knownStart = kind === 'T' ? tasks.has(`T${domain}.${task}`) : domains.has(domain);
+        const knownEnd = kind === 'T'
+          ? tasks.has(`T${endDomain ?? domain}.${endTask ?? task}`)
+          : domains.has(endDomain ?? domain);
+        if (start > end || matches.length === 0 || !knownStart || !knownEnd) {
+          errors.push(`roadmap: unknown or invalid task scope in ${milestone}`);
+          continue;
+        }
+        for (const id of matches) {
+          if (milestone === 'FUTURE' && phases.has(id) && phases.get(id) !== 'FUTURE') {
+            errors.push(`roadmap: ${id} is both release scope and future scope`);
+          }
+          if (!phases.has(id)) phases.set(id, milestone);
+        }
+      }
+    }
+    const releaseTotals = text.match(/正式版范围为 (\d+) 个功能域、(\d+) 项任务、(\d+) 条旅程/);
+    if (releaseTotals) {
+      const releaseTasks = [...tasks.keys()].filter(id => phases.has(id) && phases.get(id) !== 'FUTURE');
+      const releaseJourneys = [...text.matchAll(/^\| (J\d{2}) [^|\n]*\|[^|\n]*\|[^|\n]*\|([^|\n]+)\|/gm)]
+        .filter(match => !match[2].includes('FUTURE'));
+      const actual = [
+        new Set(releaseTasks.map(id => id.slice(1, 3))).size,
+        releaseTasks.length,
+        new Set(releaseJourneys.map(match => match[1])).size,
+      ];
+      actual.forEach((count, index) => {
+        if (count !== Number(releaseTotals[index + 1])) {
+          errors.push(`roadmap: declared release total ${index + 1} is ${releaseTotals[index + 1]}, found ${count}`);
+        }
+      });
+    }
+    for (const [id, dependencies] of tasks) {
+      const phase = phases.get(id);
+      if (!phase) errors.push(`roadmap: ${id} has no milestone assignment`);
+      for (const dependency of dependencies) {
+        const requiredPhase = phases.get(dependency);
+        if (phase && phase !== 'FUTURE' && requiredPhase === 'FUTURE') {
+          errors.push(`roadmap: ${id} in ${phase} requires future task ${dependency}`);
+        } else if (phase === 'FUTURE') {
+          continue;
+        } else if (phase && requiredPhase && requiredPhase > phase) {
+          errors.push(`roadmap: ${id} in ${phase} requires later ${dependency} in ${requiredPhase}`);
+        } else if (phase && requiredPhase && !dependsOn(phase, requiredPhase)) {
+          errors.push(`roadmap: ${id} in ${phase} requires ${dependency} in ${requiredPhase} without an entry dependency`);
+        }
+      }
+    }
+  }
   return errors;
 }
 

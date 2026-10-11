@@ -15,8 +15,11 @@ runnable visual designer or released installation packages. The scaffold has
 no GUI framework or third-party dependencies.
 
 Capabilities below are planned, not claims of implemented or verified support.
-The roadmap defines 28 functional domains, 224 implementation tasks,
-20 milestones, and their acceptance criteria.
+The roadmap defines 29 functional domains, 262 implementation tasks,
+20 milestones, 26 user journeys, and their acceptance criteria.
+The formal release scope covers 28 domains, 251 tasks, and 23 journeys.
+Advanced native/composite debugging, integrated profiling, and remote/container
+capabilities are future extensions, not release dependencies.
 
 ## What rustage is designed to do
 
@@ -67,6 +70,7 @@ file-watching services must not leak into restricted release artifacts.
 | [Whitepaper](docs/plan/whitepaper.md) | Architecture, output modes, and hot-update design |
 | [Project principles](docs/plan/principle.md) | Engineering constraints and review criteria |
 | [Complete roadmap](docs/plan/roadmap.md) | Product modules, menus, tasks, milestones, and acceptance |
+| [Capability planning references](docs/plan/capability-reference.md) | Workflow requirements, protocol evidence, and future-extension boundaries |
 | [GitHub administration](docs/github.md) | Repository settings and CI setup still requiring owner action |
 
 Community documents and GitHub templates primarily use English; design documents

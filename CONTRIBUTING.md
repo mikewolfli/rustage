@@ -54,8 +54,9 @@ git diff --check
 Rust checks cover the current executable scaffold only; they do not establish
 that a GUI designer or any output target is implemented. Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required
-community files, and roadmap task dependencies. They do not fetch external URLs,
-validate heading anchors, or replace design review.
+community files, roadmap task dependencies, declared roadmap counts, and task
+prerequisites across milestone assignments. They do not fetch external URLs,
+validate heading anchors, or replace design review or end-to-end acceptance.
 
 ## Documentation and implementation expectations
 

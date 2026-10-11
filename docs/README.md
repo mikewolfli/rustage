@@ -9,6 +9,10 @@
 5. [Contribution guide](../CONTRIBUTING.md): workflow and checks.
 6. [GitHub administration](github.md): owner-managed repository settings.
 
+Related design evidence: [Capability planning references](plan/capability-reference.md)
+records workflow requirements, protocol evidence, and future-extension boundaries.
+It informs roadmap scope, not claims of implemented capabilities.
+
 ## Boundaries
 
 Community documents and GitHub templates primarily use English.

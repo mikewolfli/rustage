@@ -78,3 +78,79 @@ test('rejects self dependencies and multi-task cycles', () => {
     row('T00.01', 'T00.02'), row('T00.02', 'T00.01'),
   ].join('\n')).some(error => error.includes('cycle')));
 });
+
+function milestone(id, scope, dependencies = '无') {
+  return `| ${id} Stage | ${scope} | ${dependencies} | Evidence |`;
+}
+
+test('checks declared roadmap counts against tasks, milestones, and journeys', () => {
+  const text = [
+    '共 **1 个功能域、1 项实施任务、1 个里程碑、1 条用户旅程**。',
+    row('T00.01'), milestone('MS00', 'F00'), '| J01 Journey | Steps | Evidence | MS00 |',
+  ].join('\n');
+  assert.deepEqual(checkRoadmap(text), []);
+  assert.ok(checkRoadmap(text.replace('1 项实施任务', '2 项实施任务'))
+    .some(error => error.includes('declared total')));
+});
+
+test('accepts staged domain and task ranges without rescheduling integration gates', () => {
+  assert.deepEqual(checkRoadmap([
+    row('T00.01'), row('T00.02', 'T00.01'), row('T01.01', 'T00.02'),
+    row('T02.01', 'T01.01'),
+    milestone('MS00', 'T00.01–T00.02'),
+    milestone('MS01', 'F01/F02', 'MS00'),
+    milestone('MS02', 'F00–F02', 'MS00–MS01'),
+  ].join('\n')), []);
+});
+
+test('rejects task prerequisites scheduled in later milestones', () => {
+  assert.ok(checkRoadmap([
+    row('T00.01', 'T01.01'), row('T01.01'),
+    milestone('MS00', 'F00'), milestone('MS01', 'F01'),
+  ].join('\n')).some(error => error.includes('requires later')));
+});
+
+test('requires an entry dependency rather than inferring one from milestone order', () => {
+  const tasks = [row('T00.01'), row('T01.01', 'T00.01'), milestone('MS00', 'F00')];
+  assert.ok(checkRoadmap([...tasks, milestone('MS01', 'F01')].join('\n'))
+    .some(error => error.includes('without an entry dependency')));
+  assert.deepEqual(checkRoadmap([...tasks, milestone('MS01', 'F01', 'MS00')].join('\n')), []);
+});
+
+test('accepts explicitly deferred scope without making it a release milestone', () => {
+  const text = [
+    '共 **2 个功能域、2 项实施任务、1 个里程碑、1 条用户旅程**。',
+    '正式版范围为 1 个功能域、1 项任务、0 条旅程。',
+    row('T00.01'), row('T28.01', 'T00.01'),
+    milestone('MS00', 'F00'), milestone('FUTURE', 'F28'),
+    '| J01 Journey | Steps | Evidence | FUTURE |',
+  ].join('\n');
+  assert.deepEqual(checkRoadmap(text), []);
+  assert.ok(checkRoadmap(text.replace('1 项任务', '2 项任务'))
+    .some(error => error.includes('declared release total')));
+});
+
+test('rejects release tasks that depend on future extension tasks', () => {
+  assert.ok(checkRoadmap([
+    row('T00.01', 'T28.01'), row('T28.01'),
+    milestone('MS00', 'F00'), milestone('FUTURE', 'F28'),
+  ].join('\n')).some(error => error.includes('requires future task')));
+});
+
+test('rejects a task assigned to both release and future scope', () => {
+  assert.ok(checkRoadmap([
+    row('T00.01'), milestone('MS00', 'F00'), milestone('FUTURE', 'F00'),
+  ].join('\n')).some(error => error.includes('both release scope and future scope')));
+});
+
+test('rejects missing assignments and invalid milestone scopes', () => {
+  assert.ok(checkRoadmap([
+    row('T00.01'), row('T01.01'), milestone('MS00', 'F00'),
+  ].join('\n')).some(error => error.includes('no milestone')));
+  for (const scope of [
+    'F99', 'F00–F99', 'F00.01', 'T00.02–T00.01', 'T00.01–T00.99', 'T00.01–F01', 'T00',
+  ]) {
+    assert.ok(checkRoadmap([row('T00.01'), milestone('MS00', scope)].join('\n'))
+      .some(error => error.includes('scope')));
+  }
+});

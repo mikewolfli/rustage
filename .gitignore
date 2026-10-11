@@ -1,0 +1,28 @@
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Rust build output
+/target/
+**/target/
+
+# Local secrets and machine configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Temporary files and editor swap files
+*.swp
+*.swo
+*~
+*.tmp
+
+# Local tooling output
+/node_modules/
+/coverage/
+/artifacts/
+
+# Cargo.lock is intentionally not ignored: the planned application should track it.

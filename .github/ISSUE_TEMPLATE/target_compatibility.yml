@@ -1,0 +1,39 @@
+name: Target compatibility
+description: Report verified host or output-target evidence, or an environment blocker.
+title: "[Compatibility] "
+body:
+  - type: input
+    id: revision
+    attributes:
+      label: Project and upstream revisions
+      description: Actual rustage and rust-widgets commit SHAs.
+    validations:
+      required: true
+  - type: textarea
+    id: target
+    attributes:
+      label: Host and target configuration
+      description: Host OS/architecture, profile, target triple, mode, toolchain, SDK, and device.
+    validations:
+      required: true
+  - type: dropdown
+    id: level
+    attributes:
+      label: Actual verification level
+      options:
+        - Environment missing or not yet verified
+        - Capability query
+        - Generation
+        - Target check
+        - Target build
+        - Runtime behavior
+        - Physical device
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Commands, results, and limitations
+      description: Separate pass, fail, blocked, and unverified scope. Simulation is not device certification.
+    validations:
+      required: true

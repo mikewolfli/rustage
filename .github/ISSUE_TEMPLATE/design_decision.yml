@@ -1,0 +1,29 @@
+name: Design and repository governance
+description: Discuss architecture, roadmap, design questions, or non-sensitive governance.
+title: "[Design] "
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and question
+      description: Link sections, tasks, or decisions. Do not publish sensitive conduct reports.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options or clarification needed
+      description: Compare approaches, constraints, and costs, or explain a general question.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and evidence
+      description: Consider APIs, formats, dependencies, platforms, permissions, and acceptance.
+    validations:
+      required: true
+  - type: textarea
+    id: next
+    attributes:
+      label: Suggested next steps and open questions

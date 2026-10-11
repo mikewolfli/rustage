@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a defect in documentation, tooling, or existing implementation.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project is in the design stage. Use a feature proposal for unimplemented capabilities.
+        Do not include credentials, private projects, or vulnerability details.
+  - type: input
+    id: revision
+    attributes:
+      label: Revision and affected location
+      description: Commit SHA, document section, tool file, or actual release version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands, input, or conflicting document sections. Sanitize logs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and evidence
+      description: Relevant OS, architecture, tools, profile, target, logs, and unverified scope.
+    validations:
+      required: true
+  - type: input
+    id: task
+    attributes:
+      label: Related issue or roadmap task

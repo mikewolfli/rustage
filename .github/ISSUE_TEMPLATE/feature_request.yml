@@ -1,0 +1,30 @@
+name: Feature proposal
+description: Propose product capabilities, UX improvements, or roadmap additions.
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User scenario and problem
+      description: Describe the workflow, not just a widget or menu name.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal and acceptance criteria
+      description: Address relevant UI, model, preview, generation, failure, and keyboard paths.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope, targets, and constraints
+      description: Separate desktop host from output profiles; identify dependencies and permissions.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and roadmap relationship
+      description: Link related tasks or milestones and explain existing coverage.

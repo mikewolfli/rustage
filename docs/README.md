@@ -13,6 +13,9 @@ Related design evidence: [Capability planning references](plan/capability-refere
 records workflow requirements, protocol evidence, and future-extension boundaries.
 It informs roadmap scope, not claims of implemented capabilities.
 
+[Icon and resource plan](plan/resources.md) defines host/project resource boundaries,
+source placement, rust-widgets integration constraints, and packaging acceptance.
+
 ## Boundaries
 
 Community documents and GitHub templates primarily use English.

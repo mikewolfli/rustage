@@ -70,6 +70,7 @@ file-watching services must not leak into restricted release artifacts.
 | [Whitepaper](docs/plan/whitepaper.md) | Architecture, output modes, and hot-update design |
 | [Project principles](docs/plan/principle.md) | Engineering constraints and review criteria |
 | [Complete roadmap](docs/plan/roadmap.md) | Product modules, menus, tasks, milestones, and acceptance |
+| [Icon and resource plan](docs/plan/resources.md) | Resource placement, icon integration, themes, and platform packaging |
 | [Capability planning references](docs/plan/capability-reference.md) | Workflow requirements, protocol evidence, and future-extension boundaries |
 | [GitHub administration](docs/github.md) | Repository settings and CI setup still requiring owner action |
 

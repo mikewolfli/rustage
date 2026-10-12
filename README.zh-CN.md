@@ -59,6 +59,7 @@ rustage 目前处于**设计与规划阶段**。仓库现已包含最小 Rust �
 | [设计白皮书](docs/plan/whitepaper.md) | 架构、产物模式与热更新方案 |
 | [项目原则](docs/plan/principle.md) | 工程约束与评审准则 |
 | [完整路线图](docs/plan/roadmap.md) | 产品模块、菜单、任务、里程碑与验收 |
+| [图标与资源规划](docs/plan/resources.md) | 资源放置、图标集成、主题与平台打包验收 |
 | [能力规划依据](docs/plan/capability-reference.md) | 工作流需求、协议依据与未来扩展边界 |
 | [GitHub 管理说明](docs/github.md) | 仍需仓库所有者配置的设置与 CI |
 

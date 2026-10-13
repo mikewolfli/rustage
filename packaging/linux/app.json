@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "platform": "linux",
+  "desktop_entry": "rustage.desktop",
+  "icon_theme": "hicolor",
+  "install_layout": {
+    "desktop_entry": "@@INSTALL_PREFIX@@/share/applications/@@APPLICATION_ID@@.desktop",
+    "icons": "@@INSTALL_PREFIX@@/share/icons/hicolor/<size>x<size>/apps/@@APPLICATION_ID@@.png",
+    "scalable_icon": "@@INSTALL_PREFIX@@/share/icons/hicolor/scalable/apps/@@APPLICATION_ID@@.svg"
+  },
+  "cache_refresh": "gtk-update-icon-cache and desktop-database updates run through the distribution tooling for the chosen package format; failure to refresh is reported rather than hidden.",
+  "verification_required": [
+    "GNOME launcher and taskbar icon",
+    "KDE launcher and taskbar icon",
+    "window icon resolution from the desktop entry",
+    "Wayland app id and X11 class match the installed entry"
+  ],
+  "verification_environment": null,
+  "record": "../docs/plan/resources.md section 13.3"
+}

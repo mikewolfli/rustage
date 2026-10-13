@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
+// SPDX-License-Identifier: MIT
+//
+// Windows resource script template. Every token placeholder is substituted by
+// tools/resources/generate-resources.mjs from packaging/identity.json; compilation with an
+// unresolved token is refused rather than shipped as a broken resource.
+
+#include <windows.h>
+
+1 ICON "@@ICON_FILE@@"
+
+1 VERSIONINFO
+FILEVERSION     @@VERSION_QUAD@@
+PRODUCTVERSION  @@VERSION_QUAD@@
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "@@VENDOR@@"
+      VALUE "FileDescription", "@@DISPLAY_NAME@@"
+      VALUE "FileVersion", "@@VERSION@@"
+      VALUE "InternalName", "@@BINARY_NAME@@"
+      VALUE "LegalCopyright", "@@COPYRIGHT@@"
+      VALUE "OriginalFilename", "@@BINARY_NAME@@.exe"
+      VALUE "ProductName", "@@DISPLAY_NAME@@"
+      VALUE "ProductVersion", "@@VERSION@@"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 0x04B0
+  END
+END

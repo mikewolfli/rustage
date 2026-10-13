@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "status": "blocked-pending-decision",
+  "binary_name": "rustage",
+  "display_name": "rustage",
+  "vendor": "mikewolfli",
+  "version_source": {
+    "path": "Cargo.toml",
+    "key": "package.version"
+  },
+  "copyright": "Copyright (c) 2026 mikewolfli",
+  "application_id": null,
+  "minimum_os": {
+    "windows": null,
+    "macos": null,
+    "linux": null,
+    "harmonyos": null
+  },
+  "distribution": {
+    "windows": null,
+    "macos": null,
+    "linux": null,
+    "harmonyos": null
+  },
+  "install_prefix": null,
+  "tokens": [
+    "@@APPLICATION_ID@@",
+    "@@DISPLAY_NAME@@",
+    "@@BINARY_NAME@@",
+    "@@VENDOR@@",
+    "@@VERSION@@",
+    "@@VERSION_CODE@@",
+    "@@VERSION_QUAD@@",
+    "@@COPYRIGHT@@",
+    "@@ICON_FILE@@",
+    "@@MINIMUM_OS@@",
+    "@@INSTALL_PREFIX@@"
+  ],
+  "decision": {
+    "tasks": [
+      "T00.04",
+      "T25.02"
+    ],
+    "reference": "../docs/plan/resources.md section 17.2",
+    "blocked_reason": "The application identity (reverse-DNS identifier), minimum OS versions and distribution forms are product decisions that the plan leaves open. Token substitution and package metadata generation stay blocked until they are recorded here; the icon derivation itself does not depend on them. The shared identifier must also satisfy the HarmonyOS bundle rules, which forbid hyphens."
+  }
+}

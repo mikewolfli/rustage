@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "note": "License and provenance record for the material that ships with rustage resources. Paths are relative to this directory. Upstream icon outlines are never copied into this repository; only the pinned token vocabulary is referenced, so the corresponding license copy is distributed with the release package.",
+  "entries": [
+    {
+      "provider": "material-symbols",
+      "component": "Material Symbols outlined icon outline data (24 px, style materialsymbolsoutlined)",
+      "spdx_license": "Apache-2.0",
+      "license_file": "material-symbols/LICENSE",
+      "attribution_file": "material-symbols/ATTRIBUTION.md",
+      "source": {
+        "repository": "https://github.com/google/material-design-icons",
+        "revision": "bd8cb85bd4bad964fe6918f79665bb40c3a8efef",
+        "received_through": "https://github.com/mikewolfli/rust-widgets",
+        "received_revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+        "path": "tools/material_symbols/LICENSE",
+        "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+      },
+      "distributed_as": "builtin-icon-data-inside-dependency",
+      "rustage_use": "Host icons reference the pinned builtin tokens of the dependency; rustage holds no copy of any outline.",
+      "modifications": "none"
+    },
+    {
+      "provider": "rustage",
+      "component": "Host icon manifest, custom monochrome glyph sources, branding masters, packaging definitions",
+      "spdx_license": "MIT",
+      "license_file": "../../LICENSE",
+      "attribution_file": null,
+      "source": {
+        "repository": "https://github.com/mikewolfli/rustage",
+        "revision": "working-tree",
+        "path": "resources",
+        "sha256": null
+      },
+      "distributed_as": "in-repository-source",
+      "rustage_use": "Authored for this project; contributors must have the right to contribute them under the project license.",
+      "modifications": "none"
+    }
+  ]
+}

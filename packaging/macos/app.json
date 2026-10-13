@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "platform": "macos",
+  "info_plist": "Info.plist",
+  "icon_file": "rustage.icns",
+  "iconset_dir": "rustage.iconset",
+  "install_path": "rustage.app/Contents/Resources",
+  "notarization": {
+    "required": true,
+    "note": "Signing and notarization follow T25.02; no credential or identity is stored in this repository."
+  },
+  "verification_required": [
+    "Finder icon after installation",
+    "Dock icon and app switcher",
+    "launch from the packaged bundle",
+    "icon appearance across the supported minimum OS versions"
+  ],
+  "verification_environment": null,
+  "record": "../docs/plan/resources.md section 13.2"
+}

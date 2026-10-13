@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
+// SPDX-License-Identifier: MIT
+//
+// Project level build profile. `compatibleSdkVersion` is where the minimum supported API
+// level lives: app.json5 cannot carry it, because the platform derives minAPIVersion from
+// this file and ignores a hand written value. Signing material is never committed; the
+// signing configuration is created per machine and recorded in the release task.
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "compatibleSdkVersion": "@@MINIMUM_OS@@",
+        "runtimeOS": "HarmonyOS"
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry"
+    }
+  ]
+}

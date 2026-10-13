@@ -5,3 +5,5 @@ edition = "2024"
 description = "A desktop visual UI designer for Rust-Widgets"
 license = "MIT"
 publish = false
+[dependencies]
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "c957fdec7f30cc1a526b7c898c0f44b458ef4a57", default-features = false, features = ["desktop"] }

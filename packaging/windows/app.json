@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "resource_script": "rustage.rc",
+  "icon_file": "rustage.ico",
+  "icon_resource_id": 1,
+  "app_user_model_id": "@@APPLICATION_ID@@",
+  "install": {
+    "installer": null,
+    "shortcut_icon": "rustage.ico",
+    "file_association": null,
+    "note": "Installer, shortcut and file-association entries follow the distribution form recorded in T25.02; none of them is claimed before that decision."
+  },
+  "verification_required": [
+    "Explorer file icon",
+    "Start menu and desktop shortcut",
+    "taskbar grouping identity",
+    "window title-bar and Alt-Tab icon"
+  ],
+  "verification_environment": null,
+  "record": "../docs/plan/resources.md section 13.1"
+}

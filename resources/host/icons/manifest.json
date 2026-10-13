@@ -1,0 +1,627 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "name": "rust-widgets",
+    "revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+    "token_contract": "upstream-tokens.json"
+  },
+  "note": "Host icon semantics for the designer. Icons either reference a pinned built-in token of the dependency or a monochrome source in custom/. The command-group and panel lists are checked against docs/plan/roadmap.md, so every entry of the roadmap ledger carries an explicit icon or no-icon decision.",
+  "icons": [
+    {
+      "id": "host/file/save",
+      "source": { "kind": "rust-widgets-builtin", "token": "save" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/file/open-project",
+      "source": { "kind": "rust-widgets-builtin", "token": "folder_open" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/file/open-file",
+      "source": { "kind": "rust-widgets-builtin", "token": "file" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/file/new",
+      "source": { "kind": "rust-widgets-builtin", "token": "plus" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/file/transfer",
+      "source": { "kind": "rust-widgets-builtin", "token": "upload" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/file/close",
+      "source": { "kind": "rust-widgets-builtin", "token": "close" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/edit/history",
+      "source": { "kind": "rust-widgets-builtin", "token": "schedule" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/edit/clipboard",
+      "source": { "kind": "rust-widgets-builtin", "token": "copy" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/edit/text",
+      "source": { "kind": "rust-widgets-builtin", "token": "edit" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/edit/find",
+      "source": { "kind": "rust-widgets-builtin", "token": "search" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/view/panel",
+      "source": { "kind": "rust-widgets-builtin", "token": "menu" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/view/editor",
+      "source": { "kind": "rust-widgets-builtin", "token": "table" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/view/layout",
+      "source": { "kind": "rust-widgets-builtin", "token": "fullscreen" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/nav/open",
+      "source": { "kind": "rust-widgets-builtin", "token": "search" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/nav/issue",
+      "source": { "kind": "rust-widgets-builtin", "token": "warning" },
+      "channel": "builtin",
+      "color_role": "icon-warning",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/project/structure",
+      "source": { "kind": "rust-widgets-builtin", "token": "folder" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/project/config",
+      "source": { "kind": "rust-widgets-builtin", "token": "settings" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/project/workspace",
+      "source": { "kind": "rust-widgets-builtin", "token": "home" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/project/maintain",
+      "source": { "kind": "rust-widgets-builtin", "token": "refresh" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/project/dependencies",
+      "source": { "kind": "rust-widgets-builtin", "token": "lock" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/canvas",
+      "source": { "kind": "local-svg", "path": "custom/design-canvas.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/design/node",
+      "source": { "kind": "rust-widgets-builtin", "token": "plus" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/order",
+      "source": { "kind": "rust-widgets-builtin", "token": "sort" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/layout",
+      "source": { "kind": "local-svg", "path": "custom/layout-align.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/design/property",
+      "source": { "kind": "rust-widgets-builtin", "token": "settings" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/binding",
+      "source": { "kind": "rust-widgets-builtin", "token": "link" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/component",
+      "source": { "kind": "local-svg", "path": "custom/component-instance.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/design/event",
+      "source": { "kind": "local-svg", "path": "custom/event-binding.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/design/flow",
+      "source": { "kind": "local-svg", "path": "custom/state-flow.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/design/theme",
+      "source": { "kind": "local-svg", "path": "custom/theme-tokens.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/design/application",
+      "source": { "kind": "rust-widgets-builtin", "token": "menu" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/content",
+      "source": { "kind": "rust-widgets-builtin", "token": "table" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/design/inspect",
+      "source": { "kind": "local-svg", "path": "custom/inspection-checklist.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/assets/library",
+      "source": { "kind": "local-svg", "path": "custom/assets-library.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/code/edit",
+      "source": { "kind": "rust-widgets-builtin", "token": "edit" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/code/source-map",
+      "source": { "kind": "local-svg", "path": "custom/source-map.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/preview/session",
+      "source": { "kind": "rust-widgets-builtin", "token": "play" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/preview/matrix",
+      "source": { "kind": "local-svg", "path": "custom/device-matrix.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/preview/hot",
+      "source": { "kind": "rust-widgets-builtin", "token": "refresh" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/build/pipeline",
+      "source": { "kind": "local-svg", "path": "custom/build-pipeline.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/build/target",
+      "source": { "kind": "local-svg", "path": "custom/target-profile.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/build/reproduce",
+      "source": { "kind": "rust-widgets-builtin", "token": "lock" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/run/app",
+      "source": { "kind": "rust-widgets-builtin", "token": "play" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/debug/bug",
+      "source": { "kind": "local-svg", "path": "custom/debug-bug.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/debug/exec",
+      "source": { "kind": "rust-widgets-builtin", "token": "skip_next" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/debug/breakpoint",
+      "source": { "kind": "local-svg", "path": "custom/debug-breakpoint.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-danger",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/debug/inspect",
+      "source": { "kind": "rust-widgets-builtin", "token": "table" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/test/flask",
+      "source": { "kind": "local-svg", "path": "custom/test-flask.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/test/report",
+      "source": { "kind": "rust-widgets-builtin", "token": "bar_chart" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/test/analyze",
+      "source": { "kind": "rust-widgets-builtin", "token": "refresh" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/vcs/change",
+      "source": { "kind": "rust-widgets-builtin", "token": "edit" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/vcs/branch",
+      "source": { "kind": "local-svg", "path": "custom/vcs-branch.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/vcs/remote",
+      "source": { "kind": "rust-widgets-builtin", "token": "upload" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/tools/terminal",
+      "source": { "kind": "local-svg", "path": "custom/terminal-console.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/tools/ai",
+      "source": { "kind": "local-svg", "path": "custom/ai-sparkle.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-accent",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/tools/settings",
+      "source": { "kind": "rust-widgets-builtin", "token": "settings" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/tools/translate",
+      "source": { "kind": "local-svg", "path": "custom/translate.svg" },
+      "channel": "static-geometry",
+      "color_role": "icon-default",
+      "rtl_mirror": false,
+      "provenance": { "provider": "rustage", "spdx_license": "MIT" }
+    },
+    {
+      "id": "host/tasks/queue",
+      "source": { "kind": "rust-widgets-builtin", "token": "hourglass" },
+      "channel": "builtin",
+      "color_role": "icon-muted",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/notifications/bell",
+      "source": { "kind": "rust-widgets-builtin", "token": "bell" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    },
+    {
+      "id": "host/help/help",
+      "source": { "kind": "rust-widgets-builtin", "token": "help" },
+      "channel": "builtin",
+      "color_role": "icon-default",
+      "rtl_mirror": false
+    }
+  ],
+  "commands": [
+    { "group": "file.new.*", "icon": "host/file/new" },
+    { "group": "file.open.*", "icon": "host/file/open-project" },
+    { "group": "file.save.*", "icon": "host/file/save" },
+    { "group": "file.manage.*", "icon": "host/file/open-file" },
+    { "group": "file.transfer.*", "icon": "host/file/transfer" },
+    { "group": "file.close.*", "icon": "host/file/close" },
+    { "group": "edit.history.*", "icon": "host/edit/history" },
+    { "group": "edit.clipboard.*", "icon": "host/edit/clipboard" },
+    {
+      "group": "edit.select.*",
+      "icon": null,
+      "reason": "Selection commands carry no glyph of their own; they stay text entries and rely on the menu item state for feedback."
+    },
+    { "group": "edit.text.*", "icon": "host/edit/text" },
+    { "group": "edit.find.*", "icon": "host/edit/find" },
+    { "group": "edit.replace.*", "icon": "host/edit/find" },
+    {
+      "group": "view.mode.*",
+      "icon": null,
+      "reason": "Mode switching is a text submenu; each mode's glyph belongs to its own toolgroup entry, not to the switch entry."
+    },
+    { "group": "view.panel.*", "icon": "host/view/panel" },
+    { "group": "view.editor.*", "icon": "host/view/editor" },
+    { "group": "view.layout.*", "icon": "host/view/layout" },
+    {
+      "group": "view.display.*",
+      "icon": null,
+      "reason": "Display toggles are read from the menu item check state; a glyph would repeat information the menu already shows."
+    },
+    { "group": "nav.open.*", "icon": "host/nav/open" },
+    { "group": "nav.code.*", "icon": "host/design/binding" },
+    {
+      "group": "nav.design.*",
+      "icon": null,
+      "reason": "Design navigation is entered from the canvas and object tree context; the submenu stays text so it does not imply a canvas-only entry point."
+    },
+    { "group": "nav.issue.*", "icon": "host/nav/issue" },
+    { "group": "project.structure.*", "icon": "host/project/structure" },
+    { "group": "project.config.*", "icon": "host/project/config" },
+    { "group": "project.workspace.*", "icon": "host/project/workspace" },
+    {
+      "group": "project.environment.*",
+      "icon": null,
+      "reason": "Local Kit and toolchain selection is text; the environment identity is shown by the selected entry, not by a mark."
+    },
+    {
+      "group": "project.remote.*",
+      "icon": null,
+      "reason": "Future-extension commands are not shown in the official release, so they declare no icon until the extension is enabled."
+    },
+    { "group": "project.maintain.*", "icon": "host/project/maintain" },
+    { "group": "design.tool.*", "icon": "host/design/canvas" },
+    { "group": "design.node.*", "icon": "host/design/node" },
+    { "group": "design.order.*", "icon": "host/design/order" },
+    { "group": "design.layout.*", "icon": "host/design/layout" },
+    { "group": "design.property.*", "icon": "host/design/property" },
+    { "group": "design.component.*", "icon": "host/design/component" },
+    { "group": "design.flow.*", "icon": "host/design/flow" },
+    { "group": "design.application.*", "icon": "host/design/application" },
+    { "group": "design.content.*", "icon": "host/design/content" },
+    { "group": "design.inspect.*", "icon": "host/design/inspect" },
+    { "group": "code.edit.*", "icon": "host/code/edit" },
+    { "group": "code.structure.*", "icon": "host/code/source-map" },
+    {
+      "group": "code.assist.*",
+      "icon": null,
+      "reason": "Assistant toggles mirror the language-service state, which the menu shows directly; no glyph is required for the first batch."
+    },
+    { "group": "code.sync.*", "icon": "host/build/pipeline" },
+    { "group": "preview.session.*", "icon": "host/preview/session" },
+    { "group": "preview.matrix.*", "icon": "host/preview/matrix" },
+    { "group": "preview.inspect.*", "icon": "host/design/inspect" },
+    { "group": "preview.hot.*", "icon": "host/preview/hot" },
+    { "group": "build.exec.*", "icon": "host/build/pipeline" },
+    { "group": "build.config.*", "icon": "host/build/target" },
+    { "group": "build.reproduce.*", "icon": "host/build/reproduce" },
+    { "group": "build.output.*", "icon": "host/tools/terminal" },
+    { "group": "run.app.*", "icon": "host/run/app" },
+    { "group": "debug.session.*", "icon": "host/debug/bug" },
+    { "group": "debug.exec.*", "icon": "host/debug/exec" },
+    { "group": "debug.breakpoint.*", "icon": "host/debug/breakpoint" },
+    { "group": "debug.inspect.*", "icon": "host/debug/inspect" },
+    {
+      "group": "debug.native.*",
+      "icon": null,
+      "reason": "Future-extension commands are not shown in the official release, so they declare no icon until the extension is enabled."
+    },
+    { "group": "test.run.*", "icon": "host/test/flask" },
+    { "group": "test.report.*", "icon": "host/test/report" },
+    { "group": "test.analyze.*", "icon": "host/test/analyze" },
+    {
+      "group": "test.profile.*",
+      "icon": null,
+      "reason": "Future-extension commands are not shown in the official release, so they declare no icon until the extension is enabled."
+    },
+    { "group": "vcs.change.*", "icon": "host/vcs/change" },
+    { "group": "vcs.commit.*", "icon": "host/vcs/branch" },
+    { "group": "vcs.remote.*", "icon": "host/vcs/remote" },
+    {
+      "group": "vcs.integrate.*",
+      "icon": null,
+      "reason": "Worktree, stash and integration steps are text; the entry point keeps the version-control glyph and each step shows its own risk text."
+    },
+    { "group": "tools.workflow.*", "icon": "host/tools/terminal" },
+    { "group": "tools.ai.*", "icon": "host/tools/ai" },
+    { "group": "tools.ai.collaboration.*", "icon": "host/tools/ai" },
+    {
+      "group": "tools.extension.*",
+      "icon": null,
+      "reason": "Extension management is a low-frequency text menu in the first batch; it gains a glyph when the extension surface is implemented."
+    },
+    { "group": "tools.settings.*", "icon": "host/tools/settings" },
+    { "group": "tools.configuration.*", "icon": "host/tools/translate" },
+    {
+      "group": "window.*",
+      "icon": null,
+      "reason": "The window menu stays text; macOS contributes its own system window menu and must not be shadowed by a host glyph."
+    },
+    { "group": "help.*", "icon": "host/help/help" }
+  ],
+  "panels": [
+    { "id": "panel.project", "icon": "host/project/structure" },
+    { "id": "panel.objects", "icon": "host/view/panel" },
+    { "id": "panel.widgets", "icon": "host/design/node" },
+    { "id": "panel.assets", "icon": "host/assets/library" },
+    { "id": "panel.components", "icon": "host/design/component" },
+    { "id": "panel.properties", "icon": "host/design/property" },
+    { "id": "panel.layout", "icon": "host/design/layout" },
+    { "id": "panel.styles", "icon": "host/design/theme" },
+    { "id": "panel.events", "icon": "host/design/event" },
+    { "id": "panel.data", "icon": "host/design/binding" },
+    { "id": "panel.pages", "icon": "host/project/workspace" },
+    { "id": "panel.actions", "icon": "host/design/application" },
+    { "id": "panel.application", "icon": "host/design/application" },
+    { "id": "panel.items", "icon": "host/design/content" },
+    { "id": "panel.states", "icon": "host/design/flow" },
+    { "id": "panel.timeline", "icon": "host/preview/session" },
+    { "id": "panel.outline", "icon": "host/code/source-map" },
+    { "id": "panel.search", "icon": "host/edit/find" },
+    { "id": "panel.problems", "icon": "host/nav/issue" },
+    { "id": "panel.build", "icon": "host/build/pipeline" },
+    { "id": "panel.run", "icon": "host/run/app" },
+    { "id": "panel.terminal", "icon": "host/tools/terminal" },
+    { "id": "panel.tasks", "icon": "host/tasks/queue" },
+    { "id": "panel.preview", "icon": "host/preview/matrix" },
+    { "id": "panel.hot", "icon": "host/preview/hot" },
+    { "id": "panel.targets", "icon": "host/build/target" },
+    { "id": "panel.dependencies", "icon": "host/project/dependencies" },
+    { "id": "panel.environments", "icon": "host/project/config" },
+    { "id": "panel.breakpoints", "icon": "host/debug/breakpoint" },
+    { "id": "panel.stack", "icon": "host/debug/inspect" },
+    { "id": "panel.variables", "icon": "host/debug/inspect" },
+    { "id": "panel.debug", "icon": "host/debug/bug" },
+    { "id": "panel.vcs", "icon": "host/vcs/branch" },
+    { "id": "panel.history", "icon": "host/edit/history" },
+    { "id": "panel.tests", "icon": "host/test/flask" },
+    {
+      "id": "panel.profiler",
+      "icon": null,
+      "reason": "Future-extension panel is not provided by the official release, so it declares no icon."
+    },
+    {
+      "id": "panel.memory",
+      "icon": null,
+      "reason": "Future-extension panel is not provided by the official release, so it declares no icon."
+    },
+    { "id": "panel.inspection", "icon": "host/design/inspect" },
+    {
+      "id": "panel.extensions",
+      "icon": null,
+      "reason": "The panel is text-only in the first batch and gains a glyph together with the extension surface."
+    },
+    { "id": "panel.ai", "icon": "host/tools/ai" },
+    { "id": "panel.notifications", "icon": "host/notifications/bell" },
+    { "id": "panel.help", "icon": "host/help/help" }
+  ]
+}

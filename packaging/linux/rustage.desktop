@@ -1,0 +1,18 @@
+[Desktop Entry]
+# SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
+# SPDX-License-Identifier: MIT
+#
+# Desktop entry template. Every token placeholder is substituted by
+# tools/resources/generate-resources.mjs from packaging/identity.json. Localized Name/Comment
+# keys arrive with the host translation work (T24.03) so this file cannot drift from it.
+Type=Application
+Version=1.0
+Name=@@DISPLAY_NAME@@
+GenericName=UI designer
+Comment=Visual UI designer for Rust-Widgets
+Exec=@@BINARY_NAME@@ %F
+Icon=@@APPLICATION_ID@@
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=@@APPLICATION_ID@@

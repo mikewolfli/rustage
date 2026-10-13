@@ -1,0 +1,18 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
+// SPDX-License-Identifier: MIT
+//
+// Application level manifest. Every token placeholder is substituted by
+// tools/resources/generate-resources.mjs from packaging/identity.json; a build with an
+// unresolved token is refused rather than shipped. `minAPIVersion`, `targetAPIVersion` and
+// `apiReleaseType` are deliberately absent: the platform generates them at build time from
+// the project level build-profile.json5, and a hand written value is ignored.
+{
+  "app": {
+    "bundleName": "@@APPLICATION_ID@@",
+    "vendor": "@@VENDOR@@",
+    "versionCode": "@@VERSION_CODE@@",
+    "versionName": "@@VERSION@@",
+    "icon": "$media:layered_image",
+    "label": "$string:app_name"
+  }
+}

@@ -39,8 +39,8 @@ Contributors retain their rights; no copyright assignment is required.
 
 ## Checks available today
 
-Use Git, Rust, and Node.js 22 or newer. No npm packages or Rust third-party
-crates are required:
+Use Git, Rust, and Node.js 22 or newer. No npm packages are required; the one Rust dependency is
+the pinned `rust-widgets` revision, which Cargo fetches over the network on a cold build:
 
 ```sh
 cargo fmt --check
@@ -48,15 +48,53 @@ cargo test
 cargo run -- --help
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
+node --test tools/resources/check-resources.test.mjs
+node tools/resources/check-resources.mjs
 git diff --check
 ```
 
-Rust checks cover the current executable scaffold only; they do not establish
-that a GUI designer or any output target is implemented. Documentation checks
+Rust checks cover the command line, the icon seam and the icon strip: the semantic icon table
+resolves in the pinned dependency, the host glyphs clear the dependency's contour budget and draw
+at every displayed size, the eight colour roles stay legible and distinguishable in both
+appearances, a theme switch reaches the controls, and the committed baselines under
+`tests/baselines/icons/` still match what a real control renders. They do not establish that a
+window has displayed anything, that interaction states draw correctly, or that a GUI designer or
+any output target is implemented. Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required
 community files, roadmap task dependencies, declared roadmap counts, and task
 prerequisites across milestone assignments. They do not fetch external URLs,
 validate heading anchors, or replace design review or end-to-end acceptance.
+
+Host resource checks cover the icon manifest schema and semantic IDs, the pinned upstream token
+contract, the glyph authoring subset (stroke centerlines, safe area, hole-free outlines, the
+dependency's contour and point budgets), the theme role contract, licence provenance against the
+redistributed copy, the branding masters and the packaging definitions of all four platforms.
+They also rebuild `src/resources/generated_host_icons.rs` from the manifest and the SVG sources
+and compare it byte for byte, so a hand-edited or stale compiled table fails the check. They do
+not prove that a platform shows the packaged icon, or that the packaged identity is correct. Deriving the platform icons, the review
+sheet and the theme matrix is a separate, optional step:
+
+```sh
+node tools/resources/generate-resources.mjs   # writes under target/resources/ and src/resources/
+```
+
+It needs an SVG rasteriser (`rsvg-convert`, `resvg` or macOS `sips`) and reports a blocked stage
+when none is available instead of approximating the artwork. Both review sheets draw the expanded
+outline — the geometry the renderer receives — rather than the authoring source, and both carry a
+companion `.json` with the cell mapping.
+
+The generator also rewrites the compiled icon table, which is the only file it writes inside the
+source tree. Review that diff the way you review the manifest: it is derived, but it is what the
+crate compiles. Regenerating the icon baselines is a separate command, and the baselines are
+reviewed as pictures before they are replaced:
+
+```sh
+cargo run -- --render-icons tests/baselines/icons
+cargo test   # fails, naming the file, while a baseline is stale
+```
+
+A new glyph is authored as `stroke` centerlines, never as a pre-flattened polygon, and never as a
+second file for a theme or state: one source, `currentColor`, and the theme supplies the colour.
 
 ## Documentation and implementation expectations
 

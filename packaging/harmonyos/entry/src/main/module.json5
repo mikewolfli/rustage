@@ -1,0 +1,43 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
+// SPDX-License-Identifier: MIT
+//
+// Entry module manifest. `2in1` is the PC/desktop device type; the module declares only the
+// desktop form factor, and widening it to tablet or phone is a product decision. The ability
+// `srcEntry` points at the host application shell, which is application code rather than a
+// resource and is therefore not provided by this resource tree.
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "2in1"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          {
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "ohos.want.action.home"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

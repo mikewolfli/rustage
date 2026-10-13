@@ -30,3 +30,7 @@ jobs:
         run: node --test tools/check-docs.test.mjs
       - name: Check repository documentation
         run: node tools/check-docs.mjs
+      - name: Test host resource checker
+        run: node --test tools/resources/check-resources.test.mjs
+      - name: Check host resources
+        run: node tools/resources/check-resources.mjs

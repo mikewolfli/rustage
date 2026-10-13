@@ -1,0 +1,8 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli -->
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 4L6 15"/>
+  <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 9C18 13.95 13.95 18 9 18"/>
+  <path fill="currentColor" fill-rule="nonzero" d="M9 18C9 19.65 7.65 21 6 21C4.35 21 3 19.65 3 18C3 16.35 4.35 15 6 15C7.65 15 9 16.35 9 18Z"/>
+  <path fill="currentColor" fill-rule="nonzero" d="M21 6C21 7.65 19.65 9 18 9C16.35 9 15 7.65 15 6C15 4.35 16.35 3 18 3C19.65 3 21 4.35 21 6Z"/>
+</svg>

@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "platform": "harmonyos",
+  "device_types": [
+    "2in1"
+  ],
+  "app_scope_dir": "AppScope",
+  "module_dir": "entry/src/main",
+  "templates": [
+    {
+      "path": "AppScope/app.json5",
+      "role": "application manifest",
+      "substituted": true
+    },
+    {
+      "path": "AppScope/resources/base/element/string.json",
+      "role": "application label string resource",
+      "substituted": true
+    },
+    {
+      "path": "AppScope/resources/base/media/layered_image.json",
+      "role": "layered icon resource definition",
+      "substituted": false
+    },
+    {
+      "path": "build-profile.json5",
+      "role": "project build profile, carries the minimum API level",
+      "substituted": true
+    },
+    {
+      "path": "entry/src/main/module.json5",
+      "role": "entry module manifest",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/resources/base/element/string.json",
+      "role": "module strings",
+      "substituted": true
+    },
+    {
+      "path": "entry/src/main/resources/base/element/color.json",
+      "role": "light start window background",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/resources/dark/element/color.json",
+      "role": "dark start window background",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/resources/base/profile/main_pages.json",
+      "role": "page routing profile",
+      "substituted": false
+    }
+  ],
+  "version_code": {
+    "segments": [
+      1000000,
+      10000,
+      100
+    ],
+    "max_segment": 99,
+    "max_value": 2147483647,
+    "record": "OpenHarmony docs: versionCode may be any positive integer but must increase with every release. Deriving it from package.version keeps it from drifting from versionName; the generator refuses a version whose segments exceed max_segment instead of truncating it silently."
+  },
+  "icons": {
+    "layered": {
+      "background": "package/harmonyos/AppScope/resources/base/media/background.png",
+      "foreground": "package/harmonyos/AppScope/resources/base/media/foreground.png",
+      "pixels": 1024
+    },
+    "start_window_icon": {
+      "path": "package/harmonyos/entry/src/main/resources/base/media/app_icon.png",
+      "pixels": 512,
+      "note": "No platform document states a required pixel size for the start window icon resource; 512 px is the derived large master size, and its appearance is a verification item. Sizes seen in DevEco generated samples (144 px) are observations of another project, not a specification."
+    },
+    "install": {
+      "app_icon": "AppScope/resources/base/media/{background,foreground}.png plus layered_image.json",
+      "start_window_icon": "entry/src/main/resources/base/media/app_icon.png",
+      "note": "AppScope resources are merged into the module at build time and override same-named module files, so the layered icon is declared once in AppScope. The file names are DevEco conventions rather than platform requirements - a resource name is free as long as the $media reference matches the file - and they are kept conventional here so a generated project can be compared directly."
+    }
+  },
+  "theme": {
+    "dark_override": "entry/src/main/resources/dark/element/color.json",
+    "note": "The start window background is a $color resource, so the dark resource qualifier changes it without a second manifest; the committed values are the proposed surfaces from resources/host/icons/theme.json and are replaced by the host theme work at T05.02/T24.02."
+  },
+  "host_requirement": {
+    "arkts_shell": "entry/src/main/ets (EntryAbility, pages) is application code and is not part of this resource tree; the resource and manifest layer is what this directory provides.",
+    "native_candidate": "aarch64-unknown-linux-ohos",
+    "note": "The candidate Rust triple is a target this machine has installed through rustup. OpenHarmony documents Rust for system level builds and C ABI interop, while the application side native kit is documented for C/C++ and Node-API; no document describes a Rust windowing or event loop path. Whether the pinned GUI stack (winit/wgpu) can be hosted in an OpenHarmony native module on the 2in1 form factor is therefore UNVERIFIED and needs a spike before any support claim."
+  },
+  "distribution": {
+    "form": null,
+    "note": "AppGallery release, internal distribution and signing profiles follow T25.02; no credential or store identity is stored in this repository."
+  },
+  "verification_required": [
+    "layered foreground and background reach the launcher on a 2in1 device",
+    "start window shows the derived icon and the surface colour in light and dark",
+    "the application label resolves from the string resource in the packaged build",
+    "bundle identity matches the installed application in the system application list",
+    "a clean machine installs the packaged bundle with no development tree and no network"
+  ],
+  "verification_environment": null,
+  "sources": [
+    "OpenHarmony docs, application configuration file (app.json5): field names, bundle name rules, versionCode range, build-injected API level fields",
+    "OpenHarmony docs, module configuration file (module.json5): deviceTypes enum (2in1 is PC/2in1), startWindowIcon and startWindowBackground are required",
+    "OpenHarmony docs, configuring the application icon and name: layered image resource shape and the entry ability skills",
+    "OpenHarmony docs, common actions and entities: entity.system.home with ohos.want.action.home",
+    "measured with the system image tool: layered background and foreground are 1024 x 1024 in a DevEco generated project"
+  ],
+  "record": "../docs/plan/resources.md section 13.4"
+}

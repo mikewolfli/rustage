@@ -15,6 +15,23 @@ It informs roadmap scope, not claims of implemented capabilities.
 
 [Icon and resource plan](plan/resources.md) defines host/project resource boundaries,
 source placement, rust-widgets integration constraints, and packaging acceptance.
+Its host source layer is implemented in `resources/` with checks in `tools/resources/`;
+the icon seam and the control-level strip are `src/resources/` and `src/app/toolbar.rs`,
+with baselines under `tests/baselines/icons/`.
+
+[Issue record](issues/issue-20261013.md) tracks the icon, resource and packaging gaps and the
+order they are being closed in. It is a work list, not a statement of implemented capability.
+
+## Records
+
+- [Resource structure and files](log/log-20261013-1.md): what was added, the commands that ran,
+  and what remains unverified.
+- [Glyph design, theme contract and HarmonyOS packaging](log/log-20261013-2.md): the minimal
+  monoline glyph language, the verified HarmonyOS desktop manifest and resource layer, and the
+  evidence each of them rests on.
+- [Icons reaching real controls](log/log-20261013-3.md): the pinned dependency, the semantic icon
+  seam, the eight roles mapped onto the dependency's own theme, the real-control baselines, and
+  what is still not verified (a window, interaction states, RTL).
 
 ## Boundaries
 

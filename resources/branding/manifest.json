@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "status": "proposed-pending-approval",
+  "note": "The mark and colour set are a proposal for review, not an approved brand decision. The final brand artwork, the application identity and the minimum OS versions stay open until T00.04 and T25.02 record them; nothing here may be treated as approved brand or release policy.",
+  "colors": {
+    "brand_primary": "#4F46E5",
+    "gradient_start": "#4F46E5",
+    "gradient_end": "#0EA5E9",
+    "mark_on_brand": "#FFFFFF"
+  },
+  "wordmark": {
+    "embedded_in_masters": false,
+    "note": "The name is set as interface text, never as embedded font outlines, so no font licence or coverage question reaches the icon masters."
+  },
+  "clear_space": {
+    "master_ratio": 0.25,
+    "note": "Artwork stays inside the central 50 percent of a master so platform masks and optical padding do not clip it."
+  },
+  "masters": [
+    {
+      "role": "app-icon",
+      "path": "app-icon.svg",
+      "pixel_size": 512,
+      "view_box": "0 0 512 512",
+      "artwork_bounds": [
+        40,
+        40,
+        472,
+        472
+      ],
+      "background": "gradient",
+      "used_for": "derived sizes >= 128 px"
+    },
+    {
+      "role": "app-icon-small",
+      "path": "app-icon-small.svg",
+      "pixel_size": 64,
+      "view_box": "0 0 64 64",
+      "artwork_bounds": [
+        5,
+        5,
+        59,
+        59
+      ],
+      "background": "flat",
+      "used_for": "derived sizes <= 64 px, no gradient and no thin detail"
+    },
+    {
+      "role": "logo",
+      "path": "logo.svg",
+      "pixel_size": 64,
+      "view_box": "0 0 64 64",
+      "artwork_bounds": [
+        6,
+        6,
+        58,
+        58
+      ],
+      "background": "none",
+      "used_for": "documentation and light backgrounds"
+    },
+    {
+      "role": "logo-monochrome",
+      "path": "logo-monochrome.svg",
+      "pixel_size": 64,
+      "view_box": "0 0 64 64",
+      "artwork_bounds": [
+        6,
+        6,
+        58,
+        58
+      ],
+      "background": "none",
+      "used_for": "single-colour and reverse usage; takes the current text colour"
+    },
+    {
+      "role": "app-icon-background",
+      "path": "app-icon-background.svg",
+      "pixel_size": 512,
+      "view_box": "0 0 512 512",
+      "artwork_bounds": [
+        0,
+        0,
+        512,
+        512
+      ],
+      "background": "gradient",
+      "used_for": "HarmonyOS layered icon background layer, and any platform that masks the mark itself"
+    },
+    {
+      "role": "app-icon-foreground",
+      "path": "app-icon-foreground.svg",
+      "pixel_size": 512,
+      "view_box": "0 0 512 512",
+      "artwork_bounds": [
+        128,
+        128,
+        384,
+        384
+      ],
+      "background": "none",
+      "used_for": "HarmonyOS layered icon foreground layer; the platform masks it, so the mark stays in the central area"
+    }
+  ],
+  "derivation": {
+    "small_master_max_pixels": 64,
+    "windows": {
+      "format": "ico",
+      "sizes": [
+        16,
+        20,
+        24,
+        32,
+        40,
+        48,
+        64,
+        128,
+        256
+      ],
+      "bmp_max_size": 64,
+      "record": "docs/plan/resources.md section 13.1"
+    },
+    "macos": {
+      "format": "icns",
+      "max_pixels": 1024,
+      "iconset": [
+        {
+          "name": "icon_16x16.png",
+          "pixels": 16
+        },
+        {
+          "name": "icon_16x16@2x.png",
+          "pixels": 32
+        },
+        {
+          "name": "icon_32x32.png",
+          "pixels": 32
+        },
+        {
+          "name": "icon_32x32@2x.png",
+          "pixels": 64
+        },
+        {
+          "name": "icon_128x128.png",
+          "pixels": 128
+        },
+        {
+          "name": "icon_128x128@2x.png",
+          "pixels": 256
+        },
+        {
+          "name": "icon_256x256.png",
+          "pixels": 256
+        },
+        {
+          "name": "icon_256x256@2x.png",
+          "pixels": 512
+        },
+        {
+          "name": "icon_512x512.png",
+          "pixels": 512
+        },
+        {
+          "name": "icon_512x512@2x.png",
+          "pixels": 1024
+        }
+      ],
+      "record": "docs/plan/resources.md section 13.2"
+    },
+    "linux": {
+      "format": "png",
+      "sizes": [
+        16,
+        24,
+        32,
+        48,
+        64,
+        128,
+        256,
+        512
+      ],
+      "scalable_svg": true,
+      "record": "docs/plan/resources.md section 13.3"
+    },
+    "harmonyos": {
+      "format": "png",
+      "layered": {
+        "background": 1024,
+        "foreground": 1024,
+        "note": "Layer size measured from a DevEco Studio generated project: both layers are 1024 x 1024."
+      },
+      "start_window_icon": 512,
+      "record": "docs/plan/resources.md section 13.4"
+    }
+  }
+}

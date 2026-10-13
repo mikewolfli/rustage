@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "status": "proposed-pending-approval",
+  "note": "Review scaffolding, not product theme values. The eight semantic roles come from docs/plan/resources.md section 9.1; these swatches only exist so the generated theme matrix can show one monochrome glyph changing with the theme instead of shipping a second source file. The host theme work replaces them at T05.02 and T24.02.",
+  "surfaces": {
+    "light": "#FFFFFF",
+    "dark": "#16181D"
+  },
+  "roles": [
+    {
+      "id": "icon-default",
+      "light": "#1F2328",
+      "dark": "#E6EDF3"
+    },
+    {
+      "id": "icon-muted",
+      "light": "#59636E",
+      "dark": "#9198A1"
+    },
+    {
+      "id": "icon-accent",
+      "light": "#4F46E5",
+      "dark": "#8F8AF0"
+    },
+    {
+      "id": "icon-on-accent",
+      "light": "#FFFFFF",
+      "dark": "#FFFFFF",
+      "preview_surface": {
+        "light": "#4F46E5",
+        "dark": "#4F46E5"
+      }
+    },
+    {
+      "id": "icon-disabled",
+      "light": "#B7BDC4",
+      "dark": "#484F58"
+    },
+    {
+      "id": "icon-success",
+      "light": "#1A7F37",
+      "dark": "#3FB950"
+    },
+    {
+      "id": "icon-warning",
+      "light": "#9A6700",
+      "dark": "#D29922"
+    },
+    {
+      "id": "icon-danger",
+      "light": "#CF222E",
+      "dark": "#F85149"
+    }
+  ],
+  "replacement": {
+    "tasks": ["T05.02", "T24.02"],
+    "reference": "../../docs/plan/resources.md section 9.1",
+    "note": "The role names are a host design suggestion; the mapping to the real theme lives in the host theme work and is not asserted by this file."
+  }
+}

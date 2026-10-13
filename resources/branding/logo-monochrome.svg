@@ -1,0 +1,5 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli -->
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="currentColor">
+  <path fill-rule="nonzero" d="M6 6H16V10H10V16H6ZM48 6H58V16H54V10H48ZM54 48H58V58H48V54H54ZM6 48H10V54H16V58H6ZM26 26H38V38H26Z"/>
+</svg>

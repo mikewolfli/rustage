@@ -1,0 +1,5 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli -->
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <path fill="#FFFFFF" fill-rule="nonzero" d="M128 128H184V152H152V184H128ZM328 128H384V184H360V152H328ZM384 328V384H328V360H360V328ZM128 328H152V360H184V384H128ZM208 208H304V304H208Z"/>
+</svg>

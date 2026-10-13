@@ -6,8 +6,11 @@
 
 This repository contains design documents and contribution infrastructure,
 plus a minimal Rust executable scaffold. It does not yet contain a runnable
-designer. Contributions may include design reviews, documentation fixes,
-reproducible upstream API evidence, and roadmap refinement. Confirm the relevant
+designer. The scaffold pins its one third-party dependency, the
+`rust-widgets` revision, and its Rust toolchain, and it carries runnable probes
+that verify the dependency's layout, generation, event and unbind contracts.
+Contributions may include design reviews, documentation fixes, reproducible
+upstream API evidence, and roadmap refinement. Confirm the relevant
 baseline decisions before adding GUI frameworks, dependencies, or new public
 architecture.
 
@@ -40,16 +43,23 @@ Contributors retain their rights; no copyright assignment is required.
 ## Checks available today
 
 Use Git, Rust, and Node.js 22 or newer. No npm packages are required; the one Rust dependency is
-the pinned `rust-widgets` revision, which Cargo fetches over the network on a cold build:
+the pinned `rust-widgets` revision, which Cargo fetches over the network on a cold build. The Rust
+toolchain is pinned by `rust-toolchain.toml`, so the checks run under the version the recorded
+evidence was produced with:
 
 ```sh
 cargo fmt --check
 cargo test
 cargo run -- --help
+cargo run -- --probe-apis target/probe
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 node --test tools/resources/check-resources.test.mjs
 node tools/resources/check-resources.mjs
+node --test tools/support-matrix/check-support-matrix.test.mjs
+node tools/support-matrix/check-support-matrix.mjs
+node --test tools/decisions/check-decisions.test.mjs
+node tools/decisions/check-decisions.mjs
 git diff --check
 ```
 
@@ -57,9 +67,17 @@ Rust checks cover the command line, the icon seam and the icon strip: the semant
 resolves in the pinned dependency, the host glyphs clear the dependency's contour budget and draw
 at every displayed size, the eight colour roles stay legible and distinguishable in both
 appearances, a theme switch reaches the controls, and the committed baselines under
-`tests/baselines/icons/` still match what a real control renders. They do not establish that a
-window has displayed anything, that interaction states draw correctly, or that a GUI designer or
-any output target is implemented. Documentation checks
+`tests/baselines/icons/` still match what a real control renders. They also cover the dependency
+contract probes (`--probe-apis`): layout geometry, mode 2 generation and its target-capability
+query, signal dispatch order, connection teardown, and the text editor's edit primitives, guarded
+`replace_range`, highlight state, graded scale, viewport coordinates and a cross-thread
+highlighter, each tied to the pinned revision by a lockfile drift test. The command writes
+`api-probes.json` under the directory you name and **exits non-zero while any probe reports a
+gap** — a gap is a recorded finding, not a pass, and the open ones are listed in
+[`docs/rw-feedback/`](docs/rw-feedback/feedback-20261013.md). These probes do not establish that a
+window has displayed anything, that interaction states draw correctly, that a generated file
+compiles for a given profile, or that a GUI designer or any output target is
+implemented. Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required
 community files, roadmap task dependencies, declared roadmap counts, and task
 prerequisites across milestone assignments. They do not fetch external URLs,
@@ -95,6 +113,16 @@ cargo test   # fails, naming the file, while a baseline is stale
 
 A new glyph is authored as `stroke` centerlines, never as a pre-flattened polygon, and never as a
 second file for a theme or state: one source, `currentColor`, and the theme supplies the colour.
+
+## Decision register
+
+The conclusions behind the foundation tasks live in
+[`docs/plan/decisions.json`](docs/plan/decisions.json), with a readable copy in
+[`docs/plan/decisions.md`](docs/plan/decisions.md). The check compares the copy and whitepaper
+§17.7 against the data, and refuses an entry that has no status, no rationale, no rejected
+alternative, no compatibility impact, no revisit trigger, no owner or no affected task. An entry
+with status `open` records a value only the project owner can supply; until that happens the
+register is not the place to guess, and code must not depend on it.
 
 ## Documentation and implementation expectations
 

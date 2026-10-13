@@ -34,3 +34,11 @@ jobs:
         run: node --test tools/resources/check-resources.test.mjs
       - name: Check host resources
         run: node tools/resources/check-resources.mjs
+      - name: Test support matrix checker
+        run: node --test tools/support-matrix/check-support-matrix.test.mjs
+      - name: Check support matrix
+        run: node tools/support-matrix/check-support-matrix.mjs
+      - name: Test decision register checker
+        run: node --test tools/decisions/check-decisions.test.mjs
+      - name: Check decision register
+        run: node tools/decisions/check-decisions.mjs

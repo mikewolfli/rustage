@@ -1,0 +1,78 @@
+# 支持矩阵：三宿主 × 五 profile
+
+> 数据源：[`support-matrix.json`](support-matrix.json)。本文件中的表格由
+> [`tools/support-matrix/check-support-matrix.mjs`](../../tools/support-matrix/check-support-matrix.mjs)
+> 逐行对照该文件校验，改一处而漏另一处会失败。
+> 依据：[项目原则](principle.md) #2/#11/#12/#24/#25、[完整路线图](roadmap.md) T00.03。
+> 状态：**矩阵已建立；除 macOS 宿主构建外，没有任何单元格有构建或运行证据。**
+
+## 这份矩阵回答什么
+
+**一格 = 在某一宿主上，为某一输出 profile 建立构建或运行证据的状态。**
+它不回答"设计器好不好用"，也不把库的 feature 名称当作可用性证明（原则 #12）。
+每格必须取下列四个级别之一，且**除 `unverified` 外的每一格都要写明理由**。
+
+## 状态级别
+
+| 级别 | 含义 |
+|---|---|
+| `unsupported` | 项目架构排除，或固定依赖不提供；没有明确决策不得打开 |
+| `unverified` | 本仓库没有构建或运行的记录 |
+| `build-verified` | 有记录的构建通过；尚未运行 |
+| `certified` | 在所指 OS/triple/设备上有记录的构建与运行 |
+
+`build-verified` 是路线图"未验证/不支持/认证"三级之外的第四级，理由是：**构建通过不等于运行
+通过**，把它并入 `certified` 会虚报，并入 `unverified` 会丢掉真实证据。四级都要在证据审查时
+写出命令与环境。
+
+## 宿主
+
+| 宿主 | triple | 设计器宿主 | 理由 |
+|---|---|---|---|
+| macos | aarch64-apple-darwin | build-verified | cargo build（desktop profile）已记录，见 docs/log/log-20261013-4.md |
+| windows | x86_64-pc-windows-msvc | unverified | — |
+| linux | x86_64-unknown-linux-gnu | unverified | — |
+
+设计器宿主始终是桌面（原则 #2）；上表的"设计器宿主"指**设计器自身**能否在该 OS 上构建与运行，
+与输出目标无关。
+
+## profile 与产物模式
+
+| profile | feature | 模式 1 | 模式 2 |
+|---|---|---|---|
+| desktop | desktop | unverified | unverified |
+| tablet | tablet | unverified | unverified |
+| mobile | mobile | unverified | unverified |
+| mini | mini | unsupported | unverified |
+| embedded | embedded | unsupported | unverified |
+
+- 模式 1（JSON + CSS 运行时加载）仅适用于 desktop/tablet/mobile；mini 与 embedded 必须使用
+  模式 2（原则 #11）。这一格是**架构排除**，只会被明确决策改变，不会因为出现证据而变成可用。
+- 模式 2 在全部 profile 上"适用但未验证"：探针证明生成器接受请求并回报提示，**不**证明产物
+  能在该 profile 真实编译或运行（见 `docs/log/log-20261013-4.md`）。
+
+## 矩阵（宿主 × profile，模式 2 产物）
+
+| 宿主 \ profile | desktop | tablet | mobile | mini | embedded |
+|---|---|---|---|---|---|
+| macos | unverified | unverified | unverified | unverified | unverified |
+| windows | unverified | unverified | unverified | unverified | unverified |
+| linux | unverified | unverified | unverified | unverified | unverified |
+
+这 15 格目前全为 `unverified`，是**事实而非保守**：本仓库没有任何一次面向输出 profile 的交叉
+构建或设备运行。矩阵的价值在于它是逐格可核对的声明点——补上证据时只改一格，而不是重写一段
+"基本支持"的描述。
+
+## 规则
+
+1. **未验证不是不支持，也不是支持。** `unverified` 只表示没有记录；既不能据它宣称可用，
+   也不能当成已知缺陷。
+2. **认证需要构建与运行两条证据**，且命令、环境、OS/triple、设备与日期必须可复核（原则 #24）。
+   模拟、静态清单或宿主预览不能替代目标构建。
+3. **能力以实际契约为准。** 每格的可用性应由目标 profile 的能力查询回答；本仓库的
+   `platform::profile` 探针读回当前编译 profile（`desktop`），作为矩阵 `desktop` 行的锚点。
+4. **不掩盖缺设备。** 缺少 SDK、测试机或签名环境时，该格保持 `unverified` 并写明缺什么，
+   不得改为 `certified`。
+5. **单列范围外平台。** HarmonyOS 2in1 的打包资源不属于"三宿主"，其验收项单独跟踪于
+   [`docs/issues/issue-20261013.md`](../issues/issue-20261013.md) 第 5、6 节，本矩阵不为它
+   增设宿主行。

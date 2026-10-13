@@ -11,8 +11,11 @@
 
 rustage is currently in the **design and planning stage**. The repository now
 includes a minimal Rust executable scaffold, but it does **not** yet contain a
-runnable visual designer or released installation packages. The scaffold has
-no GUI framework or third-party dependencies.
+runnable visual designer or released installation packages. The scaffold pins a
+single third-party dependency — [rust-widgets](https://github.com/mikewolfli/rust-widgets),
+at a fixed revision and the `desktop` profile — and a fixed Rust toolchain, and it
+carries runnable probes that exercise the dependency's layout, generation, event
+and unbind contracts. It has no designer window.
 
 Capabilities below are planned, not claims of implemented or verified support.
 The roadmap defines 29 functional domains, 262 implementation tasks,
@@ -70,6 +73,8 @@ file-watching services must not leak into restricted release artifacts.
 | [Whitepaper](docs/plan/whitepaper.md) | Architecture, output modes, and hot-update design |
 | [Project principles](docs/plan/principle.md) | Engineering constraints and review criteria |
 | [Complete roadmap](docs/plan/roadmap.md) | Product modules, menus, tasks, milestones, and acceptance |
+| [Support matrix](docs/plan/support-matrix.md) | Three hosts, five profiles and per-cell evidence level, with the data file behind it |
+| [Decision register](docs/plan/decisions.md) | Q1–Q6 and the format, generated-output, upgrade and component-expression policies, including what is still undecided |
 | [Icon and resource plan](docs/plan/resources.md) | Resource placement, icon integration, themes, and platform packaging |
 | [Capability planning references](docs/plan/capability-reference.md) | Workflow requirements, protocol evidence, and future-extension boundaries |
 | [GitHub administration](docs/github.md) | Repository settings and CI setup still requiring owner action |
@@ -87,9 +92,10 @@ rustage/
 │   ├── plan/             # Principles, whitepaper, and roadmap
 │   ├── README.md         # Documentation index
 │   └── github.md         # Repository administration guide
-├── src/                  # Minimal executable entry point and CLI boundary
+├── src/                  # Executable entry point, CLI boundary, and dependency contract probes
 ├── Cargo.toml            # Rust package manifest
 ├── Cargo.lock            # Locked Rust dependencies
+├── rust-toolchain.toml   # Pinned Rust toolchain
 ├── tools/                # Dependency-free documentation checks and tests
 ├── README.md             # English overview
 ├── README.zh-CN.md       # Chinese overview
@@ -108,15 +114,19 @@ git clone https://github.com/mikewolfli/rustage.git
 cd rustage
 cargo run
 cargo run -- --help
+cargo run -- --probe-apis target/probe   # writes target/probe/api-probes.json; exits non-zero while a probe reports a gap
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 ```
 
-The Rust scaffold uses the 2024 edition and has no third-party dependencies.
-Documentation checks require **Node.js 22 or newer** and Git, with no npm
-dependencies. The executable currently reports its status and supports help
-and version options; it does not launch a designer window.
+The Rust scaffold uses the 2024 edition. Its one third-party dependency is the
+pinned `rust-widgets` revision, which Cargo fetches over the network on a cold
+build, and its Rust toolchain is pinned by `rust-toolchain.toml`. Documentation
+checks require **Node.js 22 or newer** and Git, with no npm dependencies. The
+executable currently reports its status, supports help and version options, renders
+the icon strip, and runs the dependency contract probes; it does not launch a
+designer window.
 
 ## Contributing and support
 

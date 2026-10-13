@@ -10,7 +10,10 @@
 ## 项目状态
 
 rustage 目前处于**设计与规划阶段**。仓库现已包含最小 Rust 可执行程序骨架，但
-**尚无可运行的可视化设计器或已发布安装包**。该骨架不包含 GUI 框架或第三方依赖。
+**尚无可运行的可视化设计器或已发布安装包**。该骨架固定了唯一的第三方依赖
+[rust-widgets](https://github.com/mikewolfli/rust-widgets)（固定修订、`desktop` profile）
+与固定的 Rust 工具链，并提供可运行探针核验依赖的布局、生成、事件与解绑契约；
+它没有任何设计器窗口。
 
 以下能力均为规划，不表示已经实现或通过平台验证。
 完整路线图包含 29 个功能域、262 项实施任务、20 个里程碑、26 条用户旅程及对应验收标准。
@@ -59,6 +62,8 @@ rustage 目前处于**设计与规划阶段**。仓库现已包含最小 Rust �
 | [设计白皮书](docs/plan/whitepaper.md) | 架构、产物模式与热更新方案 |
 | [项目原则](docs/plan/principle.md) | 工程约束与评审准则 |
 | [完整路线图](docs/plan/roadmap.md) | 产品模块、菜单、任务、里程碑与验收 |
+| [支持矩阵](docs/plan/support-matrix.md) | 三宿主、五 profile 与逐格证据级别，及其数据文件 |
+| [决策登记](docs/plan/decisions.md) | Q1–Q6 与工程格式、生成入库、升级、组件表达策略，以及仍未决定的取值 |
 | [图标与资源规划](docs/plan/resources.md) | 资源放置、图标集成、主题与平台打包验收 |
 | [能力规划依据](docs/plan/capability-reference.md) | 工作流需求、协议依据与未来扩展边界 |
 | [GitHub 管理说明](docs/github.md) | 仍需仓库所有者配置的设置与 CI |
@@ -75,9 +80,10 @@ rustage/
 │   ├── plan/             # 原则、白皮书、路线图
 │   ├── README.md         # 文档索引
 │   └── github.md         # 仓库管理说明
-├── src/                  # 最小可执行入口与 CLI 边界
+├── src/                  # 可执行入口、CLI 边界与依赖契约探针
 ├── Cargo.toml            # Rust 包配置
 ├── Cargo.lock            # Rust 依赖锁定文件
+├── rust-toolchain.toml   # 固定的 Rust 工具链
 ├── tools/                # 无第三方依赖的文档检查及测试
 ├── README.md             # 英文概览
 ├── README.zh-CN.md       # 中文概览
@@ -96,14 +102,16 @@ git clone https://github.com/mikewolfli/rustage.git
 cd rustage
 cargo run
 cargo run -- --help
+cargo run -- --probe-apis target/probe   # 写出 target/probe/api-probes.json；有缺口时退出码非零
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 ```
 
-Rust 骨架使用 2024 edition，且没有第三方依赖。文档检查需要
-**Node.js 22 或更新版本**及 Git，无 npm 依赖。当前可执行程序仅报告项目状态，
-并支持帮助与版本选项；尚不会启动设计器窗口。
+Rust 骨架使用 2024 edition，唯一的第三方依赖是固定修订的 `rust-widgets`（冷构建时由 Cargo
+联网拉取），Rust 工具链由 `rust-toolchain.toml` 固定。文档检查需要
+**Node.js 22 或更新版本**及 Git，无 npm 依赖。当前可执行程序报告项目状态、支持帮助与版本
+选项、渲染图标条带并运行依赖契约探针；尚不会启动设计器窗口。
 
 ## 贡献与支持
 

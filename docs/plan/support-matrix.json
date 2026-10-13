@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "dependency": {
+    "crate": "rust_widgets",
+    "revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+    "profile": "desktop"
+  },
+  "levels": {
+    "unsupported": "项目架构排除，或固定依赖不提供；没有明确决策不得打开",
+    "unverified": "本仓库没有构建或运行的记录",
+    "build-verified": "有记录的构建通过；尚未运行",
+    "certified": "在所指 OS/triple/设备上有记录的构建与运行"
+  },
+  "hosts": [
+    {
+      "id": "macos",
+      "triple": "aarch64-apple-darwin",
+      "designerHost": "build-verified",
+      "reason": "cargo build（desktop profile）已记录，见 docs/log/log-20261013-4.md"
+    },
+    {
+      "id": "windows",
+      "triple": "x86_64-pc-windows-msvc",
+      "designerHost": "unverified",
+      "reason": null
+    },
+    {
+      "id": "linux",
+      "triple": "x86_64-unknown-linux-gnu",
+      "designerHost": "unverified",
+      "reason": null
+    }
+  ],
+  "profiles": [
+    {
+      "id": "desktop",
+      "feature": "desktop",
+      "mode1": "unverified",
+      "mode1Reason": null,
+      "mode2": "unverified",
+      "mode2Reason": null
+    },
+    {
+      "id": "tablet",
+      "feature": "tablet",
+      "mode1": "unverified",
+      "mode1Reason": null,
+      "mode2": "unverified",
+      "mode2Reason": null
+    },
+    {
+      "id": "mobile",
+      "feature": "mobile",
+      "mode1": "unverified",
+      "mode1Reason": null,
+      "mode2": "unverified",
+      "mode2Reason": null
+    },
+    {
+      "id": "mini",
+      "feature": "mini",
+      "mode1": "unsupported",
+      "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
+      "mode2": "unverified",
+      "mode2Reason": null
+    },
+    {
+      "id": "embedded",
+      "feature": "embedded",
+      "mode1": "unsupported",
+      "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
+      "mode2": "unverified",
+      "mode2Reason": null
+    }
+  ],
+  "cells": [
+    { "host": "macos", "profile": "desktop", "status": "unverified", "reason": null },
+    { "host": "macos", "profile": "tablet", "status": "unverified", "reason": null },
+    { "host": "macos", "profile": "mobile", "status": "unverified", "reason": null },
+    { "host": "macos", "profile": "mini", "status": "unverified", "reason": null },
+    { "host": "macos", "profile": "embedded", "status": "unverified", "reason": null },
+    { "host": "windows", "profile": "desktop", "status": "unverified", "reason": null },
+    { "host": "windows", "profile": "tablet", "status": "unverified", "reason": null },
+    { "host": "windows", "profile": "mobile", "status": "unverified", "reason": null },
+    { "host": "windows", "profile": "mini", "status": "unverified", "reason": null },
+    { "host": "windows", "profile": "embedded", "status": "unverified", "reason": null },
+    { "host": "linux", "profile": "desktop", "status": "unverified", "reason": null },
+    { "host": "linux", "profile": "tablet", "status": "unverified", "reason": null },
+    { "host": "linux", "profile": "mobile", "status": "unverified", "reason": null },
+    { "host": "linux", "profile": "mini", "status": "unverified", "reason": null },
+    { "host": "linux", "profile": "embedded", "status": "unverified", "reason": null }
+  ]
+}

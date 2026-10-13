@@ -78,7 +78,9 @@ pub struct SystemClock {
 impl SystemClock {
     /// A clock whose zero is now.
     pub fn start() -> Self {
-        Self { started: Instant::now() }
+        Self {
+            started: Instant::now(),
+        }
     }
 }
 
@@ -108,14 +110,20 @@ impl FixedClock {
 
     /// Moves the clock forward.
     pub fn advance(&self, by: Duration) {
-        let mut now = self.now.lock().expect("the fixed clock is never poisoned in tests");
+        let mut now = self
+            .now
+            .lock()
+            .expect("the fixed clock is never poisoned in tests");
         *now += by;
     }
 }
 
 impl Clock for FixedClock {
     fn elapsed_millis(&self) -> u128 {
-        self.now.lock().expect("the fixed clock is never poisoned in tests").as_millis()
+        self.now
+            .lock()
+            .expect("the fixed clock is never poisoned in tests")
+            .as_millis()
     }
 }
 
@@ -154,20 +162,34 @@ pub struct Logger {
 impl Logger {
     /// A logger writing to `sink`, keeping records at or above `threshold`.
     pub fn new(threshold: Level, clock: Box<dyn Clock>, sink: Box<dyn Write + Send>) -> Self {
-        Self { threshold, clock, sink }
+        Self {
+            threshold,
+            clock,
+            sink,
+        }
     }
 
     /// A logger writing to standard error, the default for a command-line process.
     pub fn to_stderr(threshold: Level) -> Self {
-        Self::new(threshold, Box::new(SystemClock::start()), Box::new(io::stderr()))
+        Self::new(
+            threshold,
+            Box::new(SystemClock::start()),
+            Box::new(io::stderr()),
+        )
     }
 
     /// A logger writing into a buffer, for tests and for commands that capture their own output.
-    pub fn to_buffer(threshold: Level, clock: Box<dyn Clock>, buffer: &'static Mutex<Vec<u8>>) -> Self {
+    pub fn to_buffer(
+        threshold: Level,
+        clock: Box<dyn Clock>,
+        buffer: &'static Mutex<Vec<u8>>,
+    ) -> Self {
         struct Shared(&'static Mutex<Vec<u8>>);
         impl Write for Shared {
             fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                self.0.lock().expect("the log buffer is never poisoned in tests")
+                self.0
+                    .lock()
+                    .expect("the log buffer is never poisoned in tests")
                     .extend_from_slice(bytes);
                 Ok(bytes.len())
             }
@@ -215,7 +237,9 @@ impl Logger {
 
     /// Flushes the sink so the evidence on disk is complete even if the process exits next.
     pub fn flush(&mut self) -> HostResult<()> {
-        self.sink.flush().map_err(|error| HostError::LogSink { reason: error.to_string() })
+        self.sink.flush().map_err(|error| HostError::LogSink {
+            reason: error.to_string(),
+        })
     }
 }
 
@@ -233,14 +257,18 @@ pub fn install(logger: Logger) -> Option<()> {
 
 /// Writes one record through the process logger. Silent when none is installed.
 pub fn emit(level: Level, target: &str, message: &str) {
-    let Some(logger) = PROCESS_LOGGER.get() else { return };
+    let Some(logger) = PROCESS_LOGGER.get() else {
+        return;
+    };
     let mut logger = logger.lock().expect("the process logger is never poisoned");
     let _ = logger.log(level, target, message);
 }
 
 /// Flushes the process logger, if there is one.
 pub fn flush() {
-    let Some(logger) = PROCESS_LOGGER.get() else { return };
+    let Some(logger) = PROCESS_LOGGER.get() else {
+        return;
+    };
     let mut logger = logger.lock().expect("the process logger is never poisoned");
     let _ = logger.flush();
 }
@@ -285,7 +313,10 @@ mod tests {
             elapsed_millis: 42,
         };
 
-        assert_eq!(record.render(), "INFO host::startup: window created (+42 ms)");
+        assert_eq!(
+            record.render(),
+            "INFO host::startup: window created (+42 ms)"
+        );
     }
 
     #[test]
@@ -295,7 +326,12 @@ mod tests {
 
         assert!(logger.keeps(Level::Error));
         assert!(!logger.keeps(Level::Debug));
-        assert!(logger.log(Level::Debug, "host", "noise").unwrap().eq(&false));
+        assert!(
+            logger
+                .log(Level::Debug, "host", "noise")
+                .unwrap()
+                .eq(&false)
+        );
         assert_eq!(contents(buffer), "");
 
         assert!(logger.log(Level::Info, "host", "kept").unwrap());
@@ -316,7 +352,10 @@ mod tests {
         logger.log(Level::Trace, "host", "second").unwrap();
         logger.flush().unwrap();
 
-        assert_eq!(contents(buffer), "TRACE host: first (+0 ms)\nTRACE host: second (+0 ms)\n");
+        assert_eq!(
+            contents(buffer),
+            "TRACE host: first (+0 ms)\nTRACE host: second (+0 ms)\n"
+        );
     }
 
     #[test]

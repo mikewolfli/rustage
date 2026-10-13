@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::cli::{self, Command};
+use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
 
 use super::toolbar;
@@ -35,6 +36,29 @@ pub fn run(command: Command) {
             println!("Permission policy for an untrusted project with no approvals:");
             for line in crate::contracts::vocabulary::permission_lines() {
                 println!("{line}");
+            }
+        }
+        Command::Launch(options) => {
+            let request = StartupRequest {
+                exit_after: options.exit_after,
+                ..StartupRequest::default()
+            };
+            if !options.exit_after.is_zero() {
+                // Say what will happen before it does: a bounded session ends the process from a
+                // watcher thread, because the pinned revision cannot be asked to stop its loop.
+                println!(
+                    "launching the baseline session; it will end itself after {} ms",
+                    options.exit_after.as_millis(),
+                );
+            }
+            let report = crate::host::startup::launch(&request);
+            // The report names the backend and the GUI mode in both directions, because "it
+            // started" without a window is the failure this command exists to avoid claiming.
+            print!("{}", report.summary());
+            println!();
+            crate::host::log::flush();
+            if !report.is_started() {
+                std::process::exit(report.exit_code().code());
             }
         }
         Command::RenderIcons(directory) => match render_icons(&directory) {

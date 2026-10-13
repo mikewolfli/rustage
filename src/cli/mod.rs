@@ -7,4 +7,8 @@
 
 mod command;
 
-pub use command::{Command, help_text, parse};
+pub use command::{Command, help_text, log_level_of, parse};
+
+/// The process exit codes, defined once in the host and re-exported so a command-line caller and a
+/// script agree on the numbers without a second table.
+pub use crate::host::error::ExitCode;

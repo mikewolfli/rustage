@@ -52,6 +52,7 @@ cargo fmt --check
 cargo test
 cargo run -- --help
 cargo run -- --probe-apis target/probe
+cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 node --test tools/resources/check-resources.test.mjs
@@ -75,7 +76,12 @@ node tools/capability/check-capability.mjs
 git diff --check
 ```
 
-Rust checks cover the command line, the icon seam and the icon strip: the semantic icon table
+`--launch` opens the baseline desktop session and leaves it again. It refuses to report a session
+when the dependency reports a non-interactive backend, and it says in the log how the session ended
+(`LoopEnd::WindowClosed` for a window close, `LoopEnd::HostEnded` when the host had to end its own
+process because the pinned revision's `quit()` only works on the thread that owns the GUI toolkit).
+On a machine without a desktop session it exits with code 3 and a reason; that is a refusal, not a
+failure, and not a success. Rust checks cover the command line, the icon seam and the icon strip: the semantic icon table
 resolves in the pinned dependency, the host glyphs clear the dependency's contour budget and draw
 at every displayed size, the eight colour roles stay legible and distinguishable in both
 appearances, a theme switch reaches the controls, and the committed baselines under

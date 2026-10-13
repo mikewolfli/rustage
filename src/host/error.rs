@@ -42,7 +42,9 @@ impl HostError {
     /// A sentence naming what was found, for a terminal or a problem panel.
     pub fn message(&self) -> String {
         match self {
-            Self::PlatformInit { reason } => format!("the platform runtime did not initialise: {reason}"),
+            Self::PlatformInit { reason } => {
+                format!("the platform runtime did not initialise: {reason}")
+            }
             Self::EventLoop { reason } => format!("the event loop did not run: {reason}"),
             Self::NoGuiSession { backend, mode } => format!(
                 "backend {backend} reports gui mode {mode}, so no window would appear; \
@@ -75,7 +77,9 @@ impl std::error::Error for HostError {}
 
 impl From<io::Error> for HostError {
     fn from(error: io::Error) -> Self {
-        Self::LogSink { reason: error.to_string() }
+        Self::LogSink {
+            reason: error.to_string(),
+        }
     }
 }
 
@@ -114,15 +118,25 @@ pub type HostResult<T> = std::result::Result<T, HostError>;
 #[cfg(test)]
 mod tests {
     use super::{ExitCode, HostError};
-    use std::error::Error;
 
     fn every_error() -> Vec<HostError> {
         vec![
-            HostError::PlatformInit { reason: "no display".into() },
-            HostError::EventLoop { reason: "loop returned 1".into() },
-            HostError::NoGuiSession { backend: "stub".into(), mode: "PreviewOrStub".into() },
-            HostError::WindowCreation { reason: "geometry rejected".into() },
-            HostError::LogSink { reason: "broken pipe".into() },
+            HostError::PlatformInit {
+                reason: "no display".into(),
+            },
+            HostError::EventLoop {
+                reason: "loop returned 1".into(),
+            },
+            HostError::NoGuiSession {
+                backend: "stub".into(),
+                mode: "PreviewOrStub".into(),
+            },
+            HostError::WindowCreation {
+                reason: "geometry rejected".into(),
+            },
+            HostError::LogSink {
+                reason: "broken pipe".into(),
+            },
         ]
     }
 
@@ -138,11 +152,21 @@ mod tests {
 
     #[test]
     fn a_missing_gui_session_is_distinct_from_a_defect() {
-        let no_session = HostError::NoGuiSession { backend: "stub".into(), mode: "PreviewOrStub".into() };
+        let no_session = HostError::NoGuiSession {
+            backend: "stub".into(),
+            mode: "PreviewOrStub".into(),
+        };
 
         assert_eq!(no_session.exit_code(), ExitCode::EnvironmentUnavailable);
-        assert_eq!(HostError::PlatformInit { reason: "x".into() }.exit_code(), ExitCode::Failed);
-        assert!(no_session.message().contains("does not claim a started session"));
+        assert_eq!(
+            HostError::PlatformInit { reason: "x".into() }.exit_code(),
+            ExitCode::Failed
+        );
+        assert!(
+            no_session
+                .message()
+                .contains("does not claim a started session")
+        );
     }
 
     #[test]
@@ -156,7 +180,10 @@ mod tests {
 
     #[test]
     fn an_io_error_becomes_a_log_sink_failure() {
-        let error = HostError::from(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"));
+        let error = HostError::from(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed",
+        ));
 
         assert_eq!(error.exit_code(), ExitCode::Failed);
         assert!(error.message().contains("closed"));

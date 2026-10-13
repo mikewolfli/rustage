@@ -25,11 +25,16 @@
 //! subprocesses arrive in T01.02–T01.04, and each of them gets its own module rather than a
 //! growing `platform` file.
 
+// Parts of this surface have no runtime producer yet, and the reason is worth writing down rather
+// than hiding: the error variants for a failed init or loop are produced by platform adapters that
+// can fail (the trait returns `Result`) and by the contract tests' fake platform, while the real
+// `rust_widgets` adapter cannot report either failure because the pinned revision's entry points
+// return `()`. The buffered logger and the fixed clock exist for tests now and for the output panel
+// MS03 will build. Every one of them is exercised by a test; none of them is a placeholder standing
+// in for behaviour, and not deleting them keeps the failure paths that the next adapter must fill.
+#![allow(dead_code)]
+
 pub mod error;
 pub mod log;
 pub mod platform;
 pub mod startup;
-
-pub use error::{ExitCode, HostError, HostResult};
-pub use log::{Clock, FixedClock, Level, Logger, Record, SystemClock};
-pub use startup::{StartupOutcome, StartupReport, StartupRequest, launch};

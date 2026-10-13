@@ -15,7 +15,10 @@ use std::{
     ffi::{OsStr, OsString},
     fmt,
     path::PathBuf,
+    time::Duration,
 };
+
+use crate::host::log::Level;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -26,6 +29,26 @@ pub enum Command {
     RenderIcons(PathBuf),
     /// Runs the dependency contract probes and writes the report into the given directory.
     ProbeApis(PathBuf),
+    /// Starts the baseline desktop session and leaves it again.
+    Launch(LaunchOptions),
+}
+
+/// How long the baseline session should live.
+///
+/// A start that cannot end is not evidence and not usable by a person, so the duration is part of
+/// the command rather than a hidden constant; the default matches
+/// [`crate::host::platform::BASELINE_SESSION`].
+#[derive(Debug, PartialEq, Eq)]
+pub struct LaunchOptions {
+    pub exit_after: Duration,
+}
+
+impl Default for LaunchOptions {
+    fn default() -> Self {
+        Self {
+            exit_after: crate::host::platform::BASELINE_SESSION,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,48 +68,122 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Reads the global `--log-level <level>` option wherever it appears.
+///
+/// It is global rather than per-command because the logger is installed once for the process: a
+/// `--launch` that logs and a `--probe-apis` that logs must not each invent their own switch.
+pub fn log_level_of<I, S>(arguments: I) -> Result<Option<Level>, ParseError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let arguments: Vec<OsString> = arguments
+        .into_iter()
+        .map(|value| value.as_ref().to_os_string())
+        .collect();
+    let mut level = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == OsStr::new("--log-level") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(ParseError {
+                    argument: arguments[index].clone(),
+                });
+            };
+            let Some(parsed) = value.to_str().and_then(Level::parse) else {
+                return Err(ParseError {
+                    argument: value.clone(),
+                });
+            };
+            level = Some(parsed);
+            index += 2;
+            continue;
+        }
+        index += 1;
+    }
+    Ok(level)
+}
+
 pub fn parse<I, S>(arguments: I) -> Result<Command, ParseError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut arguments = arguments.into_iter();
+    // The global option is removed here so every arm below can assume it is looking at the command;
+    // `log_level_of` reads it separately, and both agree because they share this token handling.
+    let collected: Vec<OsString> = arguments
+        .into_iter()
+        .map(|value| value.as_ref().to_os_string())
+        .collect();
+    let mut stripped: Vec<OsString> = Vec::with_capacity(collected.len());
+    let mut index = 0;
+    while index < collected.len() {
+        if collected[index] == OsStr::new("--log-level") {
+            let Some(value) = collected.get(index + 1) else {
+                return Err(ParseError {
+                    argument: collected[index].clone(),
+                });
+            };
+            if value.to_str().and_then(Level::parse).is_none() {
+                return Err(ParseError {
+                    argument: value.clone(),
+                });
+            }
+            index += 2;
+            continue;
+        }
+        stripped.push(collected[index].clone());
+        index += 1;
+    }
+
+    let mut arguments = stripped.into_iter();
     let Some(argument) = arguments.next() else {
         return Ok(Command::Status);
     };
+    let text = argument.to_str().unwrap_or_default();
 
-    let command = match argument.as_ref() {
-        value if value == "--help" || value == "-h" => Command::Help,
-        value if value == "--version" || value == "-V" => Command::Version,
-        value if value == "--render-icons" || value == "--probe-apis" => {
+    let command = match text {
+        "--help" | "-h" => Command::Help,
+        "--version" | "-V" => Command::Version,
+        "--launch" => {
+            let mut options = LaunchOptions::default();
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                if argument == OsStr::new("--exit-after-ms") {
+                    let Some(value) = rest.next() else {
+                        return Err(ParseError { argument });
+                    };
+                    let Some(milliseconds) =
+                        value.to_str().and_then(|value| value.parse::<u64>().ok())
+                    else {
+                        return Err(ParseError { argument: value });
+                    };
+                    options.exit_after = Duration::from_millis(milliseconds);
+                    continue;
+                }
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::Launch(options));
+        }
+        "--render-icons" | "--probe-apis" => {
             let Some(directory) = arguments.next() else {
-                return Err(ParseError {
-                    argument: argument.as_ref().to_os_string(),
-                });
+                return Err(ParseError { argument });
             };
             let mut rest = arguments;
             if let Some(argument) = rest.next() {
-                return Err(ParseError {
-                    argument: argument.as_ref().to_os_string(),
-                });
+                return Err(ParseError { argument });
             }
-            let path = PathBuf::from(directory.as_ref());
-            if value == "--render-icons" {
+            let path = PathBuf::from(directory);
+            if text == "--render-icons" {
                 return Ok(Command::RenderIcons(path));
             }
             return Ok(Command::ProbeApis(path));
         }
-        _ => {
-            return Err(ParseError {
-                argument: argument.as_ref().to_os_string(),
-            });
-        }
+        _ => return Err(ParseError { argument }),
     };
 
     if let Some(argument) = arguments.next() {
-        return Err(ParseError {
-            argument: argument.as_ref().to_os_string(),
-        });
+        return Err(ParseError { argument });
     }
 
     Ok(command)
@@ -94,20 +191,27 @@ where
 
 pub fn help_text() -> &'static str {
     "rustage - Rust desktop UI designer\n\n\
-     Usage: rustage [--help | --version | --render-icons <directory> | --probe-apis <directory>]\n\n\
+     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n\
+            rustage [--render-icons <directory> | --probe-apis <directory>]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
        -V, --version                 Print the application version\n\
+       --launch                      Start the baseline desktop session, then leave it again\n\
+       --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n\
        --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n\
-       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n"
+       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n\n\
+     Global options:\n\
+       --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Command, parse};
+    use super::{Command, LaunchOptions, log_level_of, parse};
+    use crate::host::log::Level;
+    use std::time::Duration;
 
     #[test]
     fn no_arguments_show_status() {
@@ -139,8 +243,57 @@ mod tests {
     }
 
     #[test]
+    fn the_log_level_option_is_read_and_removed_from_the_command() {
+        assert_eq!(log_level_of(["--help"]).unwrap(), None);
+        assert_eq!(
+            log_level_of(["--log-level", "debug", "--launch"]).unwrap(),
+            Some(Level::Debug)
+        );
+        assert_eq!(
+            parse(["--log-level", "warn", "--launch"]),
+            Ok(Command::Launch(LaunchOptions::default()))
+        );
+        assert_eq!(
+            parse(["--launch", "--log-level", "trace", "--exit-after-ms", "10"]),
+            Ok(Command::Launch(LaunchOptions {
+                exit_after: Duration::from_millis(10)
+            })),
+        );
+
+        // A missing or unknown level is a usage error, not a silent fallback to the default.
+        assert!(log_level_of(["--log-level"]).is_err());
+        assert!(log_level_of(["--log-level", "shout"]).is_err());
+        assert!(parse(["--log-level", "shout", "--help"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_baseline_session_and_its_duration() {
+        // `--launch` used to be an unknown argument; it is a command now, and its default session
+        // is bounded so a smoke test can end on its own.
+        assert_eq!(
+            parse(["--launch"]),
+            Ok(Command::Launch(LaunchOptions::default()))
+        );
+        assert_eq!(
+            parse(["--launch", "--exit-after-ms", "1500"]),
+            Ok(Command::Launch(LaunchOptions {
+                exit_after: Duration::from_millis(1500)
+            })),
+        );
+        assert_ne!(
+            LaunchOptions::default().exit_after,
+            Duration::from_millis(1500)
+        );
+
+        // A duration that is missing, unparsable or followed by anything else is a usage error.
+        assert!(parse(["--launch", "--exit-after-ms"]).is_err());
+        assert!(parse(["--launch", "--exit-after-ms", "soon"]).is_err());
+        assert!(parse(["--launch", "--exit-after-ms", "10", "extra"]).is_err());
+        assert!(parse(["--launch", "--unknown"]).is_err());
+    }
+
+    #[test]
     fn rejects_unknown_and_extra_arguments() {
-        assert!(parse(["--launch"]).is_err());
         assert!(parse(["--help", "--version"]).is_err());
         // A missing or repeated directory is a usage error rather than an empty path: exporting
         // into "" would write into the process's working directory.

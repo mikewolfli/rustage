@@ -28,9 +28,10 @@
 //! The two controls do **not** have the same colour channel, and pretending they do is the "one
 //! API for every consumer" claim the resource plan rejects:
 //!
-//! * A `ToolButton` paints its icon with the theme's resolved **text colour** for the control, and
-//!   its disabled ink when the control is disabled. The host chooses the geometry; the dependency
-//!   chooses the ink. That is the toolbar case.
+//! * A `ToolButton` paints its icon with the control's **text colour** — the theme's resolved one,
+//!   or one the caller set for the whole control — and with its disabled ink when the control is
+//!   disabled. There is no icon-colour setter, so a role cannot be assigned to it; the host
+//!   chooses the geometry and the control's own style decides the ink. That is the toolbar case.
 //! * An `Icon` widget resolves its own style colour, so the host assigns the role's colour to it
 //!   explicitly through [`IconRole::color`]. That is how all eight semantic roles — including the
 //!   ones a toolbar button has no reason to paint, such as `OnAccent` or `Danger` — get a consumer.

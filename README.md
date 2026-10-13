@@ -77,6 +77,7 @@ file-watching services must not leak into restricted release artifacts.
 | [Decision register](docs/plan/decisions.md) | Q1–Q6 and the format, generated-output, upgrade and component-expression policies, including what is still undecided |
 | [Shared contracts](docs/plan/contracts.md) | The one writable document model, change sets, permissions, versions, diagnostics and source mapping |
 | [Journey walkthrough](docs/plan/journeys.md) | The seven mode prototypes, and every roadmap journey step with its entry and owning task |
+| [Benchmark environment](docs/plan/benchmark.md) | Fixed data sets, hardware baseline, measurement protocol and the performance scenarios |
 | [Icon and resource plan](docs/plan/resources.md) | Resource placement, icon integration, themes, and platform packaging |
 | [Capability planning references](docs/plan/capability-reference.md) | Workflow requirements, protocol evidence, and future-extension boundaries |
 | [GitHub administration](docs/github.md) | Repository settings and CI setup still requiring owner action |

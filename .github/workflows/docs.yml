@@ -50,3 +50,11 @@ jobs:
         run: node --test tools/journeys/check-journeys.test.mjs
       - name: Check journey walkthrough
         run: node tools/journeys/check-journeys.mjs
+      - name: Test fixture generator
+        run: node --test tools/fixtures/check-fixtures.test.mjs
+      - name: Check fixture reproducibility
+        run: node tools/fixtures/generate-fixtures.mjs --verify
+      - name: Test benchmark environment checker
+        run: node --test tools/benchmark/check-benchmark.test.mjs
+      - name: Check benchmark environment
+        run: node tools/benchmark/check-benchmark.mjs

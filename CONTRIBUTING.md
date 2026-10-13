@@ -64,6 +64,10 @@ node --test tools/contracts/check-contracts.test.mjs
 node tools/contracts/check-contracts.mjs
 node --test tools/journeys/check-journeys.test.mjs
 node tools/journeys/check-journeys.mjs
+node --test tools/fixtures/check-fixtures.test.mjs
+node tools/fixtures/generate-fixtures.mjs --verify
+node --test tools/benchmark/check-benchmark.test.mjs
+node tools/benchmark/check-benchmark.mjs
 git diff --check
 ```
 
@@ -147,6 +151,22 @@ roadmap (names, evidence, milestones and the operation chain step by step), refu
 not a declared menu group or panel, refuses a panel no mode shows, and refuses a step whose owner is
 not a real roadmap task. A step without an entry must say why. The walkthrough records designs and
 owners, not working menus: the data file's `implementation` stays `none` until a task wires one up.
+
+## Fixtures and measurements
+
+The benchmark data sets are described in [`fixtures/spec.json`](fixtures/spec.json) and produced on
+demand, because the sizes T00.07 fixes are far too large to commit:
+
+```sh
+node tools/fixtures/generate-fixtures.mjs --output target/fixtures   # write every fixture
+node tools/fixtures/generate-fixtures.mjs --verify                   # hashes only, proves reproducibility
+```
+
+The measurement contract is in [`docs/plan/benchmark.md`](docs/plan/benchmark.md), with the data in
+[`docs/plan/benchmark.json`](docs/plan/benchmark.json). The check compares every scenario with
+roadmap 35.2 - scenario text, threshold text and phase - and refuses a softened threshold, a
+scenario whose data set does not advertise it, and a measurement claimed without an artifact,
+revision and date. Nothing here is measured yet, and the document says so.
 
 ## Documentation and implementation expectations
 

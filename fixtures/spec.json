@@ -1,0 +1,175 @@
+{
+  "schema": "rustage.fixtures/v1",
+  "note": "固定的数据集定义。生成物不入库：`node tools/fixtures/generate-fixtures.mjs --output <dir>` 用同一份 spec 确定性地产出，检查脚本用流式哈希证明两次生成一致。",
+  "sizes": {
+    "nodesNormal": 40,
+    "nodesMultiPage": 480,
+    "pagesMultiPage": 12,
+    "cssRules": 120,
+    "handwrittenLines": 80,
+    "linesSmall": 10000,
+    "linesBoundaryLow": 50000,
+    "linesMedium": 500000,
+    "linesBoundaryHigh": 2000000,
+    "linesLongestLine": 20,
+    "longestLineBytes": 4096,
+    "failingErrors": 3
+  },
+  "fixtures": [
+    {
+      "id": "normal",
+      "purpose": "日常编辑与闭环基线：单页、正常节点数、一份 CSS、手写区",
+      "covers": [
+        "100 节点单属性/CSS 更新",
+        "1000 节点树与画布",
+        "布局与主题"
+      ],
+      "files": [
+        "designer-project.json",
+        "ui/main.json",
+        "styles/app.css",
+        "src/handwritten/app.rs",
+        "Cargo.toml"
+      ],
+      "expect": {
+        "projectParses": true,
+        "cargoCheck": "pass",
+        "notes": "用于预览/生成/构建的基准工程"
+      },
+      "measurement": [
+        "design-update-100",
+        "tree-1000",
+        "ipc-roundtrip",
+        "hot-swap-idle",
+        "hot-swap-rust",
+        "churn-100",
+        "terminal-output",
+        "debug-large-values",
+        "cold-start",
+        "test-loop",
+        "profile-overhead",
+        "remote-reconnect",
+        "ai-session-budget"
+      ],
+      "journeys": [
+        "J01",
+        "J04",
+        "J05",
+        "J06",
+        "J17",
+        "J20"
+      ]
+    },
+    {
+      "id": "large-file",
+      "purpose": "分级降级与打开耗时：按白皮书 §16.5 的 5 万/50 万/200 万行边界各一份",
+      "covers": [
+        "1 万行编辑/滚动",
+        "百万行/超长行打开查看",
+        "工程搜索/索引"
+      ],
+      "files": [
+        "large/10k.rs",
+        "large/50k.rs",
+        "large/500k.rs",
+        "large/2m.rs",
+        "large/longest-line.rs",
+        "large/unicode.rs"
+      ],
+      "expect": {
+        "projectParses": true,
+        "cargoCheck": "not-run",
+        "notes": "文本规模用文件；边界前/等于/之后分别生成"
+      },
+      "measurement": [
+        "editor-10k",
+        "editor-2m",
+        "search-project"
+      ],
+      "journeys": [
+        "J13"
+      ]
+    },
+    {
+      "id": "multi-page",
+      "purpose": "多页面/多窗口入口与页面切换的固定规模",
+      "covers": [
+        "多根/feature/Kit 切换",
+        "命令面板/快速打开"
+      ],
+      "files": [
+        "designer-project.json",
+        "ui/*.json (12 pages)",
+        "styles/app.css",
+        "Cargo.toml"
+      ],
+      "expect": {
+        "projectParses": true,
+        "cargoCheck": "pass",
+        "notes": "入口页与 11 个非入口页"
+      },
+      "measurement": [
+        "tree-1000",
+        "quick-open",
+        "cold-start",
+        "workspace-switch"
+      ],
+      "journeys": [
+        "J02",
+        "J03",
+        "J19"
+      ]
+    },
+    {
+      "id": "restricted-target",
+      "purpose": "受限目标（mini/embedded 仅模式 2）的能力预检与阻断",
+      "covers": [
+        "受限产物无开发依赖"
+      ],
+      "files": [
+        "designer-project.json",
+        "ui/main.json",
+        "Cargo.toml"
+      ],
+      "expect": {
+        "projectParses": true,
+        "cargoCheck": "not-run",
+        "notes": "工程引用仅模式 1 可用的控件，预检必须在生成前阻断并说明原因"
+      },
+      "measurement": [],
+      "journeys": [
+        "J08"
+      ]
+    },
+    {
+      "id": "failing",
+      "purpose": "故障注入：工程解析失败、缺失资源、编译错误、过期诊断",
+      "covers": [
+        "异常恢复",
+        "外部修改/冲突"
+      ],
+      "files": [
+        "designer-project.json",
+        "ui/broken.json",
+        "styles/app.css",
+        "assets/missing.svg.reference",
+        "Cargo.toml"
+      ],
+      "expect": {
+        "projectParses": false,
+        "cargoCheck": "fail",
+        "errors": 3,
+        "notes": "解析错误与编译错误必须各自带位置；诊断过期必须标 stale"
+      },
+      "measurement": [],
+      "journeys": [
+        "J14",
+        "J16"
+      ]
+    }
+  ],
+  "determinism": {
+    "method": "streaming-sha256",
+    "note": "生成器按 spec 产出；检查脚本对同一 fixture 连续生成两次并比对流式 SHA-256，任何随机性、时间戳或迭代顺序泄漏都会失败。"
+  }
+}

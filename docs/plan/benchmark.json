@@ -1,0 +1,294 @@
+{
+  "schema": "rustage.benchmark/v1",
+  "roadmap": {
+    "file": "docs/plan/roadmap.md",
+    "section": "### 35.2 性能建议门槛",
+    "table": [
+      "场景",
+      "建议门槛/必需属性",
+      "验收阶段"
+    ]
+  },
+  "fixtures": "fixtures/spec.json",
+  "hardware": {
+    "capturedOn": "2026-10-14",
+    "commands": [
+      "sw_vers",
+      "sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize hw.model",
+      "rustc --version",
+      "node --version",
+      "uname -m"
+    ],
+    "record": {
+      "host": "Mac16,12",
+      "os": "macOS 15.7.3 (24G419)",
+      "arch": "aarch64",
+      "cpu": "Apple M4",
+      "cores": 10,
+      "memoryBytes": 17179869184,
+      "rustc": "1.98.1 (48a229cea 2026-09-01)",
+      "node": "v24.11.1"
+    },
+    "note": "这只是设计器宿主基线。输出目标宿主需要各自设备与 SDK，状态见 docs/plan/support-matrix.md；不得用宿主数字代替目标数字。"
+  },
+  "protocol": {
+    "state": "冷启动与热态分别记录，不混合",
+    "warmup": 3,
+    "repetitions": 30,
+    "statistic": "同一批次内取 p50 与 p95，报告最小值无意义",
+    "startPoint": "用户操作或命令派发的入口（含校验，不含等待构建/网络/用户输入）",
+    "endPoint": "可见结果出现：绘制帧提交或问题列表/状态栏更新",
+    "excluded": [
+      "编译时间",
+      "网络等待",
+      "用户在对话框里的思考时间",
+      "测试夹具生成时间"
+    ],
+    "noise": "同一批次内不得混入后台任务；记录进程 CPU 占用作为旁证",
+    "reporting": "每次测量记录：fixture id、修订（git rev）、工具链、warmup/重复次数、原始分布与统计量；只报最佳一次视为无效"
+  },
+  "statusVocabulary": {
+    "measured": "有原始数据、修订与日期，可复核",
+    "unmeasured": "本仓库还没有测量记录",
+    "blocked": "缺设备/SDK/辅助环境，无法测量",
+    "future": "属于不进入正式版的未来扩展"
+  },
+  "scenarios": [
+    {
+      "id": "design-update-100",
+      "scenario": "100 节点单属性/CSS 更新",
+      "threshold": "提交到可见帧 p95 ≤ 100 ms；不启动 cargo",
+      "phase": "MS06",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "提交到可见帧",
+      "statistic": "p95 ≤ 100 ms",
+      "status": "unmeasured",
+      "owner": "T14.02"
+    },
+    {
+      "id": "tree-1000",
+      "scenario": "1000 节点树与画布",
+      "threshold": "选择/展开可见反馈 p95 ≤ 100 ms；不全量重建无关实例",
+      "phase": "MS05/MS18",
+      "fixtures": [
+        "normal",
+        "multi-page"
+      ],
+      "metric": "选择/展开可见反馈",
+      "statistic": "p95 ≤ 100 ms",
+      "status": "unmeasured",
+      "owner": "T09.03"
+    },
+    {
+      "id": "editor-10k",
+      "scenario": "1 万行编辑/滚动",
+      "threshold": "可见反馈 p95 ≤ 50 ms；绘制 CPU p95 ≤ 16.7 ms",
+      "phase": "MS04",
+      "fixtures": [
+        "large-file"
+      ],
+      "metric": "可见反馈 / 绘制 CPU",
+      "statistic": "p95 ≤ 50 ms / ≤ 16.7 ms",
+      "status": "unmeasured",
+      "owner": "T06.08"
+    },
+    {
+      "id": "editor-2m",
+      "scenario": "百万行/超长行打开查看",
+      "threshold": "打开可取消；UI 心跳 p95 ≤ 100 ms；分级降级可见",
+      "phase": "MS04/MS18",
+      "fixtures": [
+        "large-file"
+      ],
+      "metric": "打开可取消 / UI 心跳",
+      "statistic": "p95 ≤ 100 ms",
+      "status": "unmeasured",
+      "owner": "T06.07"
+    },
+    {
+      "id": "quick-open",
+      "scenario": "命令面板/快速打开",
+      "threshold": "本地已索引结果反馈 p95 ≤ 100 ms；索引未就绪有状态",
+      "phase": "MS03/MS04",
+      "fixtures": [
+        "multi-page"
+      ],
+      "metric": "本地已索引结果反馈",
+      "statistic": "p95 ≤ 100 ms",
+      "status": "unmeasured",
+      "owner": "T05.04"
+    },
+    {
+      "id": "search-project",
+      "scenario": "工程搜索/索引",
+      "threshold": "异步/有界；取消反馈 p95 ≤ 200 ms，实际退出单独测量",
+      "phase": "MS04",
+      "fixtures": [
+        "large-file"
+      ],
+      "metric": "取消反馈 / 实际退出",
+      "statistic": "p95 ≤ 200 ms（退出单独测量）",
+      "status": "unmeasured",
+      "owner": "T08.02"
+    },
+    {
+      "id": "ipc-roundtrip",
+      "scenario": "本地业务 IPC",
+      "threshold": "排除业务耗时后往返 p95 ≤ 20 ms，载荷大小固定",
+      "phase": "MS09",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "排除业务耗时后的往返",
+      "statistic": "p95 ≤ 20 ms",
+      "status": "unmeasured",
+      "owner": "T17.03"
+    },
+    {
+      "id": "hot-swap-idle",
+      "scenario": "无长任务、1 MiB 状态切换",
+      "threshold": "暂停 p95 ≤ 300 ms；队列满/超时可见",
+      "phase": "MS09",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "暂停",
+      "statistic": "p95 ≤ 300 ms",
+      "status": "unmeasured",
+      "owner": "T18.05"
+    },
+    {
+      "id": "hot-swap-rust",
+      "scenario": "Rust 源码到新行为",
+      "threshold": "分开记录冷/热 build、启动、迁移、切换 p50/p95，不承诺毫秒级总耗时",
+      "phase": "MS09",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "冷/热 build、启动、迁移、切换",
+      "statistic": "p50/p95，不承诺总耗时",
+      "status": "unmeasured",
+      "owner": "T18.05"
+    },
+    {
+      "id": "churn-100",
+      "scenario": "100 轮绑定/预览/逻辑替换",
+      "threshold": "订阅/句柄/线程/进程不残留，稳态内存无持续增长趋势",
+      "phase": "MS06/MS09",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "订阅/句柄/线程/进程残留与稳态内存趋势",
+      "statistic": "无持续增长",
+      "status": "unmeasured",
+      "owner": "T14.08"
+    },
+    {
+      "id": "terminal-output",
+      "scenario": "终端/日志高速输出",
+      "threshold": "有界缓存/背压/可暂停查看，不阻塞键入，不隐藏丢弃",
+      "phase": "MS07",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "有界缓存/背压与键入延迟",
+      "statistic": "不阻塞键入、不隐藏丢弃",
+      "status": "unmeasured",
+      "owner": "T18.06"
+    },
+    {
+      "id": "debug-large-values",
+      "scenario": "调试大变量/慢适配器",
+      "threshold": "惰性读取、可取消、UI 心跳达基线，不无界展开",
+      "phase": "MS11",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "惰性读取/可取消与 UI 心跳",
+      "statistic": "达基线、不无界展开",
+      "status": "unmeasured",
+      "owner": "T19.05"
+    },
+    {
+      "id": "cold-start",
+      "scenario": "冷启动与首次工程打开",
+      "threshold": "MS00 定预算后实测，分别记录宿主/索引/服务就绪，不编造秒数",
+      "phase": "MS18",
+      "fixtures": [
+        "normal",
+        "multi-page"
+      ],
+      "metric": "宿主/索引/服务就绪分别记录",
+      "statistic": "MS00 定预算后实测",
+      "status": "unmeasured",
+      "owner": "T01.01"
+    },
+    {
+      "id": "workspace-switch",
+      "scenario": "多根/feature/Kit 切换",
+      "threshold": "记录根/包数量、分析重建与诊断延迟；旧结果不盖新配置",
+      "phase": "MS04/MS18",
+      "fixtures": [
+        "multi-page"
+      ],
+      "metric": "根/包数量、分析重建与诊断延迟",
+      "statistic": "旧结果不盖新配置",
+      "status": "unmeasured",
+      "owner": "T02.10"
+    },
+    {
+      "id": "test-loop",
+      "scenario": "连续测试",
+      "threshold": "测结果体积/定向重跑成本，不以自动后台任务拖慢前台",
+      "phase": "MS14/MS18",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "结果体积与定向重跑成本",
+      "statistic": "不拖慢前台",
+      "status": "unmeasured",
+      "owner": "T21.05"
+    },
+    {
+      "id": "profile-overhead",
+      "scenario": "内置性能剖析（未来扩展）",
+      "threshold": "测采集开销/符号化/报告规模，不用缺失数据伪造结论",
+      "phase": "FUTURE，不阻塞正式版",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "采集开销/符号化/报告规模",
+      "statistic": "FUTURE",
+      "status": "future",
+      "owner": "T00.09"
+    },
+    {
+      "id": "remote-reconnect",
+      "scenario": "远程断线/重连（未来）",
+      "threshold": "固定延迟/丢包/文件规模；保存不假成功，取消与实际远端退出分别测量",
+      "phase": "FUTURE，不阻塞正式版",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "固定延迟/丢包/文件规模",
+      "statistic": "FUTURE",
+      "status": "future",
+      "owner": "T00.09"
+    },
+    {
+      "id": "ai-session-budget",
+      "scenario": "双 AI 会话与共享材料",
+      "threshold": "上下文/输出/工具/预算有上限；取消后不提交，旧候选/评审永不覆盖当前",
+      "phase": "MS16/MS18",
+      "fixtures": [
+        "normal"
+      ],
+      "metric": "上下文/输出/工具/预算上限",
+      "statistic": "MS16/MS18",
+      "status": "unmeasured",
+      "owner": "T23.09"
+    }
+  ]
+}

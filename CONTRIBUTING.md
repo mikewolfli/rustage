@@ -68,6 +68,8 @@ node --test tools/fixtures/check-fixtures.test.mjs
 node tools/fixtures/generate-fixtures.mjs --verify
 node --test tools/benchmark/check-benchmark.test.mjs
 node tools/benchmark/check-benchmark.mjs
+node --test tools/traceability/check-traceability.test.mjs
+node tools/traceability/check-traceability.mjs
 git diff --check
 ```
 
@@ -167,6 +169,16 @@ The measurement contract is in [`docs/plan/benchmark.md`](docs/plan/benchmark.md
 roadmap 35.2 - scenario text, threshold text and phase - and refuses a softened threshold, a
 scenario whose data set does not advertise it, and a measurement claimed without an artifact,
 revision and date. Nothing here is measured yet, and the document says so.
+
+## Requirements, release scope and gates
+
+[`docs/plan/traceability.md`](docs/plan/traceability.md) connects each requirement from the
+whitepaper's goals and the roadmap's architecture boundaries to the journeys, tasks, gates and
+measurement scenarios behind it, with the data in
+[`docs/plan/traceability.json`](docs/plan/traceability.json). The check refuses a requirement with no
+owning task, no journey or no gate; refuses a gate declared as automatic that the workflow does not
+actually run (or a manual gate with no reason and owner); and refuses a baseline task the roadmap
+does not define. A gate that is declared but never run is the failure this exists for.
 
 ## Documentation and implementation expectations
 

@@ -58,3 +58,7 @@ jobs:
         run: node --test tools/benchmark/check-benchmark.test.mjs
       - name: Check benchmark environment
         run: node tools/benchmark/check-benchmark.mjs
+      - name: Test traceability checker
+        run: node --test tools/traceability/check-traceability.test.mjs
+      - name: Check traceability
+        run: node tools/traceability/check-traceability.mjs

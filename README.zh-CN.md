@@ -67,6 +67,7 @@ rustage 目前处于**设计与规划阶段**。仓库现已包含最小 Rust �
 | [公共契约](docs/plan/contracts.md) | 唯一可写文档模型、变更集、权限、版本、诊断与源映射 |
 | [旅程走查](docs/plan/journeys.md) | 七个模式原型，以及路线图每条旅程的逐步入口与归属任务 |
 | [基准环境](docs/plan/benchmark.md) | 固定数据集、硬件基线、测量定义与性能场景门槛 |
+| [需求追踪与门禁](docs/plan/traceability.md) | 需求到旅程、归属任务、门禁与测量场景的追踪 |
 | [图标与资源规划](docs/plan/resources.md) | 资源放置、图标集成、主题与平台打包验收 |
 | [能力规划依据](docs/plan/capability-reference.md) | 工作流需求、协议依据与未来扩展边界 |
 | [GitHub 管理说明](docs/github.md) | 仍需仓库所有者配置的设置与 CI |

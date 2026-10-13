@@ -18,8 +18,10 @@
    section 34 with its entry and owning task.
 9. [Benchmark environment](plan/benchmark.md): the fixed data sets, the recorded hardware baseline,
    the measurement protocol, and the 18 performance scenarios with their roadmap thresholds.
-10. [Contribution guide](../CONTRIBUTING.md): workflow and checks.
-11. [GitHub administration](github.md): owner-managed repository settings.
+10. [Traceability and gates](plan/traceability.md): each requirement with its journeys, owning tasks,
+   gates and measurement scenarios, plus the release baseline.
+11. [Contribution guide](../CONTRIBUTING.md): workflow and checks.
+12. [GitHub administration](github.md): owner-managed repository settings.
 
 Related design evidence: [Capability planning references](plan/capability-reference.md)
 records workflow requirements, protocol evidence, and future-extension boundaries.

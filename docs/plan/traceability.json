@@ -1,0 +1,552 @@
+{
+  "schema": "rustage.traceability/v1",
+  "sources": {
+    "whitepaper": "docs/plan/whitepaper.md",
+    "roadmap": "docs/plan/roadmap.md",
+    "principles": "docs/plan/principle.md",
+    "journeys": "docs/plan/journeys.json",
+    "workflow": ".github/workflows/docs.yml"
+  },
+  "requirements": [
+    {
+      "id": "G1",
+      "statement": "所见即所得：改一处立即看到，不重编译",
+      "source": "whitepaper §2 G1",
+      "journeys": [
+        "J01",
+        "J06",
+        "J07"
+      ],
+      "tasks": [
+        "T14.01",
+        "T14.02",
+        "T18.05"
+      ],
+      "gates": [
+        "rust-test",
+        "benchmark"
+      ],
+      "scenarios": [
+        "design-update-100",
+        "hot-swap-idle"
+      ]
+    },
+    {
+      "id": "G2",
+      "statement": "产物是干净的本项目代码，可独立构建",
+      "source": "whitepaper §2 G2",
+      "journeys": [
+        "J08",
+        "J16"
+      ],
+      "tasks": [
+        "T15.02",
+        "T15.07",
+        "T16.08"
+      ],
+      "gates": [
+        "rust-test",
+        "benchmark"
+      ],
+      "scenarios": [
+        "editor-2m"
+      ]
+    },
+    {
+      "id": "G3",
+      "statement": "AI 友好：反馈回路短，结构可生成与修改",
+      "source": "whitepaper §2 G3",
+      "journeys": [
+        "J12",
+        "J23"
+      ],
+      "tasks": [
+        "T23.03",
+        "T23.04",
+        "T23.05"
+      ],
+      "gates": [
+        "rust-test",
+        "journeys"
+      ],
+      "scenarios": [
+        "ai-session-budget"
+      ]
+    },
+    {
+      "id": "G4",
+      "statement": "覆盖全部 profile：desktop/tablet/mobile/mini/embedded",
+      "source": "whitepaper §2 G4",
+      "journeys": [
+        "J08"
+      ],
+      "tasks": [
+        "T00.03",
+        "T15.02",
+        "T16.08"
+      ],
+      "gates": [
+        "support-matrix",
+        "rust-test"
+      ],
+      "scenarios": [
+        "editor-2m"
+      ]
+    },
+    {
+      "id": "G5",
+      "statement": "不说谎：不可用能力在画布上标示，不在生成时才失败",
+      "source": "whitepaper §2 G5",
+      "journeys": [
+        "J04",
+        "J15",
+        "J24"
+      ],
+      "tasks": [
+        "T09.01",
+        "T21.02",
+        "T22.02"
+      ],
+      "gates": [
+        "contracts",
+        "journeys"
+      ],
+      "scenarios": [
+        "design-update-100"
+      ]
+    },
+    {
+      "id": "B1",
+      "statement": "宿主仅桌面，分别支持并实测 macOS/Windows/Linux",
+      "source": "roadmap §1.2 宿主",
+      "journeys": [
+        "J16"
+      ],
+      "tasks": [
+        "T00.03",
+        "T01.08"
+      ],
+      "gates": [
+        "support-matrix"
+      ],
+      "scenarios": [
+        "design-update-100"
+      ]
+    },
+    {
+      "id": "B2",
+      "statement": "profile 与 OS/target triple 分开建模",
+      "source": "roadmap §1.2 生成配置",
+      "journeys": [
+        "J08",
+        "J19"
+      ],
+      "tasks": [
+        "T02.10",
+        "T15.01"
+      ],
+      "gates": [
+        "support-matrix",
+        "check-docs"
+      ],
+      "scenarios": [
+        "editor-2m"
+      ]
+    },
+    {
+      "id": "B3",
+      "statement": "模式 1/模式 2 并存；mini/embedded 只模式 2",
+      "source": "roadmap §1.2 产物",
+      "journeys": [
+        "J08",
+        "J24"
+      ],
+      "tasks": [
+        "T15.02",
+        "T16.08"
+      ],
+      "gates": [
+        "support-matrix",
+        "decisions"
+      ],
+      "scenarios": [
+        "design-update-100"
+      ]
+    },
+    {
+      "id": "B4",
+      "statement": "有效模型是唯一事实来源：JSON 结构、CSS 外观、稳定 NodeId、版本化变更集",
+      "source": "roadmap §1.2 模型",
+      "journeys": [
+        "J02",
+        "J06",
+        "J14"
+      ],
+      "tasks": [
+        "T00.05",
+        "T02.01",
+        "T03.01"
+      ],
+      "gates": [
+        "contracts",
+        "rust-test"
+      ],
+      "scenarios": [
+        "churn-100"
+      ]
+    },
+    {
+      "id": "B5",
+      "statement": "布局复用库语义：拖拽结果必须可表达为真实布局约束",
+      "source": "roadmap §1.2 布局",
+      "journeys": [
+        "J04"
+      ],
+      "tasks": [
+        "T00.01",
+        "T10.01",
+        "T10.02"
+      ],
+      "gates": [
+        "rust-test",
+        "benchmark"
+      ],
+      "scenarios": [
+        "design-update-100"
+      ]
+    },
+    {
+      "id": "B6",
+      "statement": "能力查询带版本的库契约；不维护猜测的控件支持表，不静默降级",
+      "source": "roadmap §1.2 能力",
+      "journeys": [
+        "J08",
+        "J15"
+      ],
+      "tasks": [
+        "T00.01",
+        "T09.01",
+        "T12.04"
+      ],
+      "gates": [
+        "rust-test",
+        "contracts"
+      ],
+      "scenarios": [
+        "design-update-100"
+      ]
+    },
+    {
+      "id": "B7",
+      "statement": "生成区受保护，手写 Rust 可编辑；不承诺把任意 Rust 反推成 UI",
+      "source": "roadmap §1.2 源码",
+      "journeys": [
+        "J06"
+      ],
+      "tasks": [
+        "T00.04",
+        "T06.06",
+        "T15.01"
+      ],
+      "gates": [
+        "decisions",
+        "contracts"
+      ],
+      "scenarios": [
+        "design-update-100"
+      ]
+    },
+    {
+      "id": "B8",
+      "statement": "热更新分级：UI 即时更新，受管理 Rust 增量替换，不兼容则明确重启",
+      "source": "roadmap §1.2 热更新",
+      "journeys": [
+        "J07",
+        "J09"
+      ],
+      "tasks": [
+        "T14.02",
+        "T18.05",
+        "T18.06"
+      ],
+      "gates": [
+        "rust-test",
+        "benchmark"
+      ],
+      "scenarios": [
+        "hot-swap-idle"
+      ]
+    },
+    {
+      "id": "B9",
+      "statement": "文件/语言服务/构建/调试/版本控制/网络属于宿主，widget 不承载系统服务",
+      "source": "roadmap §1.2 服务",
+      "journeys": [
+        "J03",
+        "J10",
+        "J20"
+      ],
+      "tasks": [
+        "T01.07",
+        "T07.01",
+        "T16.02"
+      ],
+      "gates": [
+        "rust-test"
+      ],
+      "scenarios": [
+        "ipc-roundtrip"
+      ]
+    },
+    {
+      "id": "B10",
+      "statement": "工程代码、构建脚本、终端、设备部署与外部服务具有真实副作用，工作进程不是沙箱",
+      "source": "roadmap §1.2 权限",
+      "journeys": [
+        "J12",
+        "J20",
+        "J23"
+      ],
+      "tasks": [
+        "T00.05",
+        "T01.05",
+        "T01.09"
+      ],
+      "gates": [
+        "contracts",
+        "rust-test"
+      ],
+      "scenarios": [
+        "ipc-roundtrip"
+      ]
+    },
+    {
+      "id": "B11",
+      "statement": "无 AI、无账号、无网络仍能完成本地工程闭环",
+      "source": "roadmap §1.2 人工流程",
+      "journeys": [
+        "J01",
+        "J03",
+        "J16"
+      ],
+      "tasks": [
+        "T16.10",
+        "T22.05",
+        "T23.01"
+      ],
+      "gates": [
+        "journeys",
+        "check-docs"
+      ],
+      "scenarios": [
+        "test-loop"
+      ]
+    }
+  ],
+  "commands": {
+    "namespaces": [
+      "build",
+      "code",
+      "debug",
+      "design",
+      "edit",
+      "file",
+      "help",
+      "nav",
+      "preview",
+      "project",
+      "run",
+      "test",
+      "tools",
+      "vcs",
+      "view",
+      "window"
+    ],
+    "note": "命令 ID 采用 `域.动作`；这里的 16 个命名空间来自资源清单的资源分组。命令组到路线图 §3 菜单树、以及菜单叶项到命令测试的映射由 T05.02 落实，本项只保证命名空间不越界。"
+  },
+  "release": {
+    "baseline": [
+      "T00.01",
+      "T00.02",
+      "T00.03",
+      "T00.04",
+      "T00.05",
+      "T00.06",
+      "T00.07",
+      "T00.08",
+      "T00.09"
+    ],
+    "officialScope": "28 个功能域、251 项任务、23 条旅程",
+    "note": "MS00 的基线是 T00.01–T00.09 九项前置任务；正式版范围以路线图 §1.4 为准，未来扩展（F28 与 J21/J22/J26）不进入完成率。"
+  },
+  "gates": [
+    {
+      "id": "rust-test",
+      "command": "cargo test",
+      "covers": "Rust 单元测试、契约不变量与库层探针的断言",
+      "mode": "manual",
+      "reason": "需要 Rust 工具链与 git 依赖拉取，尚未在 CI 实测",
+      "owner": "T00.08 / CI 维护者"
+    },
+    {
+      "id": "rust-fmt",
+      "command": "cargo fmt --check",
+      "covers": "格式",
+      "mode": "manual",
+      "reason": "同上",
+      "owner": "T00.08 / CI 维护者"
+    },
+    {
+      "id": "rust-clippy",
+      "command": "cargo clippy --all-targets",
+      "covers": "静态检查；不得新增警告",
+      "mode": "manual",
+      "reason": "同上",
+      "owner": "T00.08 / CI 维护者"
+    },
+    {
+      "id": "probe-apis",
+      "command": "cargo run -- --probe-apis target/probe",
+      "covers": "固定修订上的库契约探针；有缺口时退出码为 1",
+      "mode": "manual",
+      "reason": "缺口存在时该命令刻意失败，需人工判读",
+      "owner": "T00.08 / CI 维护者"
+    },
+    {
+      "id": "check-docs-test",
+      "command": "node --test tools/check-docs.test.mjs",
+      "covers": "文档检查器自身的负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "check-docs",
+      "command": "node tools/check-docs.mjs",
+      "covers": "Markdown 链接/空白/必需文件/路线图依赖与计数",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "resources-test",
+      "command": "node --test tools/resources/check-resources.test.mjs",
+      "covers": "资源检查器负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "resources",
+      "command": "node tools/resources/check-resources.mjs",
+      "covers": "图标清单、主题角色、许可证与打包定义",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "support-matrix-test",
+      "command": "node --test tools/support-matrix/check-support-matrix.test.mjs",
+      "covers": "矩阵检查器负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "support-matrix",
+      "command": "node tools/support-matrix/check-support-matrix.mjs",
+      "covers": "三宿主×五 profile 的证据级别与文档一致",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "decisions-test",
+      "command": "node --test tools/decisions/check-decisions.test.mjs",
+      "covers": "决策登记检查器负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "decisions",
+      "command": "node tools/decisions/check-decisions.mjs",
+      "covers": "决策条目完整性、悬置问题归宿、白皮书 §17.7 一致",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "contracts-test",
+      "command": "node --test tools/contracts/check-contracts.test.mjs",
+      "covers": "契约检查器负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "contracts",
+      "command": "node tools/contracts/check-contracts.mjs",
+      "covers": "写入入口枚举、公开字段、不变量用例存在性、白皮书 §12.5 一致",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "journeys-test",
+      "command": "node --test tools/journeys/check-journeys.test.mjs",
+      "covers": "旅程检查器负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "journeys",
+      "command": "node tools/journeys/check-journeys.mjs",
+      "covers": "§34 旅程逐步入口与归属、模式面板可发现性",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "fixtures-test",
+      "command": "node --test tools/fixtures/check-fixtures.test.mjs",
+      "covers": "数据集定义与生成器用例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "fixtures-verify",
+      "command": "node tools/fixtures/generate-fixtures.mjs --verify",
+      "covers": "fixture 生成可复现（流式 SHA-256 两次一致）",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "benchmark-test",
+      "command": "node --test tools/benchmark/check-benchmark.test.mjs",
+      "covers": "基准检查器负例",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "benchmark",
+      "command": "node tools/benchmark/check-benchmark.mjs",
+      "covers": "场景门槛与路线图 §35.2 一致、数据集双向对账",
+      "mode": "ci",
+      "reason": null,
+      "owner": null
+    },
+    {
+      "id": "device-acceptance",
+      "command": "（人工）目标设备与 SDK 上的构建与运行",
+      "covers": "平台认证级别：能力查询→生成→target check→target build→运行→真机",
+      "mode": "manual",
+      "reason": "缺设备/SDK/辅助环境；按支持矩阵逐格标 blocked 或 unverified",
+      "owner": "T00.08 / CI 维护者"
+    }
+  ]
+}

@@ -1,0 +1,1639 @@
+{
+  "schema": "rustage.journeys/v1",
+  "implementation": "none",
+  "roadmap": {
+    "file": "docs/plan/roadmap.md",
+    "section": "## 34. 端到端用户旅程与验收脚本",
+    "modesLine": "模式为：欢迎、工程、设计、代码、运行与调试、测试、发布"
+  },
+  "manifest": "resources/host/icons/manifest.json",
+  "modes": [
+    {
+      "id": "welcome",
+      "name": "欢迎",
+      "purpose": "进入工程：新建/打开/最近/恢复",
+      "panels": [
+        "panel.help",
+        "panel.notifications"
+      ],
+      "entries": [
+        "view.mode.welcome",
+        "file.new.project",
+        "file.open.project",
+        "file.open.recent",
+        "help.about"
+      ]
+    },
+    {
+      "id": "project",
+      "name": "工程",
+      "purpose": "工程树的组织与工程级配置",
+      "panels": [
+        "panel.project",
+        "panel.assets",
+        "panel.pages",
+        "panel.targets",
+        "panel.dependencies",
+        "panel.environments",
+        "panel.problems"
+      ],
+      "entries": [
+        "project.structure.reveal",
+        "project.config.kit",
+        "project.workspace.add",
+        "project.environment.toolchain"
+      ]
+    },
+    {
+      "id": "design",
+      "name": "设计",
+      "purpose": "画布、对象树、属性、样式与组件",
+      "panels": [
+        "panel.objects",
+        "panel.widgets",
+        "panel.properties",
+        "panel.layout",
+        "panel.styles",
+        "panel.events",
+        "panel.data",
+        "panel.components",
+        "panel.preview",
+        "panel.problems"
+      ],
+      "entries": [
+        "design.node.insert",
+        "design.tool.select",
+        "design.property.value",
+        "design.layout.nest",
+        "design.component.extract",
+        "preview.session.start"
+      ]
+    },
+    {
+      "id": "code",
+      "name": "代码",
+      "purpose": "设计文档的 JSON/CSS/生成 Rust 视图与文本编辑",
+      "panels": [
+        "panel.outline",
+        "panel.search",
+        "panel.problems",
+        "panel.tasks"
+      ],
+      "entries": [
+        "view.mode.code",
+        "code.edit.page",
+        "code.sync.diff",
+        "edit.find.project",
+        "nav.open.symbol",
+        "edit.find.cancel"
+      ]
+    },
+    {
+      "id": "run-debug",
+      "name": "运行与调试",
+      "purpose": "构建、运行、预览热更新与调试会话",
+      "panels": [
+        "panel.build",
+        "panel.run",
+        "panel.terminal",
+        "panel.tasks",
+        "panel.hot",
+        "panel.breakpoints",
+        "panel.stack",
+        "panel.variables",
+        "panel.debug",
+        "panel.problems"
+      ],
+      "entries": [
+        "build.exec.check",
+        "build.exec.build",
+        "run.app.start",
+        "run.app.debug",
+        "debug.breakpoint.toggle",
+        "debug.exec.step",
+        "preview.hot.update",
+        "preview.hot.migrate"
+      ]
+    },
+    {
+      "id": "test",
+      "name": "测试",
+      "purpose": "设计检查、状态/视觉/性能测试与证据",
+      "panels": [
+        "panel.tests",
+        "panel.problems",
+        "panel.tasks",
+        "panel.profiler",
+        "panel.memory",
+        "panel.inspection"
+      ],
+      "entries": [
+        "test.analyze.design",
+        "test.run.state",
+        "test.report.visual",
+        "test.profile.performance",
+        "test.report.export"
+      ]
+    },
+    {
+      "id": "release",
+      "name": "发布",
+      "purpose": "目标矩阵、产物导出、更新与长期维护",
+      "panels": [
+        "panel.targets",
+        "panel.build",
+        "panel.dependencies",
+        "panel.problems",
+        "panel.vcs"
+      ],
+      "entries": [
+        "preview.matrix.generate",
+        "preview.matrix.build",
+        "build.output.export",
+        "build.output.install",
+        "tools.settings.update",
+        "tools.settings.uninstall"
+      ]
+    }
+  ],
+  "journeys": [
+    {
+      "id": "J01",
+      "name": "新用户首个应用",
+      "scope": "release",
+      "evidence": "独立生成工程与真实进程，缺工具链可恢复",
+      "milestone": "MS07/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 7,
+        "recovery": 2,
+        "keyboard": 3
+      },
+      "checks": [
+        "正常：欢迎页新建工程后完成插入→保存→生成→构建→运行闭环",
+        "取消/错误：新建向导取消不留下半个工程；构建非零退出可见",
+        "恢复：缺工具链时给出安装指引并允许稍后重试，不静默跳过构建",
+        "键盘：模式切换、新建、插入、保存、构建均有命令 id 与快捷键层级（T05.03）"
+      ],
+      "steps": [
+        {
+          "step": "欢迎",
+          "entry": "view.mode.welcome",
+          "owner": "T04.01"
+        },
+        {
+          "step": "新建",
+          "entry": "file.new.project",
+          "owner": "T02.02"
+        },
+        {
+          "step": "工具链诊断",
+          "entry": "project.environment.toolchain",
+          "owner": "T02.03"
+        },
+        {
+          "step": "插入",
+          "entry": "design.node.insert",
+          "owner": "T09.04"
+        },
+        {
+          "step": "属性",
+          "entry": "design.property.value",
+          "owner": "T11.01"
+        },
+        {
+          "step": "保存",
+          "entry": "file.save.page",
+          "owner": "T03.04"
+        },
+        {
+          "step": "生成",
+          "entry": "preview.session.start",
+          "owner": "T14.01"
+        },
+        {
+          "step": "构建",
+          "entry": "build.exec.check",
+          "owner": "T16.02"
+        },
+        {
+          "step": "运行",
+          "entry": "run.app.start",
+          "owner": "T16.03"
+        }
+      ]
+    },
+    {
+      "id": "J02",
+      "name": "多页面应用",
+      "scope": "release",
+      "evidence": "页面/状态/焦点一致，删路由引用可诊断",
+      "milestone": "MS06/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 1,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：新页面成为入口并可带参数导航返回",
+        "取消/错误：删除仍被引用的页面给出悬空引用诊断（决策 Q5）",
+        "恢复：窗口关闭前的脏内容提示与保存/丢弃选择",
+        "键盘：页面切换与返回有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "新页面",
+          "entry": "design.content.page",
+          "owner": "T13.05"
+        },
+        {
+          "step": "设入口",
+          "entry": "design.application.entry",
+          "owner": "T13.05"
+        },
+        {
+          "step": "参数导航",
+          "entry": "design.flow.navigate",
+          "owner": "T13.05"
+        },
+        {
+          "step": "返回",
+          "entry": "nav.open.previous",
+          "owner": "T13.05"
+        },
+        {
+          "step": "窗口关闭",
+          "entry": "window.close",
+          "owner": "T03.07"
+        },
+        {
+          "step": "运行",
+          "entry": "run.app.start",
+          "owner": "T16.03"
+        }
+      ]
+    },
+    {
+      "id": "J03",
+      "name": "键盘完整工作流",
+      "scope": "release",
+      "evidence": "不用鼠标可完成，焦点不会被任务抢走",
+      "milestone": "MS07/MS17",
+      "aspects": {
+        "normal": 0,
+        "cancel": 6,
+        "recovery": 6,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：全程不使用鼠标完成一次闭环",
+        "取消/错误：命令面板中的不可用项显示禁用原因（T05.02）",
+        "恢复：构建失败后从问题列表导航回控件",
+        "键盘：焦点不被后台任务抢走（T05.05）"
+      ],
+      "steps": [
+        {
+          "step": "命令面板",
+          "entry": "nav.open.command",
+          "owner": "T05.04"
+        },
+        {
+          "step": "打开",
+          "entry": "file.open.project",
+          "owner": "T02.03"
+        },
+        {
+          "step": "插入",
+          "entry": "design.node.insert",
+          "owner": "T09.04"
+        },
+        {
+          "step": "树选择",
+          "entry": "design.inspect.select",
+          "owner": "T09.03"
+        },
+        {
+          "step": "属性",
+          "entry": "design.property.value",
+          "owner": "T11.01"
+        },
+        {
+          "step": "代码",
+          "entry": "view.mode.code",
+          "owner": "T06.01"
+        },
+        {
+          "step": "构建",
+          "entry": "build.exec.check",
+          "owner": "T16.02"
+        },
+        {
+          "step": "问题导航",
+          "entry": "nav.issue.next",
+          "owner": "T14.05"
+        }
+      ]
+    },
+    {
+      "id": "J04",
+      "name": "复杂布局与主题",
+      "scope": "release",
+      "evidence": "Layout/CSS 语义一致，约束失败可定位",
+      "milestone": "MS07/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 5,
+        "recovery": 5,
+        "keyboard": 1
+      },
+      "checks": [
+        "正常：嵌套布局与令牌改动的预览与生成一致",
+        "取消/错误：目标不支持的约束给出解释，而不是静默改成绝对布局",
+        "恢复：约束失败时保留最后一次有效布局并可撤销",
+        "键盘：多选、对齐有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "嵌套布局",
+          "entry": "design.layout.nest",
+          "owner": "T10.02"
+        },
+        {
+          "step": "多选",
+          "entry": "design.inspect.multi",
+          "owner": "T09.03"
+        },
+        {
+          "step": "令牌",
+          "entry": "design.property.tokens",
+          "owner": "T11.04"
+        },
+        {
+          "step": "主题",
+          "entry": "design.property.theme",
+          "owner": "T11.05"
+        },
+        {
+          "step": "尺寸",
+          "entry": "view.display.device",
+          "owner": "T10.05"
+        },
+        {
+          "step": "检查",
+          "entry": "design.inspect.issues",
+          "owner": "T10.01"
+        },
+        {
+          "step": "生成",
+          "entry": "preview.session.start",
+          "owner": "T14.01"
+        }
+      ]
+    },
+    {
+      "id": "J05",
+      "name": "组件复用",
+      "scope": "release",
+      "evidence": "多实例与静态输出一致，循环拒绝",
+      "milestone": "MS08/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 6,
+        "recovery": 6,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：多实例与静态生成结果一致",
+        "取消/错误：循环引用与版本不兼容被拒绝（T12.01）",
+        "恢复：定义更新后可查看受影响实例并撤销",
+        "键盘：提取与实例化有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "提取",
+          "entry": "design.component.extract",
+          "owner": "T12.02"
+        },
+        {
+          "step": "实例",
+          "entry": "design.component.instance",
+          "owner": "T12.02"
+        },
+        {
+          "step": "覆盖",
+          "entry": "design.component.override",
+          "owner": "T12.03"
+        },
+        {
+          "step": "变体",
+          "entry": "design.component.variant",
+          "owner": "T12.03"
+        },
+        {
+          "step": "定义更新",
+          "entry": "design.component.definition",
+          "owner": "T12.02"
+        },
+        {
+          "step": "diff",
+          "entry": "design.component.diff",
+          "owner": "T12.02"
+        },
+        {
+          "step": "撤销",
+          "entry": "edit.history.undo",
+          "owner": "T03.03"
+        },
+        {
+          "step": "导出导入",
+          "entry": "file.transfer.component",
+          "owner": "T12.07"
+        }
+      ]
+    },
+    {
+      "id": "J06",
+      "name": "源码往返",
+      "scope": "release",
+      "evidence": "手写保留、位置准确、取消不丢两侧内容",
+      "milestone": "MS07/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 5,
+        "recovery": 5,
+        "keyboard": 2
+      },
+      "checks": [
+        "正常：UI 改动产生局部源码 diff，手写内容保留",
+        "取消/错误：冲突显式呈现且可取消，不覆盖用户文本",
+        "恢复：取消合并后两侧内容都不丢失",
+        "键盘：视图切换与定位有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "UI 改动",
+          "entry": "design.property.value",
+          "owner": "T11.01"
+        },
+        {
+          "step": "局部源码 diff",
+          "entry": "code.sync.diff",
+          "owner": "T15.04"
+        },
+        {
+          "step": "JSON/CSS 改动",
+          "entry": "code.edit.page",
+          "owner": "T06.01"
+        },
+        {
+          "step": "模型",
+          "entry": "code.sync.model",
+          "owner": "T15.04"
+        },
+        {
+          "step": "手写逻辑",
+          "entry": "code.edit.handwritten",
+          "owner": "T06.06"
+        },
+        {
+          "step": "冲突",
+          "entry": "code.sync.conflict",
+          "owner": "T20.07"
+        }
+      ]
+    },
+    {
+      "id": "J07",
+      "name": "带状态逻辑修改",
+      "scope": "release",
+      "evidence": "版本组合正确；编译失败旧版真实继续",
+      "milestone": "MS09/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 3,
+        "recovery": 4,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：逻辑修改经候选与迁移后切换，旧版本在失败时真实继续",
+        "取消/错误：候选验证失败不激活，旧进程不被静默终止",
+        "恢复：编译失败时保留旧版并在状态栏说明",
+        "键盘：热更新触发有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "输入/滚动",
+          "entry": "preview.hot.update",
+          "owner": "T14.02"
+        },
+        {
+          "step": "Rust 修改",
+          "entry": "code.edit.handwritten",
+          "owner": "T06.01"
+        },
+        {
+          "step": "候选",
+          "entry": "preview.hot.candidate",
+          "owner": "T14.01"
+        },
+        {
+          "step": "迁移",
+          "entry": "preview.hot.migrate",
+          "owner": "T14.03"
+        },
+        {
+          "step": "切换",
+          "entry": "preview.hot.switch",
+          "owner": "T18.05"
+        },
+        {
+          "step": "新事件",
+          "entry": "debug.inspect.events",
+          "owner": "T14.05"
+        }
+      ]
+    },
+    {
+      "id": "J08",
+      "name": "多目标交付",
+      "scope": "release",
+      "evidence": "profile/triple 分离，受限产物无开发依赖；不要求远程部署",
+      "milestone": "MS10/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 6,
+        "keyboard": 3
+      },
+      "checks": [
+        "正常：profile/triple 分离显示，受限产物不含开发依赖",
+        "取消/错误：能力预检不通过时生成前阻断并说明原因",
+        "恢复：本地矩阵构建失败保留日志与可复核命令",
+        "键盘：目标切换与构建有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "切目标",
+          "entry": "build.config.target",
+          "owner": "T02.06"
+        },
+        {
+          "step": "能力预检",
+          "entry": "design.inspect.capability",
+          "owner": "T21.02"
+        },
+        {
+          "step": "生成",
+          "entry": "preview.matrix.generate",
+          "owner": "T15.02"
+        },
+        {
+          "step": "本地矩阵构建",
+          "entry": "preview.matrix.build",
+          "owner": "T16.08"
+        },
+        {
+          "step": "导出/本地设备安装",
+          "entry": "build.output.export",
+          "owner": "T25.02"
+        },
+        {
+          "step": "日志",
+          "entry": "build.output.log",
+          "owner": "T16.02"
+        },
+        {
+          "step": "设备验收",
+          "entry": "test.run.device",
+          "owner": "T25.01"
+        }
+      ]
+    },
+    {
+      "id": "J09",
+      "name": "调试业务事件",
+      "scope": "release",
+      "evidence": "真实停止/变量/源版本，栈不假保留",
+      "milestone": "MS11/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 6,
+        "recovery": 6,
+        "keyboard": 4
+      },
+      "checks": [
+        "正常：真实停止、真实变量、源版本可见",
+        "取消/错误：非法状态的命令被拒绝（T19.04）",
+        "恢复：重新附加时不假保留调用栈",
+        "键盘：步进与断点有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "绑定",
+          "entry": "debug.breakpoint.bind",
+          "owner": "T13.03"
+        },
+        {
+          "step": "启动调试",
+          "entry": "run.app.debug",
+          "owner": "T19.02"
+        },
+        {
+          "step": "断点",
+          "entry": "debug.breakpoint.toggle",
+          "owner": "T19.03"
+        },
+        {
+          "step": "变量",
+          "entry": "debug.inspect.variables",
+          "owner": "T19.05"
+        },
+        {
+          "step": "步进",
+          "entry": "debug.exec.step",
+          "owner": "T19.04"
+        },
+        {
+          "step": "热更新暂停",
+          "entry": "preview.hot.pause",
+          "owner": "T18.05"
+        },
+        {
+          "step": "重新附加",
+          "entry": "debug.session.attach",
+          "owner": "T19.07"
+        }
+      ]
+    },
+    {
+      "id": "J10",
+      "name": "版本与多人异步协作",
+      "scope": "release",
+      "evidence": "无需实时协作，仓库身份明确，恢复冲突不丢脏内容",
+      "milestone": "MS13/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 6,
+        "recovery": 6,
+        "keyboard": 1
+      },
+      "checks": [
+        "正常：无需实时协作即可完成提交与合并，仓库身份明确",
+        "取消/错误：切分支前的脏工程决策可取消，不丢改动",
+        "恢复：合并冲突解决后重新生成且不丢脏内容",
+        "键盘：暂存与提交有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "diff",
+          "entry": "vcs.change.review",
+          "owner": "T20.02"
+        },
+        {
+          "step": "暂存",
+          "entry": "vcs.change.stage",
+          "owner": "T20.04"
+        },
+        {
+          "step": "提交",
+          "entry": "vcs.commit.create",
+          "owner": "T20.04"
+        },
+        {
+          "step": "worktree/stash",
+          "entry": "vcs.integrate.worktree",
+          "owner": "T20.05"
+        },
+        {
+          "step": "外部变更",
+          "entry": "vcs.change.external",
+          "owner": "T20.08"
+        },
+        {
+          "step": "分支切换",
+          "entry": "vcs.integrate.branch",
+          "owner": "T20.05"
+        },
+        {
+          "step": "合并",
+          "entry": "vcs.integrate.merge",
+          "owner": "T20.07"
+        },
+        {
+          "step": "重生成",
+          "entry": "preview.matrix.generate",
+          "owner": "T15.07"
+        }
+      ]
+    },
+    {
+      "id": "J11",
+      "name": "自动质量检查",
+      "scope": "release",
+      "evidence": "测试/未运行/误差/环境真实分列",
+      "milestone": "MS14/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 4,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：通过/未运行/误差/环境四类结果分列",
+        "取消/错误：未运行的检查不显示为通过",
+        "恢复：失败重跑保留两次结果与修订",
+        "键盘：运行检查有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "设计检查",
+          "entry": "test.analyze.design",
+          "owner": "T21.02"
+        },
+        {
+          "step": "状态测试",
+          "entry": "test.run.state",
+          "owner": "T21.05"
+        },
+        {
+          "step": "视觉",
+          "entry": "test.report.visual",
+          "owner": "T21.04"
+        },
+        {
+          "step": "性能",
+          "entry": "test.profile.performance",
+          "owner": "T21.06"
+        },
+        {
+          "step": "失败重跑",
+          "entry": "test.run.retry",
+          "owner": "T21.05"
+        },
+        {
+          "step": "证据导出",
+          "entry": "test.report.export",
+          "owner": "T21.07"
+        }
+      ]
+    },
+    {
+      "id": "J12",
+      "name": "可选 AI 变更",
+      "scope": "release",
+      "evidence": "不外发未授权数据，人工仍完整",
+      "milestone": "MS16/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 4,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：候选经验证后部分接受，人工路径仍完整（M0）",
+        "取消/错误：未授权上下文不外发，拒绝后有明确状态",
+        "恢复：候选被拒绝不改变模型",
+        "键盘：提议与接受有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "授权上下文",
+          "entry": "tools.ai.context",
+          "owner": "T23.03"
+        },
+        {
+          "step": "提议",
+          "entry": "tools.ai.propose",
+          "owner": "T23.04"
+        },
+        {
+          "step": "候选预览",
+          "entry": "preview.hot.candidate",
+          "owner": "T23.04"
+        },
+        {
+          "step": "验证",
+          "entry": "test.analyze.design",
+          "owner": "T23.05"
+        },
+        {
+          "step": "部分接受",
+          "entry": "vcs.change.review",
+          "owner": "T23.06"
+        },
+        {
+          "step": "保存",
+          "entry": "file.save.page",
+          "owner": "T03.04"
+        }
+      ]
+    },
+    {
+      "id": "J13",
+      "name": "大工程日常编辑",
+      "scope": "release",
+      "evidence": "无逐帧全文工作，反馈/内存达基线",
+      "milestone": "MS04/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 3,
+        "recovery": 6,
+        "keyboard": 4
+      },
+      "checks": [
+        "正常：百万行打开后无逐帧全文工作",
+        "取消/错误：搜索与打开可取消且不留半状态",
+        "恢复：关闭后按自动恢复副本重建会话",
+        "键盘：打开文件与符号有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "百万行打开",
+          "entry": "file.open.large",
+          "owner": "T06.07"
+        },
+        {
+          "step": "分栏",
+          "entry": "view.layout.split",
+          "owner": "T04.04"
+        },
+        {
+          "step": "搜索",
+          "entry": "edit.find.project",
+          "owner": "T08.02"
+        },
+        {
+          "step": "取消",
+          "entry": "edit.find.cancel",
+          "owner": "T08.08"
+        },
+        {
+          "step": "符号",
+          "entry": "nav.open.symbol",
+          "owner": "T07.04"
+        },
+        {
+          "step": "编辑",
+          "entry": "code.edit.page",
+          "owner": "T06.01"
+        },
+        {
+          "step": "关闭恢复",
+          "entry": "file.close.recover",
+          "owner": "T03.06"
+        }
+      ]
+    },
+    {
+      "id": "J14",
+      "name": "异常恢复",
+      "scope": "release",
+      "evidence": "原内容/最后有效模型和来源可证明",
+      "milestone": "MS02/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 1,
+        "recovery": 2,
+        "keyboard": 3
+      },
+      "checks": [
+        "正常：保存中断后原内容与最后有效模型可证明",
+        "取消/错误：磁盘满与外部冲突给出上下文与下一步",
+        "恢复：服务崩溃后重启并按恢复副本继续",
+        "键盘：保存与问题导航有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "保存中断/磁盘满/外部冲突/服务崩溃",
+          "entry": "file.save.page",
+          "owner": "T03.04"
+        },
+        {
+          "step": "诊断",
+          "entry": "panel.problems",
+          "owner": "T01.06"
+        },
+        {
+          "step": "恢复",
+          "entry": "file.open.recover",
+          "owner": "T03.06"
+        },
+        {
+          "step": "继续",
+          "entry": "nav.issue.next",
+          "owner": "T14.05"
+        }
+      ]
+    },
+    {
+      "id": "J15",
+      "name": "扩展与自定义控件",
+      "scope": "release",
+      "evidence": "无契约不启用，扩展失败不崩宿主",
+      "milestone": "MS15/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 5,
+        "keyboard": 1
+      },
+      "checks": [
+        "正常：无契约不启用扩展；扩展失败不崩宿主",
+        "取消/错误：schema 校验失败给出原因",
+        "恢复：升级失败回退到上一版本并说明",
+        "键盘：启用/停用扩展有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "注册",
+          "entry": "tools.extension.register",
+          "owner": "T22.02"
+        },
+        {
+          "step": "schema",
+          "entry": "tools.extension.schema",
+          "owner": "T22.02"
+        },
+        {
+          "step": "预览",
+          "entry": "preview.session.start",
+          "owner": "T22.03"
+        },
+        {
+          "step": "目标生成",
+          "entry": "preview.matrix.generate",
+          "owner": "T22.03"
+        },
+        {
+          "step": "启停",
+          "entry": "tools.extension.toggle",
+          "owner": "T22.05"
+        },
+        {
+          "step": "升级失败恢复",
+          "entry": "tools.extension.recover",
+          "owner": "T22.06"
+        }
+      ]
+    },
+    {
+      "id": "J16",
+      "name": "安装与长期维护",
+      "scope": "release",
+      "evidence": "不删工程，不宣传格式无损降级",
+      "milestone": "MS18/MS19",
+      "aspects": {
+        "normal": 0,
+        "cancel": 3,
+        "recovery": 4,
+        "keyboard": 1
+      },
+      "checks": [
+        "正常：干净安装后旧工程按有版本号的迁移打开",
+        "取消/错误：更新中断可恢复且不删工程（决策 Q6：不做无损降级）",
+        "恢复：安装损坏后可回到上一版本",
+        "键盘：迁移与更新确认有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "干净安装",
+          "entry": "build.output.install",
+          "owner": "T25.02"
+        },
+        {
+          "step": "旧工程",
+          "entry": "project.maintain.open-old",
+          "owner": "T02.07"
+        },
+        {
+          "step": "迁移",
+          "entry": "project.maintain.migrate",
+          "owner": "T02.07"
+        },
+        {
+          "step": "更新中断",
+          "entry": "tools.settings.update",
+          "owner": "T25.03"
+        },
+        {
+          "step": "恢复",
+          "entry": "tools.settings.recover",
+          "owner": "T25.03"
+        },
+        {
+          "step": "卸载",
+          "entry": "tools.settings.uninstall",
+          "owner": "T25.06"
+        }
+      ]
+    },
+    {
+      "id": "J17",
+      "name": "完整桌面应用外壳",
+      "scope": "release",
+      "evidence": "目标应用真实入口同源，关闭/取消/焦点正确",
+      "milestone": "MS08/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 5,
+        "keyboard": 2
+      },
+      "checks": [
+        "正常：目标应用入口与设计器复用同一动作清单",
+        "取消/错误：模态弹窗取消不留下半提交状态",
+        "恢复：构建失败保留上次可运行产物",
+        "键盘：目标应用快捷键与设计器命令 id 同源"
+      ],
+      "steps": [
+        {
+          "step": "动作",
+          "entry": "design.application.action",
+          "owner": "T26.02"
+        },
+        {
+          "step": "菜单/工具栏复用",
+          "entry": "design.application.menu",
+          "owner": "T26.03"
+        },
+        {
+          "step": "快捷键",
+          "entry": "design.application.shortcut",
+          "owner": "T26.04"
+        },
+        {
+          "step": "状态栏",
+          "entry": "design.application.status",
+          "owner": "T26.05"
+        },
+        {
+          "step": "模态弹窗",
+          "entry": "window.dialog",
+          "owner": "T26.06"
+        },
+        {
+          "step": "构建运行",
+          "entry": "build.exec.build",
+          "owner": "T26.08"
+        }
+      ]
+    },
+    {
+      "id": "J18",
+      "name": "数据密集页面",
+      "scope": "release",
+      "evidence": "内容与事件真实，加载失败和大集合不冻结",
+      "milestone": "MS08/MS12",
+      "aspects": {
+        "normal": 0,
+        "cancel": 5,
+        "recovery": 5,
+        "keyboard": 4
+      },
+      "checks": [
+        "正常：内容与事件在预览与生成中真实一致",
+        "取消/错误：空/错误数据不冻结界面",
+        "恢复：加载失败给出重试且保留最后有效内容",
+        "键盘：表格与树内编辑有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "表列/树项",
+          "entry": "design.content.table",
+          "owner": "T27.02"
+        },
+        {
+          "step": "样例",
+          "entry": "design.content.sample",
+          "owner": "T27.01"
+        },
+        {
+          "step": "数据绑定",
+          "entry": "design.flow.bind",
+          "owner": "T27.03"
+        },
+        {
+          "step": "排序选择",
+          "entry": "design.content.sort",
+          "owner": "T27.04"
+        },
+        {
+          "step": "编辑校验",
+          "entry": "design.content.validate",
+          "owner": "T27.05"
+        },
+        {
+          "step": "空/错误",
+          "entry": "design.content.empty",
+          "owner": "T27.06"
+        },
+        {
+          "step": "生成",
+          "entry": "preview.matrix.generate",
+          "owner": "T27.08"
+        }
+      ]
+    },
+    {
+      "id": "J19",
+      "name": "多根/多包工程",
+      "scope": "release",
+      "evidence": "根/包/目标/信任身份正确，缺缓存不暗自联网",
+      "milestone": "MS07/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 3,
+        "recovery": 4,
+        "keyboard": 1
+      },
+      "checks": [
+        "正常：根/包/目标/信任身份各自正确显示",
+        "取消/错误：依赖变更审阅拒绝时不改 Cargo.toml",
+        "恢复：缺缓存时明确失败，不暗自联网",
+        "键盘：切换活动包有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "添加成员",
+          "entry": "project.workspace.add",
+          "owner": "T02.09"
+        },
+        {
+          "step": "同名文件导航",
+          "entry": "file.open.member",
+          "owner": "T02.09"
+        },
+        {
+          "step": "切活动包/Kit/feature",
+          "entry": "project.config.kit",
+          "owner": "T02.10"
+        },
+        {
+          "step": "依赖变更审阅",
+          "entry": "project.config.dependencies",
+          "owner": "T02.11"
+        },
+        {
+          "step": "离线构建",
+          "entry": "build.reproduce.offline",
+          "owner": "T16.10"
+        }
+      ]
+    },
+    {
+      "id": "J20",
+      "name": "任务与 CI 复现",
+      "scope": "release",
+      "evidence": "GUI/CLI 复用语义，取消不留服务；错误/未运行/陈旧结果区分",
+      "milestone": "MS14/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 3,
+        "recovery": 3,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：GUI 与 headless 复用同一生成/检查语义",
+        "取消/错误：取消不留悬挂服务（T01.04）",
+        "恢复：陈旧结果标记为过期而不是当前（契约 C-VERSION）",
+        "键盘：任务与构建有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "前置任务",
+          "entry": "build.exec.task",
+          "owner": "T01.03"
+        },
+        {
+          "step": "后台就绪",
+          "entry": "panel.tasks",
+          "owner": "T01.03"
+        },
+        {
+          "step": "生成",
+          "entry": "preview.matrix.generate",
+          "owner": "T15.07"
+        },
+        {
+          "step": "headless 检查/测试",
+          "entry": "build.reproduce.headless",
+          "owner": "T16.11"
+        },
+        {
+          "step": "导入报告",
+          "entry": "test.report.import",
+          "owner": "T21.07"
+        },
+        {
+          "step": "比对修订",
+          "entry": "vcs.change.review",
+          "owner": "T20.02"
+        }
+      ]
+    },
+    {
+      "id": "J21",
+      "name": "内置性能定位（未来扩展）",
+      "scope": "future",
+      "evidence": "原始报告/修订/工具/开销可复核，不把缺数据说成优化成功",
+      "milestone": "FUTURE；不进入正式版验收",
+      "aspects": {
+        "normal": 0,
+        "cancel": 3,
+        "recovery": 3,
+        "keyboard": 2
+      },
+      "checks": [
+        "未来扩展：不进入正式版验收（FUTURE）",
+        "原始报告、修订、工具与开销必须可复核",
+        "取消后不留采集进程",
+        "不把缺数据说成优化成功"
+      ],
+      "steps": [
+        {
+          "step": "选进程",
+          "entry": null,
+          "owner": "T00.09",
+          "reason": "该步骤在本轮原型里没有可用入口分支，入口由归属任务一并确定"
+        },
+        {
+          "step": "授权采集",
+          "entry": "tools.workflow.profile",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "复现",
+          "entry": "test.profile.reproduce",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "取消/符号化",
+          "entry": "test.profile.cancel",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "定位",
+          "entry": "test.profile.locate",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "修复",
+          "entry": "code.edit.page",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "对比",
+          "entry": "test.profile.compare",
+          "owner": "FUTURE"
+        }
+      ]
+    },
+    {
+      "id": "J22",
+      "name": "远程/容器工作（未来）",
+      "scope": "future",
+      "evidence": "无上传/执行偷跑，未确认写入不报成功，不误杀或删外部资源",
+      "milestone": "FUTURE；不进入正式版验收",
+      "aspects": {
+        "normal": 0,
+        "cancel": 6,
+        "recovery": 7,
+        "keyboard": 2
+      },
+      "checks": [
+        "未来扩展：不进入正式版验收（FUTURE）",
+        "无上传或执行偷跑；未确认的写入不报成功",
+        "断线重连后状态可解释",
+        "不误杀或删除外部资源"
+      ],
+      "steps": [
+        {
+          "step": "选环境",
+          "entry": "project.remote.select",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "信任/挂载预览",
+          "entry": "project.remote.trust",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "连接",
+          "entry": "project.remote.connect",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "编辑",
+          "entry": "code.edit.page",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "构建测试",
+          "entry": "build.exec.build",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "远程部署",
+          "entry": "project.remote.deploy",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "断线",
+          "entry": "project.remote.disconnect",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "重连",
+          "entry": "project.remote.reconnect",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "停止",
+          "entry": "project.remote.stop",
+          "owner": "FUTURE"
+        }
+      ]
+    },
+    {
+      "id": "J23",
+      "name": "双 AI 闭环",
+      "scope": "release",
+      "evidence": "角色与候选版本明确；旧评审不授权新候选，目录不是权限隔离",
+      "milestone": "MS16/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 6,
+        "recovery": 5,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：角色与候选版本明确，人工最终接受",
+        "取消/错误：旧评审不授权新候选",
+        "恢复：拒绝后修订可再次进入评审",
+        "键盘：评审操作有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "coder 工作区",
+          "entry": "tools.ai.collaboration.workspace",
+          "owner": "T23.09"
+        },
+        {
+          "step": "授权上下文",
+          "entry": "tools.ai.context",
+          "owner": "T23.03"
+        },
+        {
+          "step": "share 候选/证据",
+          "entry": "tools.ai.collaboration.share",
+          "owner": "T23.09"
+        },
+        {
+          "step": "reviewer",
+          "entry": "tools.ai.collaboration.review",
+          "owner": "T23.10"
+        },
+        {
+          "step": "拒绝/修订",
+          "entry": "tools.ai.collaboration.revise",
+          "owner": "T23.10"
+        },
+        {
+          "step": "重审",
+          "entry": "tools.ai.collaboration.review",
+          "owner": "T23.10"
+        },
+        {
+          "step": "人工接受",
+          "entry": "vcs.change.review",
+          "owner": "T23.06"
+        }
+      ]
+    },
+    {
+      "id": "J24",
+      "name": "翻译与表单",
+      "scope": "release",
+      "evidence": "字符/布局/键/焦点不漂移，过期校验不触发业务，无能力项明确诊断",
+      "milestone": "MS17/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 5,
+        "recovery": 5,
+        "keyboard": 4
+      },
+      "checks": [
+        "正常：键、布局与焦点在双模式下不漂移",
+        "取消/错误：过期校验不触发业务动作",
+        "恢复：缺翻译键回退到默认语言并诊断",
+        "键盘：表单校验与提交有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "提取键",
+          "entry": "project.config.language",
+          "owner": "T24.04"
+        },
+        {
+          "step": "翻译/长文本/RTL 预览",
+          "entry": "project.config.translate",
+          "owner": "T24.04"
+        },
+        {
+          "step": "空/错误数据",
+          "entry": "design.content.empty",
+          "owner": "T24.06"
+        },
+        {
+          "step": "校验",
+          "entry": "design.content.validate",
+          "owner": "T13.09"
+        },
+        {
+          "step": "提交取消",
+          "entry": "design.content.submit",
+          "owner": "T13.09"
+        },
+        {
+          "step": "双模式运行",
+          "entry": "run.app.start",
+          "owner": "T26.08"
+        }
+      ]
+    },
+    {
+      "id": "J25",
+      "name": "配置与故障排查",
+      "scope": "release",
+      "evidence": "不导入权限/机密；定位到真实服务，不删工程或强制注册账号",
+      "milestone": "MS17/MS18",
+      "aspects": {
+        "normal": 0,
+        "cancel": 2,
+        "recovery": 5,
+        "keyboard": 0
+      },
+      "checks": [
+        "正常：导入不携带权限与机密",
+        "取消/错误：启动失败可二分禁用扩展",
+        "恢复：凭据撤销后可继续离线工作",
+        "键盘：设置与命令列表有命令 id"
+      ],
+      "steps": [
+        {
+          "step": "导入快捷键/配置 profile",
+          "entry": "tools.settings.import",
+          "owner": "T24.09"
+        },
+        {
+          "step": "审阅差异",
+          "entry": "tools.settings.profile",
+          "owner": "T24.09"
+        },
+        {
+          "step": "启动失败",
+          "entry": "run.app.start",
+          "owner": "T01.07"
+        },
+        {
+          "step": "禁扩展/二分",
+          "entry": "tools.extension.toggle",
+          "owner": "T22.05"
+        },
+        {
+          "step": "凭据撤销",
+          "entry": "tools.settings.credentials",
+          "owner": "T01.09"
+        },
+        {
+          "step": "恢复",
+          "entry": "file.open.recover",
+          "owner": "T03.06"
+        }
+      ]
+    },
+    {
+      "id": "J26",
+      "name": "高级原生与复合调试（未来扩展）",
+      "scope": "future",
+      "evidence": "适配能力/符号/进程身份可证，附加外部进程不误停，不假保留调用栈",
+      "milestone": "FUTURE；不进入正式版验收",
+      "aspects": {
+        "normal": 0,
+        "cancel": 4,
+        "recovery": 4,
+        "keyboard": 1
+      },
+      "checks": [
+        "未来扩展：不进入正式版验收（FUTURE）",
+        "适配能力、符号与进程身份必须可证明",
+        "附加外部进程不误停",
+        "不假保留调用栈"
+      ],
+      "steps": [
+        {
+          "step": "选包/运行配置",
+          "entry": "debug.native.launch",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "双进程调试",
+          "entry": "debug.native.dual",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "支持的内存/断点检查",
+          "entry": "debug.inspect.memory",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "符号映射",
+          "entry": "debug.native.symbols",
+          "owner": "FUTURE"
+        },
+        {
+          "step": "停止",
+          "entry": "debug.session.stop",
+          "owner": "FUTURE"
+        }
+      ]
+    }
+  ],
+  "leaves": {
+    "note": "entry 是本任务决定的具体菜单叶项；叶项必须落在 resources/host/icons/manifest.json 已有的分组通配之下，或直接是已声明的面板 id。",
+    "groups": [
+      "build.config",
+      "build.exec",
+      "build.output",
+      "build.reproduce",
+      "code.assist",
+      "code.edit",
+      "code.structure",
+      "code.sync",
+      "debug.breakpoint",
+      "debug.exec",
+      "debug.inspect",
+      "debug.native",
+      "debug.session",
+      "design.application",
+      "design.component",
+      "design.content",
+      "design.flow",
+      "design.inspect",
+      "design.layout",
+      "design.node",
+      "design.order",
+      "design.property",
+      "design.tool",
+      "edit.clipboard",
+      "edit.find",
+      "edit.history",
+      "edit.replace",
+      "edit.select",
+      "edit.text",
+      "file.close",
+      "file.manage",
+      "file.new",
+      "file.open",
+      "file.save",
+      "file.transfer",
+      "help",
+      "nav.code",
+      "nav.design",
+      "nav.issue",
+      "nav.open",
+      "preview.hot",
+      "preview.inspect",
+      "preview.matrix",
+      "preview.session",
+      "project.config",
+      "project.environment",
+      "project.maintain",
+      "project.remote",
+      "project.structure",
+      "project.workspace",
+      "run.app",
+      "test.analyze",
+      "test.profile",
+      "test.report",
+      "test.run",
+      "tools.ai",
+      "tools.ai.collaboration",
+      "tools.configuration",
+      "tools.extension",
+      "tools.settings",
+      "tools.workflow",
+      "vcs.change",
+      "vcs.commit",
+      "vcs.integrate",
+      "vcs.remote",
+      "view.display",
+      "view.editor",
+      "view.layout",
+      "view.mode",
+      "view.panel",
+      "window"
+    ]
+  }
+}

@@ -46,3 +46,7 @@ jobs:
         run: node --test tools/contracts/check-contracts.test.mjs
       - name: Check contracts
         run: node tools/contracts/check-contracts.mjs
+      - name: Test journey walkthrough checker
+        run: node --test tools/journeys/check-journeys.test.mjs
+      - name: Check journey walkthrough
+        run: node tools/journeys/check-journeys.mjs

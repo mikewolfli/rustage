@@ -62,6 +62,8 @@ node --test tools/decisions/check-decisions.test.mjs
 node tools/decisions/check-decisions.mjs
 node --test tools/contracts/check-contracts.test.mjs
 node tools/contracts/check-contracts.mjs
+node --test tools/journeys/check-journeys.test.mjs
+node tools/journeys/check-journeys.mjs
 git diff --check
 ```
 
@@ -135,6 +137,16 @@ whitepaper's agent-boundary table and the code: it refuses a mutating entry poin
 declared, a public field on a declared file (which would bypass every entry point), and an invariant
 that names a test which does not exist. If you add a write path, declare it and explain why it is
 not a second writable model.
+
+## Journey walkthrough
+
+Every end-to-end journey in [roadmap section 34](docs/plan/roadmap.md) is walked step by step in
+[`docs/plan/journeys.md`](docs/plan/journeys.md), with the data in
+[`docs/plan/journeys.json`](docs/plan/journeys.json). The check compares the walkthrough with the
+roadmap (names, evidence, milestones and the operation chain step by step), refuses an entry that is
+not a declared menu group or panel, refuses a panel no mode shows, and refuses a step whose owner is
+not a real roadmap task. A step without an entry must say why. The walkthrough records designs and
+owners, not working menus: the data file's `implementation` stays `none` until a task wires one up.
 
 ## Documentation and implementation expectations
 

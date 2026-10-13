@@ -65,6 +65,7 @@ rustage 目前处于**设计与规划阶段**。仓库现已包含最小 Rust �
 | [支持矩阵](docs/plan/support-matrix.md) | 三宿主、五 profile 与逐格证据级别，及其数据文件 |
 | [决策登记](docs/plan/decisions.md) | Q1–Q6 与工程格式、生成入库、升级、组件表达策略，以及仍未决定的取值 |
 | [公共契约](docs/plan/contracts.md) | 唯一可写文档模型、变更集、权限、版本、诊断与源映射 |
+| [旅程走查](docs/plan/journeys.md) | 七个模式原型，以及路线图每条旅程的逐步入口与归属任务 |
 | [图标与资源规划](docs/plan/resources.md) | 资源放置、图标集成、主题与平台打包验收 |
 | [能力规划依据](docs/plan/capability-reference.md) | 工作流需求、协议依据与未来扩展边界 |
 | [GitHub 管理说明](docs/github.md) | 仍需仓库所有者配置的设置与 CI |

@@ -24,8 +24,9 @@
 12. [GitHub administration](github.md): owner-managed repository settings.
 
 Related design evidence: [Capability planning references](plan/capability-reference.md)
-records workflow requirements, protocol evidence, and future-extension boundaries.
-It informs roadmap scope, not claims of implemented capabilities.
+records the supplementary requirements (adopted, deferred and refused with reasons), the protocol
+versions this build speaks, the milestone that signs each of them off, and the future-extension
+boundaries. It informs roadmap scope, not claims of implemented capabilities.
 
 [Icon and resource plan](plan/resources.md) defines host/project resource boundaries,
 source placement, rust-widgets integration constraints, and packaging acceptance.

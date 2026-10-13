@@ -1,0 +1,340 @@
+{
+  "schema": "rustage.capability/v1",
+  "roadmap": {
+    "file": "docs/plan/roadmap.md",
+    "section": "## 5. 里程碑与发布顺序",
+    "table": [
+      "里程碑",
+      "交付集合与结果",
+      "入口",
+      "退出演示/门禁"
+    ]
+  },
+  "decisions": {
+    "adopt": "采纳：已分配任务、旅程与门禁，按阶段签收",
+    "defer": "延期：保留在路线图中，但不进入正式版验收",
+    "not-do": "不做：明确拒绝，理由与冲突点记录在案"
+  },
+  "items": [
+    {
+      "id": "C-MODEL-SINGLE-SOURCE",
+      "statement": "有效模型是唯一事实来源，跨视图/服务不得有第二份可写副本",
+      "source": "roadmap §1.2 模型",
+      "decision": "adopt",
+      "rationale": "已由 T00.05 落地为可检查契约（C-STORE）；后续任务阶段必须沿用，不得为方便复制一份",
+      "tasks": [
+        "T00.05",
+        "T02.01",
+        "T03.01"
+      ],
+      "journeys": [
+        "J02",
+        "J06",
+        "J14"
+      ],
+      "gates": [
+        "contracts",
+        "rust-test"
+      ],
+      "phase": "MS00",
+      "dependsOn": [
+        "T00.05"
+      ]
+    },
+    {
+      "id": "C-CHANGE-IR",
+      "statement": "版本化变更集作为撤销/评审/增量重生成的公共地基",
+      "source": "whitepaper §12.3",
+      "decision": "adopt",
+      "rationale": "变更集同时服务 agent 提议、人工评审、撤销与增量生成；落地在 T03.02/T15.04",
+      "tasks": [
+        "T00.05",
+        "T03.02",
+        "T15.04"
+      ],
+      "journeys": [
+        "J06",
+        "J12"
+      ],
+      "gates": [
+        "contracts",
+        "rust-test"
+      ],
+      "phase": "MS01",
+      "dependsOn": [
+        "T00.05"
+      ]
+    },
+    {
+      "id": "C-SOURCE-MAP",
+      "statement": "源码 span ↔ NodeId 映射随生成物版本化",
+      "source": "whitepaper §11.7.3 E1/E4",
+      "decision": "adopt",
+      "rationale": "映射是双向定位与诊断回指控件的唯一依据；形状已定，生成侧在 MS07",
+      "tasks": [
+        "T00.05",
+        "T15.03",
+        "T19.06"
+      ],
+      "journeys": [
+        "J01",
+        "J06",
+        "J09"
+      ],
+      "gates": [
+        "contracts",
+        "rust-test"
+      ],
+      "phase": "MS01",
+      "dependsOn": [
+        "T00.05"
+      ]
+    },
+    {
+      "id": "C-HOT-UPDATE",
+      "statement": "分级热更新：UI 即时、Rust 逻辑受控替换、不兼容则明确重启",
+      "source": "whitepaper §18",
+      "decision": "adopt",
+      "rationale": "作为 MS09 的整体交付；本项只登记需求与阶段，不声称已有协调器",
+      "tasks": [
+        "T14.01",
+        "T14.02",
+        "T18.05"
+      ],
+      "journeys": [
+        "J07",
+        "J09"
+      ],
+      "gates": [
+        "benchmark",
+        "rust-test"
+      ],
+      "phase": "MS09",
+      "dependsOn": [
+        "T14.01"
+      ]
+    },
+    {
+      "id": "C-LARGE-FILE",
+      "statement": "大文件分级降级与可取消打开，不用一句\"性能优化\"代替",
+      "source": "whitepaper §16.5",
+      "decision": "adopt",
+      "rationale": "边界（5 万/50 万/200 万行）已固定在基准数据集；实现属 MS04",
+      "tasks": [
+        "T06.07",
+        "T06.08"
+      ],
+      "journeys": [
+        "J13"
+      ],
+      "gates": [
+        "fixtures-verify",
+        "benchmark"
+      ],
+      "phase": "MS04",
+      "dependsOn": [
+        "T00.07"
+      ]
+    },
+    {
+      "id": "C-HEADLESS-CI",
+      "statement": "生成/检查可在无 GUI 环境用同一语义执行",
+      "source": "roadmap §1.3 headless/CI 接缝",
+      "decision": "adopt",
+      "rationale": "GUI 与 CLI 复用同一生成与检查语义；落地在 T16.11",
+      "tasks": [
+        "T15.07",
+        "T16.11"
+      ],
+      "journeys": [
+        "J20"
+      ],
+      "gates": [
+        "benchmark",
+        "rust-test"
+      ],
+      "phase": "MS07",
+      "dependsOn": [
+        "T15.07"
+      ]
+    },
+    {
+      "id": "C-OFFLINE-BUILD",
+      "statement": "可复现与离线构建：locked/frozen/offline/vendor 边界明确",
+      "source": "roadmap §1.3",
+      "decision": "adopt",
+      "rationale": "缺缓存时明确失败，不暗自联网；落地在 T16.10",
+      "tasks": [
+        "T16.10",
+        "T02.11"
+      ],
+      "journeys": [
+        "J19"
+      ],
+      "gates": [
+        "rust-test",
+        "check-docs"
+      ],
+      "phase": "MS01",
+      "dependsOn": [
+        "T01.01"
+      ]
+    },
+    {
+      "id": "C-MULTI-ROOT",
+      "statement": "多根/多包工作区身份与跨根引用",
+      "source": "roadmap §1.3 多根/多包工程",
+      "decision": "adopt",
+      "rationale": "根/包/目标/信任身份必须分开显示；落地在 T02.09",
+      "tasks": [
+        "T02.09",
+        "T02.10"
+      ],
+      "journeys": [
+        "J19"
+      ],
+      "gates": [
+        "check-docs"
+      ],
+      "phase": "MS01",
+      "dependsOn": [
+        "T02.09"
+      ]
+    },
+    {
+      "id": "C-DUAL-AI",
+      "statement": "双 AI 工作区：coder/reviewer/share 生命周期与材料边界",
+      "source": "roadmap §1.3 双 AI 工作区",
+      "decision": "adopt",
+      "rationale": ".ai/ 材料策略是项目方未决项（见决策登记 O-AI-MATERIAL）；本项只登记需求与阶段",
+      "tasks": [
+        "T23.01",
+        "T23.09"
+      ],
+      "journeys": [
+        "J23"
+      ],
+      "gates": [
+        "journeys",
+        "check-docs"
+      ],
+      "phase": "MS16",
+      "dependsOn": [
+        "T23.01"
+      ]
+    },
+    {
+      "id": "C-PROFILER",
+      "statement": "内置性能剖析",
+      "source": "roadmap §1.3 未来扩展",
+      "decision": "defer",
+      "rationale": "不进入正式版：需要采样器、符号化与报告规模控制，且不影响本地闭环；J21 标为未来扩展",
+      "tasks": [
+        "T00.09"
+      ],
+      "journeys": [
+        "J21"
+      ],
+      "gates": [
+        "journeys"
+      ],
+      "phase": "FUTURE",
+      "dependsOn": [
+        "T00.09"
+      ]
+    },
+    {
+      "id": "C-REMOTE",
+      "statement": "远程/容器开发与部署",
+      "source": "roadmap §1.3 未来扩展",
+      "decision": "defer",
+      "rationale": "不进入正式版：远端身份、信任与网络边界未定；J22 标为未来扩展",
+      "tasks": [
+        "T00.09"
+      ],
+      "journeys": [
+        "J22"
+      ],
+      "gates": [
+        "journeys"
+      ],
+      "phase": "FUTURE",
+      "dependsOn": [
+        "T00.09"
+      ]
+    },
+    {
+      "id": "C-PLUGIN-MARKET",
+      "statement": "第三方插件市场与任意语言 IDE 能力",
+      "source": "roadmap §1.3 明确不做",
+      "decision": "not-do",
+      "rationale": "与\"宿主功能扩展\"路线冲突：ABI/权限/崩溃隔离不可验证，且与 Q4 决策（不做动态插件加载）一致",
+      "tasks": [
+        "T12.04",
+        "T22.02"
+      ],
+      "journeys": [
+        "J15"
+      ],
+      "gates": [
+        "contracts",
+        "journeys"
+      ],
+      "phase": "MS15",
+      "dependsOn": [
+        "T12.04"
+      ]
+    }
+  ],
+  "protocols": [
+    {
+      "id": "P-FORMAT",
+      "name": "工程格式版本",
+      "current": "v1",
+      "owner": "T02.01",
+      "meaning": "必须在文件中出现；未知/更高版本拒绝写入（决策 Q6）"
+    },
+    {
+      "id": "P-GENERATOR",
+      "name": "生成器版本",
+      "current": "0.1.0",
+      "owner": "T15.02",
+      "meaning": "生成物带生成器与格式版本标记；变更即需要迁移说明（决策 Q2/F2）"
+    },
+    {
+      "id": "P-SOURCEMAP",
+      "name": "源码映射版本",
+      "current": "v1",
+      "owner": "T15.03",
+      "meaning": "映射随生成器版本与模型修订；过期映射必须标记而不是使用"
+    },
+    {
+      "id": "P-CHANGE",
+      "name": "变更集契约版本",
+      "current": "v1",
+      "owner": "T03.02",
+      "meaning": "变更集是持久化与评审的接口；形状变更需迁移"
+    },
+    {
+      "id": "P-CMD-ID",
+      "name": "命令 ID 约定",
+      "current": "域.动作（v1）",
+      "owner": "T05.01",
+      "meaning": "命令组到菜单叶项与快捷键的映射由 T05.02/T05.03 落实；命名空间已固定 16 个"
+    },
+    {
+      "id": "P-PROBE",
+      "name": "探针报告格式",
+      "current": "v1",
+      "owner": "T00.01",
+      "meaning": "api-probes.json 是确定性产物，固定修订与摘要"
+    },
+    {
+      "id": "P-DEP",
+      "name": "依赖修订",
+      "current": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+      "owner": "T00.01",
+      "meaning": "固定 git 修订；升级流程见决策登记 U1"
+    }
+  ]
+}

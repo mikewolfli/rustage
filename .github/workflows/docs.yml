@@ -62,3 +62,7 @@ jobs:
         run: node --test tools/traceability/check-traceability.test.mjs
       - name: Check traceability
         run: node tools/traceability/check-traceability.mjs
+      - name: Test capability reference checker
+        run: node --test tools/capability/check-capability.test.mjs
+      - name: Check capability reference
+        run: node tools/capability/check-capability.mjs

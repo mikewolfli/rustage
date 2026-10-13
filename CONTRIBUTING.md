@@ -70,6 +70,8 @@ node --test tools/benchmark/check-benchmark.test.mjs
 node tools/benchmark/check-benchmark.mjs
 node --test tools/traceability/check-traceability.test.mjs
 node tools/traceability/check-traceability.mjs
+node --test tools/capability/check-capability.test.mjs
+node tools/capability/check-capability.mjs
 git diff --check
 ```
 
@@ -179,6 +181,16 @@ measurement scenarios behind it, with the data in
 owning task, no journey or no gate; refuses a gate declared as automatic that the workflow does not
 actually run (or a manual gate with no reason and owner); and refuses a baseline task the roadmap
 does not define. A gate that is declared but never run is the failure this exists for.
+
+## Capability supplements
+
+Anything the roadmap adds beyond its first delivery - multi-root workspaces, headless and offline
+builds, staged hot update, the dual-AI workspace, and the extensions kept out of the release - is
+recorded in [`docs/plan/capability-reference.md`](docs/plan/capability-reference.md) with the data
+in [`docs/plan/capability-reference.json`](docs/plan/capability-reference.json). Every entry states
+its source, its decision (adopt, defer or not-do), why, and the tasks, journeys and gates that carry
+it, plus the milestone that signs it off. The check derives each task's milestone from the roadmap's
+own milestone table, so a dependency that lands after the sign-off phase fails.
 
 ## Documentation and implementation expectations
 

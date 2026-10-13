@@ -42,3 +42,7 @@ jobs:
         run: node --test tools/decisions/check-decisions.test.mjs
       - name: Check decision register
         run: node tools/decisions/check-decisions.mjs
+      - name: Test contract checker
+        run: node --test tools/contracts/check-contracts.test.mjs
+      - name: Check contracts
+        run: node tools/contracts/check-contracts.mjs

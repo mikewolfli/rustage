@@ -60,6 +60,8 @@ node --test tools/support-matrix/check-support-matrix.test.mjs
 node tools/support-matrix/check-support-matrix.mjs
 node --test tools/decisions/check-decisions.test.mjs
 node tools/decisions/check-decisions.mjs
+node --test tools/contracts/check-contracts.test.mjs
+node tools/contracts/check-contracts.mjs
 git diff --check
 ```
 
@@ -123,6 +125,16 @@ The conclusions behind the foundation tasks live in
 alternative, no compatibility impact, no revisit trigger, no owner or no affected task. An entry
 with status `open` records a value only the project owner can supply; until that happens the
 register is not the place to guess, and code must not depend on it.
+
+## Shared contracts
+
+The document contracts (`src/contracts/`) and the project's only writable model are described in
+[`docs/plan/contracts.md`](docs/plan/contracts.md), with the machine-checked data in
+[`docs/plan/contracts.json`](docs/plan/contracts.json). The check compares that document, the
+whitepaper's agent-boundary table and the code: it refuses a mutating entry point that is not
+declared, a public field on a declared file (which would bypass every entry point), and an invariant
+that names a test which does not exist. If you add a write path, declare it and explain why it is
+not a second writable model.
 
 ## Documentation and implementation expectations
 

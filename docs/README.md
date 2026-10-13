@@ -11,8 +11,11 @@
 6. [Decision register](plan/decisions.md): the conclusions for Q1–Q6 and the project-format,
    generated-output, upgrade and component-expression policies, with alternatives, compatibility
    impact and the values that remain undecided and owned by the project owner.
-7. [Contribution guide](../CONTRIBUTING.md): workflow and checks.
-8. [GitHub administration](github.md): owner-managed repository settings.
+7. [Shared contracts](plan/contracts.md): the document model, change sets, permissions, versions,
+   diagnostics and source mapping, with the invariants that are actually enforced and the evidence
+   behind each of them.
+8. [Contribution guide](../CONTRIBUTING.md): workflow and checks.
+9. [GitHub administration](github.md): owner-managed repository settings.
 
 Related design evidence: [Capability planning references](plan/capability-reference.md)
 records workflow requirements, protocol evidence, and future-extension boundaries.
@@ -37,12 +40,13 @@ order they are being closed in. It is a work list, not a statement of implemente
 - [Icons reaching real controls](log/log-20261013-3.md): the pinned dependency, the semantic icon
   seam, the eight roles mapped onto the dependency's own theme, the real-control baselines, and
   what is still not verified (a window, interaction states, RTL).
-- [Dependency contract probes, a pinned toolchain, the editor surface, the support matrix and the decision register](log/log-20261013-4.md):
+- [Dependency contract probes, a pinned toolchain, the editor surface, the support matrix, the decision register and the shared contracts](log/log-20261013-4.md):
   the fixed Rust toolchain, the re-checked dependency policy, runnable probes over the layout,
   generation, event, unbind and text-editor APIs, the revision the report is pinned to, the one
   library-layer gap the editor probes found, the three-host by five-profile support matrix, and the
   Q1–Q6 plus format/generated-output/upgrade/component-expression decisions with their rejected
-  alternatives and the values still owned by the project owner.
+  alternatives and the values still owned by the project owner, and the eight document contracts
+  that make "no second writable model" a checked property rather than a promise.
 
 Upstream findings raised against [rust-widgets](https://github.com/mikewolfli/rust-widgets) are kept
 in [`rw-feedback/`](rw-feedback/feedback-20261013.md); it records what was verified and what, if

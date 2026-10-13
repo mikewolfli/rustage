@@ -1,0 +1,258 @@
+{
+  "schema": "rustage.contracts/v1",
+  "whitepaper": {
+    "file": "docs/plan/whitepaper.md",
+    "section": "### 12.5 agent 边界（步 0 的产出）",
+    "table": [
+      "操作类别",
+      "默认权限",
+      "理由"
+    ]
+  },
+  "areas": [
+    {
+      "id": "C-IDENTITY",
+      "concern": "稳定节点/页面身份，永不复用",
+      "module": "src/contracts/identity.rs",
+      "principle": "principle #6（单一事实来源）"
+    },
+    {
+      "id": "C-VERSION",
+      "concern": "修订、版本戳与过期词汇",
+      "module": "src/contracts/revision.rs",
+      "principle": "principle #22（过期结果不得冒充当前）"
+    },
+    {
+      "id": "C-MODEL",
+      "concern": "页面、节点与类型化属性值",
+      "module": "src/contracts/model.rs",
+      "principle": "principle #59（不得出现漂移的平行实现）"
+    },
+    {
+      "id": "C-CHANGE",
+      "concern": "变更集与其拒绝原因",
+      "module": "src/contracts/change.rs",
+      "principle": "principle #23（变更可撤销）"
+    },
+    {
+      "id": "C-PERMISSION",
+      "concern": "能力、授权、拒绝与撤销",
+      "module": "src/contracts/permission.rs",
+      "principle": "principle #22（拒绝必须是准确结果）"
+    },
+    {
+      "id": "C-DIAGNOSTIC",
+      "concern": "问题、定位与过期标记",
+      "module": "src/contracts/diagnostics.rs",
+      "principle": "principle #25（失败显式化）"
+    },
+    {
+      "id": "C-SOURCEMAP",
+      "concern": "节点与生成源码区间",
+      "module": "src/contracts/source_map.rs",
+      "principle": "principle #24（结论需可复核证据）"
+    },
+    {
+      "id": "C-STORE",
+      "concern": "唯一可写模型与只读视图/快照",
+      "module": "src/contracts/store.rs",
+      "principle": "principle #6（跨视图/服务没有第二份可写模型）"
+    }
+  ],
+  "grants": {
+    "agent-autonomous": "agent 可自主：可逆、无副作用、由变更集记录",
+    "needs-review": "需评审通过：影响布局与生成代码结构",
+    "needs-confirmation": "需人确认：没有生成器或门禁保护",
+    "human-only": "仅人可触发：不存在 agent 路径，批准也不产生路径",
+    "agent-read-only": "agent 只读：生成物由生成器重写，手改会被覆盖",
+    "authorized-when-trusted": "工程已信任且执行范围获授权后 agent 可触发"
+  },
+  "denials": {
+    "untrusted-project": "工程未信任：不运行工程代码",
+    "needs-review": "等待人工评审该变更集",
+    "needs-confirmation": "等待人工确认该变更",
+    "human-only": "该操作只有人的路径",
+    "generated-code-read-only": "生成物只读，改动应回到设计模型",
+    "scope-not-authorized": "执行范围尚未授权"
+  },
+  "permissions": [
+    {
+      "operationWording": "改画布上的控件属性",
+      "operation": "edit-widget-property",
+      "grantWording": "**agent 可自主**（M1/M2 下）",
+      "grant": "agent-autonomous",
+      "reason": "可逆、无副作用、有变更集记录",
+      "deniedAs": null,
+      "test": "an_agent_may_change_a_widget_property_without_asking"
+    },
+    {
+      "operationWording": "增删控件节点",
+      "operation": "add-or-remove-node",
+      "grantWording": "**需评审通过**",
+      "grant": "needs-review",
+      "reason": "影响布局与生成代码结构",
+      "deniedAs": "needs-review",
+      "test": "an_agent_proposal_needing_review_is_refused_until_a_human_approves_it"
+    },
+    {
+      "operationWording": "修改生成的 Rust 代码",
+      "operation": "edit-generated-code",
+      "grantWording": "**agent 只读**（§12.6 Q7）",
+      "grant": "agent-read-only",
+      "reason": "会被下次生成覆盖",
+      "deniedAs": "generated-code-read-only",
+      "test": "an_agent_may_never_write_generated_output_even_with_approval"
+    },
+    {
+      "operationWording": "修改手写区（非生成区）",
+      "operation": "edit-handwritten-code",
+      "grantWording": "**需人确认**",
+      "grant": "needs-confirmation",
+      "reason": "无生成器保护",
+      "deniedAs": "needs-confirmation",
+      "test": "an_agent_proposal_needing_review_is_refused_until_a_human_approves_it"
+    },
+    {
+      "operationWording": "落盘写文件",
+      "operation": "write-file",
+      "grantWording": "**仅人可触发**",
+      "grant": "human-only",
+      "reason": "A-2",
+      "deniedAs": "human-only",
+      "test": "an_approval_never_opens_a_human_only_path"
+    },
+    {
+      "operationWording": "运行 `cargo check`",
+      "operation": "run-cargo-check",
+      "grantWording": "**工程已信任且执行范围获授权后 agent 可触发**",
+      "grant": "authorized-when-trusted",
+      "reason": "可运行 build script/过程宏或访问网络，不是只读；须经宿主任务/权限门禁",
+      "deniedAs": "untrusted-project",
+      "test": "running_cargo_needs_trust_first_and_the_scope_afterwards"
+    },
+    {
+      "operationWording": "新增依赖 / 改 `Cargo.toml`",
+      "operation": "change-dependencies",
+      "grantWording": "**必须人确认**",
+      "grant": "needs-confirmation",
+      "reason": "影响全部 profile 与门禁",
+      "deniedAs": "needs-confirmation",
+      "test": "the_default_table_matches_the_whitepaper_rows"
+    }
+  ],
+  "writers": [
+    {
+      "file": "src/contracts/store.rs",
+      "kind": "public",
+      "names": [
+        "allocate_id",
+        "apply",
+        "gate_mut"
+      ],
+      "reason": "apply 是唯一改动节点的入口；gate_mut 改的是权限状态；allocate_id 只推进 id 序列，不改文档（见 C-STORE 的说明）"
+    },
+    {
+      "file": "src/contracts/model.rs",
+      "kind": "crate-internal",
+      "names": [
+        "remove_property",
+        "set_children",
+        "set_parent",
+        "set_property"
+      ],
+      "reason": "Node 的写入方法是 pub(crate)，只有 contracts::store 的 apply 路径可以调；视图与快照拿不到 &mut"
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-SINGLE-WRITER",
+      "statement": "文档只有一份可写模型：跨视图/服务不存在第二份可写副本",
+      "area": "C-STORE",
+      "enforcedBy": "src/contracts/store.rs",
+      "test": "a_document_starts_at_the_initial_revision_with_its_root",
+      "evidence": "结构 + 测试",
+      "note": "视图只借用模型且没有 &mut 方法；快照的字段私有且没有写入方法。写入入口被 writers 声明并逐名校验，新增入口必须同时更新数据文件"
+    },
+    {
+      "id": "INV-ATOMIC-CHANGE",
+      "statement": "一个变更集要么全部生效并把版本推进一次，要么一条都不生效且版本不动",
+      "area": "C-CHANGE",
+      "enforcedBy": "src/contracts/store.rs",
+      "test": "a_rejected_change_set_leaves_the_operations_before_it_unapplied",
+      "evidence": "测试",
+      "note": "校验与暂存发生在只含被触及节点的 overlay 上，全部通过才提交"
+    },
+    {
+      "id": "INV-INVERTIBLE",
+      "statement": "每个操作自带被替换的状态，因此逆操作可推导，不需要另存一份逆操作",
+      "area": "C-CHANGE",
+      "enforcedBy": "src/contracts/change.rs",
+      "test": "structural_operations_invert_to_the_exact_opposite_position",
+      "evidence": "测试",
+      "note": "属性逆操作在另一条用例中覆盖：setting_a_property_inverts_to_restoring_or_clearing_it"
+    },
+    {
+      "id": "INV-STALE-BASE",
+      "statement": "针对旧版本准备的变更集被拒绝，不会被隐式合并到新状态上",
+      "area": "C-VERSION",
+      "enforcedBy": "src/contracts/store.rs",
+      "test": "a_change_set_against_an_older_revision_is_refused_and_changes_nothing",
+      "evidence": "测试",
+      "note": "拒绝结果是值，携带 base 与 current 两个版本"
+    },
+    {
+      "id": "INV-IDENTITY-STABLE",
+      "statement": "节点身份只增不复用：被移除的身份在新变更集里被拒绝，而不是复活同一个节点",
+      "area": "C-IDENTITY",
+      "enforcedBy": "src/contracts/store.rs",
+      "test": "a_removed_identity_is_never_reused",
+      "evidence": "测试",
+      "note": "身份由 id 分配器裁定（identity.rs 的 a_retired_id_is_still_known_but_not_live 覆盖退休语义），是否复用由 store 的 apply 校验：被移除的身份被拒绝（本用例），未申请过的身份同样被拒绝（a_node_added_by_an_invented_id_is_refused）"
+    },
+    {
+      "id": "INV-DEFAULT-DENY",
+      "statement": "权限默认拒绝：未信任工程不执行代码，批准无法打开 human-only 与生成物只读",
+      "area": "C-PERMISSION",
+      "enforcedBy": "src/contracts/permission.rs",
+      "test": "withdrawing_trust_drops_the_grants_it_was_given_with",
+      "evidence": "测试 + 交叉校验",
+      "note": "权限表逐行对照白皮书 §12.5 与 src/contracts/permission.rs 的 Capability::default_grant"
+    },
+    {
+      "id": "INV-DENIAL-EXPLAINED",
+      "statement": "拒绝必须是显式且带原因的，不能表现为空成功",
+      "area": "C-PERMISSION",
+      "enforcedBy": "src/contracts/permission.rs",
+      "test": "every_denial_explains_what_would_have_to_change",
+      "evidence": "测试",
+      "note": "变更集层面的同一条约束由 every_rejection_names_itself_uniquely_and_explains_itself 覆盖"
+    },
+    {
+      "id": "INV-STALE-LABELED",
+      "statement": "过期结果被标记为过期，不被当作当前结果展示",
+      "area": "C-VERSION",
+      "enforcedBy": "src/contracts/diagnostics.rs",
+      "test": "a_stale_set_offers_no_current_entries_instead_of_old_ones",
+      "evidence": "测试",
+      "note": "快照与源映射各自带 stamp，可被同一套 Staleness 判定"
+    },
+    {
+      "id": "INV-DIAGNOSTIC-LOCATABLE",
+      "statement": "诊断在缺少节点映射时仍保留源码定位",
+      "area": "C-DIAGNOSTIC",
+      "enforcedBy": "src/contracts/diagnostics.rs",
+      "test": "a_node_diagnostic_keeps_its_source_position",
+      "evidence": "测试",
+      "note": "位置同时携带节点与源码区间，两者不是二选一"
+    },
+    {
+      "id": "INV-MOST-SPECIFIC-MAPPING",
+      "statement": "嵌套区间取最具体的节点，未映射的位置返回空而不是猜测",
+      "area": "C-SOURCEMAP",
+      "enforcedBy": "src/contracts/source_map.rs",
+      "test": "the_most_specific_span_wins_when_spans_nest",
+      "evidence": "测试",
+      "note": "未映射的节点与位置另有用例覆盖"
+    }
+  ]
+}

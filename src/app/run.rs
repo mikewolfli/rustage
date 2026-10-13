@@ -21,13 +21,22 @@ pub fn run(command: Command) {
     match command {
         Command::Help => print!("{}", cli::help_text()),
         Command::Version => println!("rustage {}", env!("CARGO_PKG_VERSION")),
-        Command::Status => println!(
-            "rustage {}\n\
-             The desktop designer is not implemented yet.\n\
-             The icon strip is: run `rustage --render-icons <directory>` to render it.\n\
-             The dependency contract probes are: run `rustage --probe-apis <directory>`.",
-            env!("CARGO_PKG_VERSION")
-        ),
+        Command::Status => {
+            println!(
+                "rustage {}\n\
+                 The desktop designer is not implemented yet.\n\
+                 The icon strip is: run `rustage --render-icons <directory>` to render it.\n\
+                 The dependency contract probes are: run `rustage --probe-apis <directory>`.",
+                env!("CARGO_PKG_VERSION")
+            );
+            // The contract vocabulary is derived from the code the binary was built with, so this
+            // section cannot claim a policy the build does not implement.
+            println!("{}", crate::contracts::vocabulary::version_line());
+            println!("Permission policy for an untrusted project with no approvals:");
+            for line in crate::contracts::vocabulary::permission_lines() {
+                println!("{line}");
+            }
+        }
         Command::RenderIcons(directory) => match render_icons(&directory) {
             Ok(written) => {
                 for path in written {

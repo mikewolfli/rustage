@@ -14,6 +14,7 @@
 //! | Startup orchestration | [`startup`] | the ordered steps, the outcome, and what "started" means |
 //! | Errors | [`error`] | one error type and one exit-code mapping for the process |
 //! | Logging | [`log`] | levelled records, an injectable clock, and a sink that can be captured |
+//! | Paths | [`paths`] | system directories, and the project-root rule from decision F1 |
 //!
 //! **What "started" is allowed to mean.** The dependency publishes `RuntimeGuiMode`, and documents
 //! why: a stub backend runs an event loop, prints progress, and creates no window, so a log alone
@@ -36,5 +37,6 @@
 
 pub mod error;
 pub mod log;
+pub mod paths;
 pub mod platform;
 pub mod startup;

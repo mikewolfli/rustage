@@ -142,6 +142,16 @@ alternative, no compatibility impact, no revisit trigger, no owner or no affecte
 with status `open` records a value only the project owner can supply; until that happens the
 register is not the place to guess, and code must not depend on it.
 
+## Publishing
+
+`rustage` sets `publish = false` in `Cargo.toml` on purpose, and `cargo publish` failing with
+"`package.publish` must be set to `true`" is that setting working, not a defect. Two reasons are
+recorded in the manifest itself: this crate is the application rather than a library anyone would
+depend on, and the project distributes packaged builds (roadmap F25/T25.02). Making it publishable
+would need more than flipping the flag — the pinned `rust_widgets` dependency is a git revision, and
+a registry refuses git dependencies — so that path starts with publishing the widget library, which
+is a decision for the project owner rather than a build fix.
+
 ## Shared contracts
 
 The document contracts (`src/contracts/`) and the project's only writable model are described in

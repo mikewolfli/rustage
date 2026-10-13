@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "A desktop visual UI designer for Rust-Widgets"
 license = "MIT"
+# Not published to crates.io, on purpose. This crate is the desktop application, not a library a
+# downstream project would depend on; the project distributes packaged builds (roadmap F25/T25.02),
+# and the pinned widget dependency is a git revision, which a registry would refuse anyway. Saying
+# it here is the difference between "deliberately not for publication" and "someone forgot to set
+# `publish`", which is exactly how the bare `publish = false` reads.
 publish = false
 [dependencies]
 rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "c957fdec7f30cc1a526b7c898c0f44b458ef4a57", default-features = false, features = ["desktop"] }

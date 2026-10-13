@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod probe;
 mod resources;
 
 fn main() {

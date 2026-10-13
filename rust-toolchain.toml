@@ -1,0 +1,14 @@
+# The toolchain rustage is built and verified with.
+#
+# Pinned to an exact version rather than a channel because a designer's evidence has to be
+# reproducible: "the probes passed" must name the compiler that ran them, or the claim decays the
+# next time stable moves. The same reasoning that pins the widget dependency to a revision (see
+# Cargo.toml) applies to the compiler itself.
+#
+# rustfmt and clippy are listed because `cargo fmt --check` and `cargo clippy` are part of the
+# project's local gate; without them a pinned toolchain would not be able to run the checks that
+# verify it.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

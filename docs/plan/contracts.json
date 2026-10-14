@@ -296,6 +296,33 @@
       "test": "unknown_members_survive_a_round_trip_and_are_reported",
       "evidence": "测试",
       "note": "唯一例外是凭证引用与其来源：那里的成员集合是封闭的，出现未知成员按“机密被写进工程”拒绝，而不是保留"
+    },
+    {
+      "id": "INV-NO-HALF-PROJECT",
+      "statement": "创建只在暂存目录里发生，最后一步用一次改名提交；失败或取消移除暂存目录，原目录不被触碰",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/create.rs",
+      "test": "a_failure_or_a_cancel_leaves_the_directory_as_it_was",
+      "evidence": "结构 + 测试",
+      "note": "暂存目录在目标同级（同一文件系统），因此提交是一次 rename：要么工程存在，要么原目录与之前完全一样；取消后再次取消会如实报告“没有暂存副本”"
+    },
+    {
+      "id": "INV-NO-OVERWRITE",
+      "statement": "已存在且含内容的目录在任何写入发生之前就被拒绝，本构建绝不覆盖已有的工程目录",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/create.rs",
+      "test": "a_failure_does_not_overwrite_a_directory_that_has_something_in_it",
+      "evidence": "测试",
+      "note": "空目录可以承接新工程（rename 允许替换空目录），但非空目录、文件与缺失的父目录都各自给出准确拒绝；“向导打开期间别人写进目标目录”这一冲突由提交失败覆盖"
+    },
+    {
+      "id": "INV-CREATED-IS-READABLE",
+      "statement": "创建出来的工程在提交前先被本构建自己的读码器读回：写出与能读回是同一件事",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/create.rs",
+      "test": "a_project_that_is_created_is_a_project_this_build_reads_back",
+      "evidence": "测试",
+      "note": "暂存目录里的 project.json 与每个页面文档都由设计器使用的读者读一遍（verify_staged），因此写出器与读码器不一致会让创建失败，而不是交付一个打不开的工程"
     }
   ]
 }

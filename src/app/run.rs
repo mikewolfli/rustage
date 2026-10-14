@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::{self, Command};
 use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
+use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
 use crate::project::format::{ProjectContent, ProjectFile};
 
 use super::toolbar;
@@ -93,6 +94,18 @@ pub fn run(command: Command) {
                 std::process::exit(1);
             }
         },
+        Command::NewProject(options) => {
+            let request = match options.name {
+                Some(name) => {
+                    NewProjectRequest::new(options.directory, options.template).with_name(name)
+                }
+                None => NewProjectRequest::new(options.directory, options.template),
+            };
+            if !create_project(request) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::ProjectCheck(path) => {
             if !check_project(&path) {
                 // The project is not something this build can use as it stands, and the reason was
@@ -118,6 +131,79 @@ pub fn run(command: Command) {
                 std::process::exit(1);
             }
         },
+    }
+}
+
+/// Creates a project, printing the last step's plan before it does anything.
+///
+/// Returns whether a project was created.
+fn create_project(request: NewProjectRequest) -> bool {
+    let mut creation = match Creation::plan(request, &SystemProjectIds) {
+        Ok(creation) => creation,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    let plan = creation.summary();
+    println!("project: {}", plan.root().display());
+    println!(
+        "template: {}, name: {}, identity: {}",
+        plan.template().name(),
+        plan.name(),
+        plan.id()
+    );
+    println!("files: {}", plan.files().len());
+    for file in plan.files() {
+        println!("  {:<24} {}", file.path(), file.what());
+    }
+    println!("if it fails:");
+    for line in plan.impact() {
+        println!("  {line}");
+    }
+
+    let staged = match creation.stage() {
+        Ok(_) => true,
+        Err(failure) => {
+            println!("rustage: {}", failure.message());
+            false
+        }
+    };
+    if !staged {
+        return false;
+    }
+    match creation.commit() {
+        Ok(created) => {
+            println!(
+                "created {} ({} file(s)){}",
+                created.root().display(),
+                created.files().len(),
+                if created.target_preexisted() {
+                    ", in the directory that was already there"
+                } else {
+                    ""
+                }
+            );
+            // The created project is read back with the readers the designer uses, so "a project was
+            // created" and "a project can be opened" are the same statement.
+            match created.open() {
+                Ok(file) => {
+                    println!("read back: {}", file.verdict().message());
+                    true
+                }
+                Err(error) => {
+                    println!(
+                        "rustage: what was created cannot be read back: {}",
+                        error.message()
+                    );
+                    false
+                }
+            }
+        }
+        Err(failure) => {
+            println!("rustage: {}", failure.message());
+            false
+        }
     }
 }
 

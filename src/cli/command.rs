@@ -19,6 +19,7 @@ use std::{
 };
 
 use crate::host::log::Level;
+use crate::project::create::Template;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -34,8 +35,36 @@ pub enum Command {
     /// Reads a project file, reports what this build makes of it, and writes the round trip next to
     /// it as evidence that nothing in it was dropped.
     ProjectCheck(PathBuf),
+    /// Creates a project: the new-project wizard's work, without a window (task T02.02).
+    NewProject(NewProjectOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
+}
+
+/// What to create a project from.
+///
+/// The wizard's steps are its arguments: where the project goes, what it is called, and what it
+/// starts from. A window would collect the same three things, and the creation path below it is the
+/// same one either way.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NewProjectOptions {
+    /// The directory the project is created in.
+    pub directory: PathBuf,
+    /// The name a person sees; the directory's own name when nothing is given.
+    pub name: Option<String>,
+    /// What the project starts from.
+    pub template: Template,
+}
+
+impl NewProjectOptions {
+    /// Options for a directory, starting from a template.
+    pub fn new(directory: impl Into<PathBuf>, template: Template) -> Self {
+        Self {
+            directory: directory.into(),
+            name: None,
+            template,
+        }
+    }
 }
 
 /// How long the baseline session should live.
@@ -170,6 +199,38 @@ where
             }
             return Ok(Command::Launch(options));
         }
+        "--new-project" => {
+            let Some(directory) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = NewProjectOptions::new(PathBuf::from(directory), Template::BasicPage);
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--template" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(template) = value.to_str().and_then(Template::from_name) else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.template = template;
+                    }
+                    "--name" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.name = Some(name.to_owned());
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::NewProject(options));
+        }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
             let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -200,7 +261,8 @@ pub fn help_text() -> &'static str {
     "rustage - Rust desktop UI designer\n\n\
      Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n\
             rustage [--render-icons <directory> | --probe-apis <directory>]\n\
-            rustage [--probe-host <directory> | --project-check <file>]\n\n\
+            rustage [--probe-host <directory> | --project-check <file>]\n\
+            rustage --new-project <directory> [--template <name>] [--name <name>]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -211,7 +273,9 @@ pub fn help_text() -> &'static str {
        --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n\
        --probe-host <directory>      Check the host platform services and write host-readiness.json\n\
        --project-check <file>        Read a project file, report what is understood and what is\n\
-                                     kept, and write <file>.roundtrip.json as evidence\n\n\
+                                     kept, and write <file>.roundtrip.json as evidence\n\
+       --new-project <directory>     Create a project; --template empty|basic-page|application\n\
+                                     (default: basic-page), --name <name> (default: the directory)\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -220,8 +284,9 @@ pub fn help_text() -> &'static str {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Command, LaunchOptions, log_level_of, parse};
+    use super::{Command, LaunchOptions, NewProjectOptions, log_level_of, parse};
     use crate::host::log::Level;
+    use crate::project::create::Template;
     use std::time::Duration;
 
     #[test]
@@ -259,6 +324,38 @@ mod tests {
             parse(["--project-check", "demo/project.json"]),
             Ok(Command::ProjectCheck(PathBuf::from("demo/project.json")))
         );
+    }
+
+    #[test]
+    fn parses_the_new_project_options() {
+        assert_eq!(
+            parse(["--new-project", "demo"]),
+            Ok(Command::NewProject(NewProjectOptions::new(
+                PathBuf::from("demo"),
+                Template::BasicPage
+            )))
+        );
+        assert_eq!(
+            parse([
+                "--new-project",
+                "demo",
+                "--template",
+                "application",
+                "--name",
+                "My App"
+            ]),
+            Ok(Command::NewProject(NewProjectOptions {
+                directory: PathBuf::from("demo"),
+                name: Some("My App".to_owned()),
+                template: Template::Application,
+            }))
+        );
+
+        // A template this build does not have, and a flag nobody knows, are usage errors.
+        assert!(parse(["--new-project", "demo", "--template", "nowhere"]).is_err());
+        assert!(parse(["--new-project"]).is_err());
+        assert!(parse(["--new-project", "demo", "--template"]).is_err());
+        assert!(parse(["--new-project", "demo", "--wat"]).is_err());
     }
 
     #[test]

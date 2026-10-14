@@ -109,6 +109,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-EFFECT-DECIDED | 每个外部效果类别要么由决策表的一行裁定，要么显式说明它没有决定 | `C-PERMISSION` | [`src/contracts/permission.rs`](../../src/contracts/permission.rs) | `every_external_effect_class_is_decided_or_explained` | 测试 |
 | INV-VERSION-UNKNOWN-NOT-WRITTEN | 本构建不认识的格式版本只读打开：不解释任何成员，也没有任何写回路径 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `a_newer_format_version_refuses_to_write_the_project` | 结构 + 测试 |
 | INV-NO-FIELD-LOSS | 本构建不认识的成员被原样保留并报告，保存时写回原位，不静默丢弃 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `unknown_members_survive_a_round_trip_and_are_reported` | 测试 |
+| INV-NO-HALF-PROJECT | 创建只在暂存目录里发生，最后一步用一次改名提交；失败或取消移除暂存目录，原目录不被触碰 | `C-PROJECT` | [`src/project/create.rs`](../../src/project/create.rs) | `a_failure_or_a_cancel_leaves_the_directory_as_it_was` | 结构 + 测试 |
+| INV-NO-OVERWRITE | 已存在且含内容的目录在任何写入发生之前就被拒绝，本构建绝不覆盖已有的工程目录 | `C-PROJECT` | [`src/project/create.rs`](../../src/project/create.rs) | `a_failure_does_not_overwrite_a_directory_that_has_something_in_it` | 测试 |
+| INV-CREATED-IS-READABLE | 创建出来的工程在提交前先被本构建自己的读码器读回：写出与能读回是同一件事 | `C-PROJECT` | [`src/project/create.rs`](../../src/project/create.rs) | `a_project_that_is_created_is_a_project_this_build_reads_back` | 测试 |
 
 ## 不变量的补充说明
 
@@ -127,6 +130,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-EFFECT-DECIDED | 命令、文件与网络分别由 run-cargo-check、write-file 与 request-network-service 裁定，映射理由写在 EffectClass 的文档注释里；部署仍是未决定（C-REMOTE 为延期能力）并给出原因，宿主因此拒绝，而不是发明一条授权 |
 | INV-VERSION-UNKNOWN-NOT-WRITTEN | 未知版本不会成为 ProjectDocument，而只有 ProjectDocument 才能渲染，因此“不写回”是类型结构而不是纪律；读取时只尽力读身份，其余成员原样列出 |
 | INV-NO-FIELD-LOSS | 唯一例外是凭证引用与其来源：那里的成员集合是封闭的，出现未知成员按“机密被写进工程”拒绝，而不是保留 |
+| INV-NO-HALF-PROJECT | 暂存目录在目标同级（同一文件系统），因此提交是一次 rename：要么工程存在，要么原目录与之前完全一样；取消后再次取消会如实报告“没有暂存副本” |
+| INV-NO-OVERWRITE | 空目录可以承接新工程（rename 允许替换空目录），但非空目录、文件与缺失的父目录都各自给出准确拒绝；“向导打开期间别人写进目标目录”这一冲突由提交失败覆盖 |
+| INV-CREATED-IS-READABLE | 暂存目录里的 project.json 与每个页面文档都由设计器使用的读者读一遍（verify_staged），因此写出器与读码器不一致会让创建失败，而不是交付一个打不开的工程 |
 
 ## 为什么权限表要交叉校验
 

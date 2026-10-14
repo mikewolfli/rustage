@@ -55,6 +55,7 @@ cargo run -- --help
 cargo run -- --probe-apis target/probe
 cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready
 cargo run -- --project-check examples/demo-project/project.json   # project format; exits 4 when it refuses to write
+cargo run -- --new-project target/new-project --template application   # creates a project; exits 4 when refused
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -137,6 +138,18 @@ The demo under [`examples/demo-project/`](examples/demo-project/README.md) is a 
 document that a Rust test pins to exactly what the writer writes, so the format cannot drift away
 from its example. This does not establish that a page document can be written yet (its schema arrives
 with T02.02) or that a project can be created, opened or migrated by the designer.
+
+`--new-project <directory>` creates a project: it plans first (which is what the wizard's last step
+shows: every file, and what could still go wrong), writes the files into a staging directory *beside*
+the project, and puts the project in place with a single rename. That is where the acceptance line
+"a failure must not overwrite the directory that was there and must not leave half a project" is
+enforced: a directory that already holds anything is refused before anything is written, and every
+refusal and every cancel removes the staged copy and reports what it removed. The staged project is
+read back by the same readers the designer uses before it is put in place, so a created project is
+one this build can open, not one it hopes it can. `--template empty|basic-page|application` chooses
+what the project starts from and `--name` sets the name a person sees. This does not establish that a
+window opened, that the templates are what a person wants, or that the designer's own menus create
+projects — the wizard's UI arrives with the shell (T04/T26).
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

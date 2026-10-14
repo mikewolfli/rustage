@@ -216,6 +216,27 @@ pub enum ProjectError {
         path: String,
     },
     /// The document declares a format this build is too new for.
+    NewerFormat {
+        /// The version the document declares.
+        found: FormatVersion,
+        /// The version this build writes.
+        current: FormatVersion,
+    },
+    /// The document describes something the format does not allow.
+    Inconsistent {
+        /// Where it is wrong.
+        path: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// A value has no spelling in this format.
+    Unrepresentable {
+        /// Where the value is.
+        path: String,
+        /// Why it cannot be written.
+        reason: String,
+    },
+    /// The document declares a format this build is too old for (it is older than this build).
     OlderFormat {
         /// The version the document declares.
         found: FormatVersion,
@@ -269,6 +290,14 @@ impl ProjectError {
             } => format!("{path} must be {expected}, but it is {}", found.name()),
             Self::MissingMember { path } => format!("{path} is missing, and it is required"),
             Self::EmptyValue { path } => format!("{path} is empty, and it has to say something"),
+            Self::NewerFormat { found, current } => format!(
+                "{found} is newer than {current}, which this build writes; it was not read, and \
+                 nothing was written"
+            ),
+            Self::Inconsistent { path, reason } => format!("{path} is inconsistent: {reason}"),
+            Self::Unrepresentable { path, reason } => {
+                format!("{path} cannot be written as JSON: {reason}")
+            }
             Self::OlderFormat { found, current } => format!(
                 "{found} is older than {current}, which this build writes, and no migration runs in \
                  this build (task T02.07); nothing was read"
@@ -371,13 +400,13 @@ impl Preserved {
         self.get(name).is_some()
     }
 
-    fn names_at(&self, path: &str, out: &mut Vec<UnknownField>) {
+    pub(crate) fn names_at(&self, path: &str, out: &mut Vec<UnknownField>) {
         for (name, _) in &self.members {
             out.push(UnknownField::member(path, name));
         }
     }
 
-    fn adopt(&self, object: &mut JsonObject) {
+    pub(crate) fn adopt(&self, object: &mut JsonObject) {
         for (name, value) in &self.members {
             object.insert(name.clone(), value.clone());
         }
@@ -1353,39 +1382,47 @@ struct Context<'a> {
 
 impl Context<'_> {
     fn reference(&self, kind: ReferenceKind, written: String) -> Reference {
-        match self.root.resolve(&written) {
-            Ok(path) => {
-                let verdict = if path.exists() {
-                    ReferenceVerdict::Present
-                } else {
-                    ReferenceVerdict::Absent
-                };
-                Reference {
-                    kind,
-                    written,
-                    resolved: Some(path),
-                    verdict,
-                }
-            }
-            // A parent that is not there yet is "not there yet", not a refusal: a resource in a
-            // directory nobody has created is a normal state of a project being built up. Every
-            // other reason — an absolute path, `..`, a link that leaves the root, an empty path —
-            // means the reference does not belong to this project.
-            Err(PathError::MissingParent { path }) => Reference {
+        reference(self.root, kind, written)
+    }
+}
+
+/// Resolves a written path against a project root, and says what it found.
+///
+/// One definition for both documents of the format: the project document and a page document must
+/// agree about what "inside the project" means, and two copies of this rule would drift.
+pub(crate) fn reference(root: &ProjectRoot, kind: ReferenceKind, written: String) -> Reference {
+    match root.resolve(&written) {
+        Ok(path) => {
+            let verdict = if path.exists() {
+                ReferenceVerdict::Present
+            } else {
+                ReferenceVerdict::Absent
+            };
+            Reference {
                 kind,
                 written,
                 resolved: Some(path),
-                verdict: ReferenceVerdict::Absent,
-            },
-            Err(error) => Reference {
-                kind,
-                written,
-                resolved: None,
-                verdict: ReferenceVerdict::Refused {
-                    reason: error.message(),
-                },
-            },
+                verdict,
+            }
         }
+        // A parent that is not there yet is "not there yet", not a refusal: a resource in a
+        // directory nobody has created is a normal state of a project being built up. Every other
+        // reason — an absolute path, `..`, a link that leaves the root, an empty path — means the
+        // reference does not belong to this project.
+        Err(PathError::MissingParent { path }) => Reference {
+            kind,
+            written,
+            resolved: Some(path),
+            verdict: ReferenceVerdict::Absent,
+        },
+        Err(error) => Reference {
+            kind,
+            written,
+            resolved: None,
+            verdict: ReferenceVerdict::Refused {
+                reason: error.message(),
+            },
+        },
     }
 }
 
@@ -1581,6 +1618,123 @@ fn decode_credential(value: &Json, path: &str) -> Result<CredentialRef, ProjectE
     Ok(credential)
 }
 
+/// A project document being described before it exists: what creating a project needs (T02.02).
+///
+/// It is deliberately not an editing path. A draft starts from nothing, and what it produces is the
+/// same kind of value a file reader produces, written by the same writer — so a created project
+/// cannot be a second kind of file. Every path a draft is given resolves against the root exactly
+/// the way a path read from a file does, and the integrity rules are the reader's own, so a draft
+/// cannot describe a project that could not be read back.
+pub struct ProjectDraft<'a> {
+    root: &'a ProjectRoot,
+    id: String,
+    name: String,
+    pages: Vec<PageEntry>,
+    resources: Vec<ResourceEntry>,
+    targets: Vec<TargetProfile>,
+    generated: Vec<GeneratedTarget>,
+    services: Vec<ServiceEntry>,
+}
+
+impl<'a> ProjectDraft<'a> {
+    /// A draft with nothing in it but its identity.
+    pub fn new(root: &'a ProjectRoot, id: &str, name: &str) -> Result<Self, ProjectError> {
+        if id.trim().is_empty() {
+            return Err(ProjectError::EmptyValue {
+                path: "project.id".to_owned(),
+            });
+        }
+        if name.trim().is_empty() {
+            return Err(ProjectError::EmptyValue {
+                path: "project.name".to_owned(),
+            });
+        }
+        Ok(Self {
+            root,
+            id: id.to_owned(),
+            name: name.to_owned(),
+            pages: Vec::new(),
+            resources: Vec::new(),
+            targets: Vec::new(),
+            generated: Vec::new(),
+            services: Vec::new(),
+        })
+    }
+
+    /// Adds a page, with the document it lives in and the stylesheet it uses.
+    pub fn with_page(
+        mut self,
+        document: &str,
+        title: Option<&str>,
+        stylesheet: Option<&str>,
+    ) -> Self {
+        self.pages.push(PageEntry {
+            title: title.map(str::to_owned),
+            document: reference(self.root, ReferenceKind::PageDocument, document.to_owned()),
+            stylesheet: stylesheet
+                .map(|written| reference(self.root, ReferenceKind::Stylesheet, written.to_owned())),
+            preserved: Preserved::default(),
+        });
+        self
+    }
+
+    /// Adds a resource.
+    pub fn with_resource(mut self, path: &str) -> Self {
+        self.resources.push(ResourceEntry {
+            path: reference(self.root, ReferenceKind::Resource, path.to_owned()),
+            preserved: Preserved::default(),
+        });
+        self
+    }
+
+    /// Adds a target profile.
+    pub fn with_target(mut self, name: &str, profile: Option<&str>, features: &[&str]) -> Self {
+        self.targets.push(TargetProfile {
+            name: name.to_owned(),
+            profile: profile.map(str::to_owned),
+            features: features
+                .iter()
+                .map(|feature| (*feature).to_owned())
+                .collect(),
+            preserved: Preserved::default(),
+        });
+        self
+    }
+
+    /// Adds the file a page is generated into.
+    pub fn with_generated(mut self, output: &str, from: &str) -> Self {
+        self.generated.push(GeneratedTarget {
+            output: reference(self.root, ReferenceKind::GeneratedOutput, output.to_owned()),
+            from: reference(self.root, ReferenceKind::DesignSource, from.to_owned()),
+            preserved: Preserved::default(),
+        });
+        self
+    }
+
+    /// The document, checked by the reader's own rules.
+    pub fn build(self) -> Result<ProjectDocument, ProjectError> {
+        check_unique(&self.pages)?;
+        check_unique(&self.resources)?;
+        check_unique(&self.targets)?;
+        check_generated_sources(&self.pages, &self.generated)?;
+        Ok(ProjectDocument {
+            identity: ProjectIdentity {
+                id: self.id,
+                name: self.name,
+                preserved: Preserved::default(),
+            },
+            pages: self.pages,
+            resources: self.resources,
+            targets: self.targets,
+            generated: self.generated,
+            services: self.services,
+            network_preserved: Preserved::default(),
+            preserved: Preserved::default(),
+            unknown: Vec::new(),
+        })
+    }
+}
+
 fn encode_identity(identity: &ProjectIdentity) -> Json {
     let mut out = JsonObject::new();
     out.insert("id", Json::string(identity.id()));
@@ -1677,7 +1831,7 @@ fn encode_service(entry: &ServiceEntry) -> Json {
     Json::Object(out)
 }
 
-fn check_unique<T: Unique>(entries: &[T]) -> Result<(), ProjectError> {
+pub(crate) fn check_unique<T: Unique>(entries: &[T]) -> Result<(), ProjectError> {
     let mut seen = Vec::new();
     for entry in entries {
         let claim = entry.claim();
@@ -1691,8 +1845,9 @@ fn check_unique<T: Unique>(entries: &[T]) -> Result<(), ProjectError> {
 }
 
 /// Something that two entries may not both claim.
-trait Unique {
+pub(crate) trait Unique {
     fn claim(&self) -> String;
+
     fn claim_path(&self) -> String;
 }
 
@@ -1726,7 +1881,7 @@ impl Unique for TargetProfile {
     }
 }
 
-fn check_generated_sources(
+pub(crate) fn check_generated_sources(
     pages: &[PageEntry],
     generated: &[GeneratedTarget],
 ) -> Result<(), ProjectError> {
@@ -1745,13 +1900,16 @@ fn check_generated_sources(
 }
 
 /// Reads one object, remembering which members were interpreted.
-struct Reader<'a> {
+///
+/// Shared with [`crate::project::page`]: both documents of the format read JSON the same way, and a
+/// second reader would be a second opinion about what an unknown member is (principle #35).
+pub(crate) struct Reader<'a> {
     path: String,
     members: Vec<(String, &'a Json)>,
 }
 
 impl<'a> Reader<'a> {
-    fn object(path: impl Into<String>, value: &'a Json) -> Result<Self, ProjectError> {
+    pub(crate) fn object(path: impl Into<String>, value: &'a Json) -> Result<Self, ProjectError> {
         let path = path.into();
         let Some(object) = value.as_object() else {
             return Err(ProjectError::WrongType {
@@ -1773,11 +1931,11 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         &self.path
     }
 
-    fn member_path(&self, name: &str) -> String {
+    pub(crate) fn member_path(&self, name: &str) -> String {
         if self.path.is_empty() {
             name.to_owned()
         } else {
@@ -1785,7 +1943,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn entry_path(&self, name: &str, index: usize) -> String {
+    pub(crate) fn entry_path(&self, name: &str, index: usize) -> String {
         format!("{}[{index}]", self.member_path(name))
     }
 
@@ -1810,12 +1968,12 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn take(&mut self, name: &str) -> Option<&'a Json> {
+    pub(crate) fn take(&mut self, name: &str) -> Option<&'a Json> {
         let index = self.members.iter().position(|(member, _)| member == name)?;
         Some(self.members.remove(index).1)
     }
 
-    fn take_string(&mut self, name: &str) -> Result<Option<String>, ProjectError> {
+    pub(crate) fn take_string(&mut self, name: &str) -> Result<Option<String>, ProjectError> {
         match self.take(name) {
             None => Ok(None),
             Some(value) => match value.as_str() {
@@ -1829,7 +1987,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn required_string(&mut self, name: &str) -> Result<String, ProjectError> {
+    pub(crate) fn required_string(&mut self, name: &str) -> Result<String, ProjectError> {
         let path = self.member_path(name);
         match self.take_string(name)? {
             None => Err(ProjectError::MissingMember { path }),
@@ -1871,7 +2029,33 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn take_string_array(&mut self, name: &str) -> Result<Vec<String>, ProjectError> {
+    /// A whole number, required.
+    pub(crate) fn required_u64(&mut self, name: &str) -> Result<u64, ProjectError> {
+        let path = self.member_path(name);
+        let Some(value) = self.take(name) else {
+            return Err(ProjectError::MissingMember { path });
+        };
+        value.as_u64().ok_or(ProjectError::WrongType {
+            path,
+            expected: "a whole number",
+            found: value.kind(),
+        })
+    }
+
+    /// An optional array, so that a member a document leaves out means "empty" in one place.
+    pub(crate) fn take_array(&mut self, name: &str) -> Result<Option<&'a [Json]>, ProjectError> {
+        let path = self.member_path(name);
+        let Some(value) = self.take(name) else {
+            return Ok(None);
+        };
+        value.as_array().map(Some).ok_or(ProjectError::WrongType {
+            path,
+            expected: "an array",
+            found: value.kind(),
+        })
+    }
+
+    pub(crate) fn take_string_array(&mut self, name: &str) -> Result<Vec<String>, ProjectError> {
         let path = self.member_path(name);
         let Some(value) = self.take(name) else {
             return Ok(Vec::new());
@@ -1897,7 +2081,7 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    fn finish(self) -> Preserved {
+    pub(crate) fn finish(self) -> Preserved {
         Preserved {
             members: self
                 .members
@@ -1908,7 +2092,10 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn sub_object<'a>(reader: &mut Reader<'a>, name: &str) -> Result<Option<Reader<'a>>, ProjectError> {
+pub(crate) fn sub_object<'a>(
+    reader: &mut Reader<'a>,
+    name: &str,
+) -> Result<Option<Reader<'a>>, ProjectError> {
     let path = reader.member_path(name);
     let Some(value) = reader.take(name) else {
         return Ok(None);
@@ -1916,7 +2103,10 @@ fn sub_object<'a>(reader: &mut Reader<'a>, name: &str) -> Result<Option<Reader<'
     Ok(Some(Reader::object(path, value)?))
 }
 
-fn sub_objects<'a>(reader: &mut Reader<'a>, name: &str) -> Result<Vec<Reader<'a>>, ProjectError> {
+pub(crate) fn sub_objects<'a>(
+    reader: &mut Reader<'a>,
+    name: &str,
+) -> Result<Vec<Reader<'a>>, ProjectError> {
     let path = reader.member_path(name);
     let Some(value) = reader.take(name) else {
         return Ok(Vec::new());

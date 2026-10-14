@@ -33,6 +33,7 @@ use rust_widgets::widget::runtime;
 
 use super::clipboard::{ClipboardHost, ClipboardRead, ClipboardWrite, NativeClipboard};
 use super::dialog::{DialogMode, DialogOutcome, DialogRequest, FileChooser, FrameChooser};
+use super::notify::{Cause, NotificationCentre, Severity};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
 use super::paths::{HostDirectories, HostDirectory, ProjectRoot, SystemPaths};
 use super::permission::{PermissionService, Scope};
@@ -73,11 +74,14 @@ pub enum Capability {
     /// Project trust: an untrusted project runs no code, and the authorization that lets an agent
     /// run one can be withdrawn.
     ProjectTrust,
+    /// The notification centre: a real failure reaches it with a cause, a next step and a link, and
+    /// a repeat of the same failure counts instead of prompting again.
+    Notifications,
 }
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::NativeFileDialog,
         Self::ChooserFrame,
         Self::Clipboard,
@@ -88,6 +92,7 @@ impl Capability {
         Self::BackgroundExecutor,
         Self::ProcessTrees,
         Self::ProjectTrust,
+        Self::Notifications,
     ];
 
     /// The name this capability is known by in the artifact.
@@ -103,6 +108,7 @@ impl Capability {
             Self::BackgroundExecutor => "background-executor",
             Self::ProcessTrees => "process-trees",
             Self::ProjectTrust => "project-trust",
+            Self::Notifications => "notifications",
         }
     }
 }
@@ -214,6 +220,7 @@ impl ReadinessReport {
         checks.push(check_executor());
         checks.push(check_process_trees());
         checks.push(check_project_trust());
+        checks.push(check_notifications());
 
         Self {
             rustage_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1475,6 +1482,232 @@ fn check_project_trust() -> CapabilityCheck {
         },
         evidence,
     )
+}
+
+/// Whether a real failure reaches the notification centre with something to do about it.
+///
+/// This is T01.06's acceptance line — "an error has a cause and a next step, not just log output".
+/// It is exercised with values the host really produced: a task the executor failed, a process that
+/// exited non-zero, a program that does not exist, and a permission the gate refused. A centre fed
+/// hand-written strings would prove nothing, which is why none of the four is one.
+fn check_notifications() -> CapabilityCheck {
+    let centre = NotificationCentre::new();
+
+    // 1. A task the executor really ran and failed.
+    let failed_task = {
+        let executor = match Executor::new(ExecutorConfig::responsive()) {
+            Ok(executor) => executor,
+            Err(error) => {
+                return CapabilityCheck::new(
+                    Capability::Notifications,
+                    CheckStatus::Gap {
+                        reason: error.message(),
+                    },
+                    "the executor did not start, so no task could fail",
+                );
+            }
+        };
+        let id = executor.submit(
+            SubmitRequest::new(OwnerId::new(), "readiness: a task that fails"),
+            |_control: JobControl| JobOutcome::failed("readiness: this failure is deliberate"),
+        );
+        let record = match id {
+            Ok(id) => executor.wait(id, Duration::from_secs(5)),
+            Err(_) => None,
+        };
+        let succeeded = executor.submit(
+            SubmitRequest::new(OwnerId::new(), "readiness: a task that works"),
+            |_control: JobControl| JobOutcome::Succeeded,
+        );
+        let finished = match succeeded {
+            Ok(id) => executor.wait(id, Duration::from_secs(5)),
+            Err(_) => None,
+        };
+        executor.shutdown();
+        (record, finished)
+    };
+    let (failed_task, succeeded_task) = failed_task;
+
+    let task_notification = failed_task
+        .as_ref()
+        .and_then(Cause::for_task)
+        .map(|cause| centre.report(cause));
+    let info_notification = succeeded_task
+        .as_ref()
+        .and_then(Cause::for_task)
+        .map(|cause| centre.report(cause));
+
+    // 2. A process that really ran and exited non-zero, reported twice: the second time counts.
+    let process_cause = {
+        let service = PermissionService::new();
+        match service.permit(EffectClass::Command, Scope::Session, Principal::Human) {
+            Ok(permit) => OwnedProcess::spawn(
+                ProcessSpec::new("readiness: a command that fails", "sh").args([
+                    "-c",
+                    "echo 'readiness: this failure is deliberate' >&2; exit 9",
+                ]),
+                &permit,
+            )
+            .ok()
+            .map(|mut process| {
+                let exit = process.wait();
+                Cause::Process(process.outcome(exit))
+            }),
+            Err(_) => None,
+        }
+    };
+    let process_notification = process_cause.clone().map(|cause| centre.report(cause));
+    let repeated = process_cause.map(|cause| centre.report(cause));
+
+    // 3. A program that does not exist, so the work never started.
+    let program_notification = {
+        let service = PermissionService::new();
+        service
+            .permit(EffectClass::Command, Scope::Session, Principal::Human)
+            .ok()
+            .and_then(|permit| {
+                OwnedProcess::spawn(
+                    ProcessSpec::new("readiness: a missing program", "/nonexistent/rustage-tool"),
+                    &permit,
+                )
+                .err()
+            })
+            .map(|error| centre.report(Cause::Program(error)))
+    };
+
+    // 4. A permission the gate really refused.
+    let refusal_notification = Scratch::new("notify").ok().and_then(|project| {
+        let root = ProjectRoot::new(project.path()).ok()?;
+        PermissionService::new()
+            .permit(
+                EffectClass::Command,
+                Scope::Project(&root),
+                Principal::Human,
+            )
+            .err()
+            .map(|refusal| centre.report(Cause::Permission(refusal)))
+    });
+
+    let notifications = centre.notifications();
+    let every_one_actionable = notifications.iter().all(|notification| {
+        !notification.summary().is_empty()
+            && !notification.steps().is_empty()
+            && !notification.link().render().is_empty()
+    });
+    let rendered = centre.render_text();
+    let every_one_rendered = notifications
+        .iter()
+        .all(|notification| rendered.contains(&notification.summary()));
+    let severity_of = |reported: Option<crate::host::notify::Reported>| {
+        reported
+            .and_then(|reported| centre.notification(reported.id))
+            .map(|notification| notification.severity())
+    };
+    let (failed_task_severity, info_severity, refusal_severity) = (
+        severity_of(task_notification),
+        severity_of(info_notification),
+        severity_of(refusal_notification),
+    );
+    let retry_asks_first = task_notification
+        .and_then(|reported| centre.notification(reported.id))
+        .is_some_and(|notification| {
+            notification
+                .steps()
+                .iter()
+                .any(|step| step.requires_confirmation())
+        });
+    let process_occurrences = process_notification
+        .and_then(|reported| centre.notification(reported.id))
+        .map_or(0, |notification| notification.occurrences());
+    let repeat_counted = repeated.is_some_and(|reported| !reported.first_time)
+        && process_notification.is_some_and(|reported| reported.first_time)
+        && process_occurrences == 2;
+    // Five problems were reported and one of them twice, so the catalogue has to hold five entries.
+    let counts = centre.counts();
+    let link_kinds: Vec<&str> = notifications
+        .iter()
+        .map(|notification| notification.link().kind())
+        .collect();
+
+    let evidence = format!(
+        "a real failed task -> {} with a step that {}, and a {} link; a real task that worked -> {}; \
+         a real failing process reported twice -> {} entry with {process_occurrences} occurrences; a \
+         program that never started -> {}; a refusal on an untrusted project -> {}; the catalogue: \
+         {} notification(s) = {} error, {} warning, {} information, links {:?}; {}",
+        severity_word(failed_task_severity),
+        if retry_asks_first {
+            "asks first because re-running can repeat its effects"
+        } else {
+            "does not ask first"
+        },
+        notifications
+            .first()
+            .map_or("none", |notification| notification.link().kind()),
+        severity_word(info_severity),
+        if process_notification.is_some() { 1 } else { 0 },
+        severity_word(
+            program_notification
+                .and_then(|reported| centre.notification(reported.id))
+                .map(|notification| notification.severity()),
+        ),
+        severity_word(refusal_severity),
+        notifications.len(),
+        counts.errors,
+        counts.warnings,
+        counts.information,
+        link_kinds,
+        notifications
+            .first()
+            .map_or_else(String::new, |notification| notification.render()),
+    );
+
+    let mut missing = Vec::new();
+    if task_notification.is_none() || failed_task_severity != Some(Severity::Error) {
+        missing.push("a failed task did not become an error notification");
+    }
+    if !retry_asks_first {
+        missing.push("the failed task offered no step, or one that needs no confirmation");
+    }
+    if !every_one_actionable {
+        missing.push("a notification has no cause, no next step or no link");
+    }
+    if !every_one_rendered {
+        missing.push("a notification is missing from the rendered catalogue");
+    }
+    if info_notification.is_none() || info_severity != Some(Severity::Info) {
+        missing.push("a task that worked was not reported as information");
+    }
+    if refusal_notification.is_none() || refusal_severity != Some(Severity::Warning) {
+        missing.push("a permission refusal was not reported as a warning");
+    }
+    if program_notification.is_none() {
+        missing.push("a program that never started was not reported");
+    }
+    if !repeat_counted {
+        missing.push("a repeated failure raised a second notification instead of counting");
+    }
+    if notifications.len() != 5 {
+        missing.push("the catalogue does not hold one entry per distinct problem");
+    }
+
+    if missing.is_empty() {
+        return CapabilityCheck::new(Capability::Notifications, CheckStatus::Ready, evidence);
+    }
+    CapabilityCheck::new(
+        Capability::Notifications,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
+}
+
+/// A severity in one word, for an evidence line.
+fn severity_word(severity: Option<Severity>) -> &'static str {
+    match severity {
+        Some(severity) => severity.name(),
+        None => "nothing reported",
+    }
 }
 
 /// Waits for a pid to stop existing, returning what was last seen.

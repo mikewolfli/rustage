@@ -103,9 +103,12 @@ is observable, and that a job ignoring its deadline is reported as abandoned), p
 outside the session entirely — and requires the outsider to survive), and project trust (whose check
 requires an untrusted project to be refused *and* to write nothing, then trusts the project,
 authorizes the execution scope, runs the command and sees its marker file, then withdraws the
-authorization and requires the refusal back — printing the authorization record it produced) — and
-writes `host-readiness.json` with the evidence for each, ending **not ready when a capability is
-missing or when the environment cannot produce the evidence**. It exits 4 in that case, which is
+authorization and requires the refusal back — printing the authorization record it produced), and the
+notification centre (whose check feeds it a really failed task, a really failing process, a program that
+does not exist and a real permission refusal, and requires each to arrive with a cause, a next step and a
+link, with the repeated failure counted rather than raised again) — and writes `host-readiness.json` with
+the evidence for each, ending **not ready when a capability is missing or when the environment cannot
+produce the evidence**. It exits 4 in that case, which is
 `ExitCode::Reported` — "a real finding was reported" rather than a defect in the host. These probes do not establish that a
 window has displayed anything, that interaction states draw correctly, that a generated file
 compiles for a given profile, or that a GUI designer or any output target is

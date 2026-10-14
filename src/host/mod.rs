@@ -23,6 +23,7 @@
 //! | Tasks | [`tasks`] | the background executor, task ownership, the bounded queue, progress and the timeout/cancellation protocol |
 //! | Subprocesses | [`subprocess`] | starting a process, capturing its output, and taking down only the group this session created |
 //! | Permissions | [`permission`] | project trust, the one gate that decides what may run, the permits that gate mints, and the record of every decision |
+//! | Notifications | [`notify`] | the actionable half of a failure: its cause, its next step, the link to what it is about, and the de-duplication that keeps a repeat from prompting twice |
 //! | Readiness | [`readiness`] | what those services can actually do in this environment, with the evidence |
 //!
 //! Each service is its own module rather than another `platform` file, and each is behind a small
@@ -56,6 +57,7 @@ pub mod clipboard;
 pub mod dialog;
 pub mod error;
 pub mod log;
+pub mod notify;
 pub mod open_url;
 pub mod paths;
 pub mod permission;

@@ -57,6 +57,10 @@ order they are being closed in. It is a work list, not a statement of implemente
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and
   recorded, and every check `--probe-host` performs together with what it still cannot verify.
+- [The three-desktop probe record](plan/host-probe.md): which of the host's minimum capabilities —
+  startup, input, process and file, plus the platform services and the project scope it also has —
+  were measured on which desktop, with the Linux column's real results and the macOS and Windows
+  columns marked blocked for want of a test machine.
 - [Dependency contract probes, a pinned toolchain, the editor surface, the support matrix, the decision register, the shared contracts, the journey walkthrough and the benchmark environment](log/log-20261013-4.md):
   the fixed Rust toolchain, the re-checked dependency policy, runnable probes over the layout,
   generation, event, unbind and text-editor APIs, the revision the report is pinned to, the one

@@ -26,9 +26,11 @@
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use rust_widgets::core::Rect;
 use rust_widgets::widget::runtime;
 
 use super::clipboard::{ClipboardHost, ClipboardRead, ClipboardWrite, NativeClipboard};
@@ -52,6 +54,11 @@ const EVENT_DEADLINE: Duration = Duration::from_secs(5);
 /// One capability of the host's platform layer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Capability {
+    /// The baseline session starts, or refuses in a way that names why.
+    StartupSession,
+    /// Input reaches a mounted control: a pointer activation, a gesture that lands outside, and a
+    /// keyboard activation.
+    InputEvents,
     /// The operating system's own file chooser.
     NativeFileDialog,
     /// The painted chooser frame: mounting it, answering it, and cleaning it up.
@@ -85,7 +92,9 @@ pub enum Capability {
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
+        Self::StartupSession,
+        Self::InputEvents,
         Self::NativeFileDialog,
         Self::ChooserFrame,
         Self::Clipboard,
@@ -103,6 +112,8 @@ impl Capability {
     /// The name this capability is known by in the artifact.
     pub const fn name(self) -> &'static str {
         match self {
+            Self::StartupSession => "startup-session",
+            Self::InputEvents => "input-events",
             Self::NativeFileDialog => "native-file-dialog",
             Self::ChooserFrame => "chooser-frame",
             Self::Clipboard => "clipboard",
@@ -215,6 +226,8 @@ impl ReadinessReport {
         rust_widgets::init();
 
         let mut checks = Vec::with_capacity(Capability::ALL.len());
+        checks.push(check_startup_session());
+        checks.push(check_input_events());
         checks.push(check_native_dialog());
         checks.push(check_chooser_frame());
         checks.push(check_clipboard());
@@ -299,16 +312,31 @@ impl ReadinessReport {
             self.rustage_version,
         );
         let _ = writeln!(out, "session: {}", self.session);
+        // The column is 33 characters wide, and a check's evidence may span lines (a rendered
+        // notification does). Continuation lines are indented to the same column, so a multi-line
+        // evidence cannot break the table it lives in — the text rendering is what a person reads
+        // first, and the JSON keeps the raw strings.
+        const COLUMNS: usize = 20 + 13;
         for check in &self.checks {
+            let mut lines = check.evidence.split('\n');
             let _ = writeln!(
                 out,
                 "{:<20}{:<13}{}",
                 check.capability.name(),
                 check.status.as_str(),
-                check.evidence,
+                lines.next().unwrap_or_default(),
             );
-            if let Some(reason) = check.status.reason() {
-                let _ = writeln!(out, "{:<20}{:<13}{reason}", "", "");
+            for line in lines {
+                let _ = writeln!(out, "{}{line}", " ".repeat(COLUMNS));
+            }
+            for line in check
+                .status
+                .reason()
+                .unwrap_or_default()
+                .split('\n')
+                .filter(|line| !line.is_empty())
+            {
+                let _ = writeln!(out, "{:<COLUMNS$}{line}", "");
             }
         }
         let (ready, gap, unverified) = self.counts();
@@ -435,6 +463,172 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
+}
+
+/// Whether a baseline session starts on this machine, or refuses for a reason that names itself.
+///
+/// This is T01.08's "startup" probe: the host asking the platform for a bounded session and reading
+/// the outcome as a value. A refusal is a *finding*, not a pass — and on a machine whose backend is
+/// a preview/stub one there is no composited window, so the honest status is
+/// [`CheckStatus::NotVerified`] rather than a claim that the capability is missing.
+fn check_startup_session() -> CapabilityCheck {
+    let request = crate::host::startup::StartupRequest {
+        title: "rustage readiness".to_owned(),
+        width: 640,
+        height: 420,
+        exit_after: Duration::from_millis(120),
+    };
+    let report = crate::host::startup::launch(&request);
+    let evidence = format!("{} ({})", report.summary(), request_bounds(&request));
+
+    if report.is_started() {
+        return CapabilityCheck::new(Capability::StartupSession, CheckStatus::Ready, evidence);
+    }
+    let refusal = match &report.outcome {
+        crate::host::startup::StartupOutcome::Refused { reason, .. } => Some(reason.clone()),
+        crate::host::startup::StartupOutcome::Started { .. } => None,
+    };
+    match refusal {
+        // What the host means by this exit code is "the environment cannot do this, and that is not
+        // a code defect": a backend with no window needs a machine with a display, so the honest
+        // answer is that this environment cannot produce the evidence.
+        Some(reason)
+            if report.exit_code() == crate::host::error::ExitCode::EnvironmentUnavailable =>
+        {
+            CapabilityCheck::new(
+                Capability::StartupSession,
+                CheckStatus::NotVerified {
+                    reason: format!("this session has no composited window: {reason}"),
+                },
+                evidence,
+            )
+        }
+        Some(reason) => CapabilityCheck::new(
+            Capability::StartupSession,
+            CheckStatus::Gap { reason },
+            evidence,
+        ),
+        None => CapabilityCheck::new(
+            Capability::StartupSession,
+            CheckStatus::Gap {
+                reason: "the session did not start and gave no reason".to_owned(),
+            },
+            evidence,
+        ),
+    }
+}
+
+/// The bounds the startup check asked for, as part of its evidence.
+fn request_bounds(request: &crate::host::startup::StartupRequest) -> String {
+    format!(
+        "asked for {}x{} and an exit after {:?}",
+        request.width, request.height, request.exit_after,
+    )
+}
+
+/// Whether input reaches a mounted control on this backend.
+///
+/// T01.08's "input" probe, and deliberately two-sided: a click that activates proves a callback
+/// fires, while a gesture whose release lands *outside* proves the control is really hit-testing the
+/// pointer — the same pair the dependency documents for its own controls. A backend that delivered
+/// every event to every control would pass the first and fail the second.
+fn check_input_events() -> CapabilityCheck {
+    use rust_widgets::event::Event;
+    use rust_widgets::widget::capability::CapabilityValue;
+
+    const WIDTH: u32 = 120;
+    const HEIGHT: u32 = 32;
+
+    let clicked = Arc::new(AtomicUsize::new(0));
+    let canceled = Arc::new(AtomicUsize::new(0));
+    let button = rust_widgets::widget::capability::constructors::create_button(
+        Rect {
+            x: 0,
+            y: 0,
+            width: WIDTH,
+            height: HEIGHT,
+        },
+        "readiness",
+    );
+    let Some(clicked_signal) = button.event_signal_dyn("clicked") else {
+        return CapabilityCheck::new(
+            Capability::InputEvents,
+            CheckStatus::Gap {
+                reason: "a button in the pinned revision publishes no `clicked` signal".to_owned(),
+            },
+            "no signal to observe",
+        );
+    };
+    let counter = Arc::clone(&clicked);
+    clicked_signal.subscribe(Box::new(move |_value: &CapabilityValue| {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    if let Some(signal) = button.event_signal_dyn("canceled") {
+        let counter = Arc::clone(&canceled);
+        signal.subscribe(Box::new(move |_value: &CapabilityValue| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+    }
+    // The id the registry answers with, not the one the control had before mounting: a mounted
+    // control is addressed by what the registry gave it.
+    let Some(id) = runtime::register(button) else {
+        return CapabilityCheck::new(
+            Capability::InputEvents,
+            CheckStatus::Gap {
+                reason: "the widget registry refused the control".to_owned(),
+            },
+            "nothing could be mounted",
+        );
+    };
+
+    // A pointer activation inside the control.
+    let inside = (WIDTH as i32 / 2, HEIGHT as i32 / 2);
+    runtime::dispatch_event(id, &Event::mouse_press(inside.0, inside.1, 1));
+    runtime::dispatch_event(id, &Event::mouse_release(inside.0, inside.1, 1));
+    let after_inside = clicked.load(Ordering::SeqCst);
+
+    // The same gesture, released outside: the control must not activate.
+    runtime::dispatch_event(id, &Event::mouse_press(inside.0, inside.1, 1));
+    runtime::dispatch_event(
+        id,
+        &Event::mouse_release(WIDTH as i32 * 4, HEIGHT as i32 * 4, 1),
+    );
+    let after_outside = clicked.load(Ordering::SeqCst);
+    let canceled_seen = canceled.load(Ordering::SeqCst);
+
+    // A keyboard activation, which is the path a person without a pointer uses.
+    runtime::dispatch_event(id, &Event::key_press(13, 0));
+    let after_key = clicked.load(Ordering::SeqCst);
+
+    let _ = runtime::unregister(id);
+
+    let evidence = format!(
+        "a click inside -> clicked ({}); a release outside -> clicked ({}), canceled ({canceled_seen}); \
+         pressing Return -> clicked ({after_key})",
+        after_inside, after_outside,
+    );
+
+    let mut missing = Vec::new();
+    if after_inside != 1 {
+        missing.push("a pointer activation inside the control did not reach it");
+    }
+    if after_outside != after_inside {
+        missing.push("a release outside the control activated it, so it is not hit-testing");
+    }
+    if after_key != after_inside + 1 {
+        missing.push("a keyboard activation did not reach the control");
+    }
+
+    if missing.is_empty() {
+        return CapabilityCheck::new(Capability::InputEvents, CheckStatus::Ready, evidence);
+    }
+    CapabilityCheck::new(
+        Capability::InputEvents,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
 }
 
 /// Whether the operating system's own chooser can be opened.
@@ -1942,6 +2136,57 @@ pub fn system_path_summary() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{Capability, CapabilityCheck, CheckStatus, ReadinessReport};
+
+    /// A check whose evidence spans lines must not break the table it is printed in.
+    ///
+    /// Found by reading the output: a notification rendered inside an evidence string pushed the
+    /// following lines to the left margin, so the last check looked like prose. The columns of the
+    /// text rendering are what a person reads first, and the JSON keeps the raw strings.
+    #[test]
+    fn a_multi_line_evidence_stays_inside_its_column() {
+        let report = ReadinessReport {
+            rustage_version: "0.0.0".to_owned(),
+            host_os: "linux".to_owned(),
+            host_arch: "x86_64".to_owned(),
+            session: "a test session".to_owned(),
+            backend: "a test backend".to_owned(),
+            dependency_crate: "rust_widgets".to_owned(),
+            dependency_revision: "0".repeat(40),
+            checks: vec![CapabilityCheck::new(
+                Capability::InputEvents,
+                CheckStatus::Ready,
+                "first line\nsecond line",
+            )],
+        };
+
+        let text = report.render_text();
+
+        assert!(text.contains("first line\n"), "{text}");
+        assert!(
+            text.contains(&format!("{}second line", " ".repeat(33))),
+            "a continuation line has to line up with the column it continues:\n{text}",
+        );
+        assert!(!text.contains("\nsecond line"), "{text}");
+    }
+
+    /// Two-way drift gate between the probe's own checks and the per-host record.
+    ///
+    /// `docs/plan/host-probe.md` names each check under exactly one capability group, and
+    /// `tools/host-probe/check-host-probe.mjs` reads the names out of this file's
+    /// [`Capability::name`]. This is the other direction, from the code to the data: a check that
+    /// exists here and is missing from the record is a host capability nobody wrote down. The file
+    /// is committed, so a missing one fails the test rather than only the node gate.
+    #[test]
+    fn the_probe_record_names_every_check_this_report_can_produce() {
+        const RECORD: &str = include_str!("../../docs/plan/host-probe.json");
+        for capability in Capability::ALL {
+            assert!(
+                RECORD.contains(&format!("\"{}\"", capability.name())),
+                "{} is not named in docs/plan/host-probe.json",
+                capability.name(),
+            );
+        }
+    }
 
     #[test]
     fn the_report_covers_every_capability_exactly_once() {

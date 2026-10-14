@@ -75,6 +75,8 @@ node --test tools/traceability/check-traceability.test.mjs
 node tools/traceability/check-traceability.mjs
 node --test tools/capability/check-capability.test.mjs
 node tools/capability/check-capability.mjs
+node --test tools/host-probe/check-host-probe.test.mjs
+node tools/host-probe/check-host-probe.mjs
 git diff --check
 ```
 
@@ -95,7 +97,8 @@ highlighter, each tied to the pinned revision by a lockfile drift test. The comm
 `api-probes.json` under the directory you name and **exits non-zero while any probe reports a
 gap** — a gap is a recorded finding, not a pass, and the open ones are listed in
 [`docs/rw-feedback/`](docs/rw-feedback/feedback-20261013.md).
-`--probe-host` checks the host's own services — the operating system's file chooser, the painted
+`--probe-host` checks the host's own services — whether a baseline session starts, whether pointer and
+keyboard input reaches a mounted control, the operating system's file chooser, the painted
 chooser frame, the clipboard, the host directories, the URL handler, directory watching and the
 background executor (whose check proves that a submission returns while the job runs, that `cancelling`
 is observable, and that a job ignoring its deadline is reported as abandoned), process ownership
@@ -114,7 +117,14 @@ is missing or when the environment cannot produce the evidence**. It exits 4 in 
 `ExitCode::Reported` — "a real finding was reported" rather than a defect in the host. These probes do not establish that a
 window has displayed anything, that interaction states draw correctly, that a generated file
 compiles for a given profile, or that a GUI designer or any output target is
-implemented. Documentation checks
+implemented. The per-host probe record ([`docs/plan/host-probe.md`](docs/plan/host-probe.md))
+is checked against [`docs/plan/host-probe.json`](docs/plan/host-probe.json) and against the
+probe's own source: the check names are read out of `Capability::name` in
+`src/host/readiness.rs` and have to be covered exactly once, a cell may only claim `probed`
+on the host the record was produced on, and a blocked host has to say what is missing. It
+cannot run a macOS or Windows machine, so it proves the record is complete and consistent —
+not that its claims are true.
+Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required
 community files, roadmap task dependencies, declared roadmap counts, and task
 prerequisites across milestone assignments. They do not fetch external URLs,

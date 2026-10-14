@@ -1,0 +1,201 @@
+{
+  "schema": 1,
+  "dependency": {
+    "crate": "rust_widgets",
+    "revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+    "profile": "desktop"
+  },
+  "command": "cargo run -- --probe-host target/host",
+  "artifact": "target/host/host-readiness.json",
+  "checkSource": "src/host/readiness.rs",
+  "statuses": {
+    "probed": "在本机真实跑过该组检查，结果与证据写在同一行的 outcome/evidence 里",
+    "blocked": "没有可运行的测试机，因此没有测量；缺什么写在 missing 里",
+    "unsupported": "该平台或该构建不提供此能力，且有明确决策；不能因为换机器而变成可用"
+  },
+  "outcomes": {
+    "ready": "检查在本机跑通，行为与文档一致",
+    "gap": "本机缺此能力，或行为与文档不符；原因在证据里",
+    "not-verified": "本机无法产出此项证据（例如后端没有合成窗口）"
+  },
+  "groups": [
+    {
+      "id": "startup",
+      "wording": "启动：会话起得来，环境说得清楚",
+      "checks": ["startup-session", "host-directories"]
+    },
+    {
+      "id": "input",
+      "wording": "输入：指针与键盘事件真的到达已挂载的控件",
+      "checks": ["input-events"]
+    },
+    {
+      "id": "process",
+      "wording": "进程：后台任务可提交可取消，且只清理本会话拥有的进程树",
+      "checks": ["background-executor", "process-trees"]
+    },
+    {
+      "id": "file",
+      "wording": "文件：选择器（系统与自绘）、目录事件，以及选择结果是否指向真实文件",
+      "checks": ["native-file-dialog", "chooser-frame", "directory-watch"]
+    },
+    {
+      "id": "platform",
+      "wording": "平台服务：剪贴板、URL 处理程序与交接",
+      "checks": ["clipboard", "url-handler", "url-handover"]
+    },
+    {
+      "id": "scope",
+      "wording": "工程作用域与权限：信任、通知、关闭后不留悬挂服务",
+      "checks": ["project-trust", "notifications", "project-scope"]
+    }
+  ],
+  "hosts": [
+    {
+      "id": "linux",
+      "os": "linux",
+      "arch": "x86_64",
+      "triple": "x86_64-unknown-linux-gnu",
+      "backend": "linux-state-backend (PreviewOrStub)",
+      "environment": "Linux x86_64，后端 linux-state-backend，GUI 模式 PreviewOrStub（状态后端，无合成窗口）；rustc 1.98.1；证据见 docs/log/log-20261014-1.md §25",
+      "probedOn": true,
+      "missing": null
+    },
+    {
+      "id": "macos",
+      "os": "macos",
+      "arch": "aarch64",
+      "triple": "aarch64-apple-darwin",
+      "backend": null,
+      "environment": null,
+      "probedOn": false,
+      "missing": "没有可用的 macOS 测试机。log-20261013-4 的 macOS 证据来自 T01.01 的自身启动（后端 cocoa、模式 NativeInteractive），不是本探针的 14 项检查"
+    },
+    {
+      "id": "windows",
+      "os": "windows",
+      "arch": "x86_64",
+      "triple": "x86_64-pc-windows-msvc",
+      "backend": null,
+      "environment": null,
+      "probedOn": false,
+      "missing": "没有可用的 Windows 测试机；本构建也未在 Windows 上编译过"
+    }
+  ],
+  "results": [
+    {
+      "host": "linux",
+      "group": "startup",
+      "status": "probed",
+      "outcome": "not-verified",
+      "evidence": "startup-session -> not-verified：本机后端 linux-state-backend 报 gui mode PreviewOrStub，窗口不会被合成，因此不声称会话已启动；host-directories -> ready：四个宿主目录逐个探测，config/cache/data 缺席而 temp 可用，并在临时根下逐个创建成功"
+    },
+    {
+      "host": "linux",
+      "group": "input",
+      "status": "probed",
+      "outcome": "ready",
+      "evidence": "input-events -> ready：控件内部按下并抬起 -> clicked(1)；按下后在控件外抬起 -> clicked 仍为 1 且 canceled(1)（证明真的做了命中测试）；按 Return -> clicked(2)"
+    },
+    {
+      "host": "linux",
+      "group": "process",
+      "status": "probed",
+      "outcome": "ready",
+      "evidence": "background-executor -> ready：提交在 8µs 返回而任务仍在跑，cancelling 可观察，配合的 job 被取消，无视 30ms 期限的 job 被记为 abandoned，关闭后拒绝新工作；process-trees -> ready：本会话启动的进程与其后代被整组清理，同名但本会话之外启动的进程存活"
+    },
+    {
+      "host": "linux",
+      "group": "file",
+      "status": "probed",
+      "outcome": "gap",
+      "evidence": "native-file-dialog -> gap：固定修订在这三个桌面后端上不创建文件对话框控件（create_file_dialog 返回 0），因此拿不到系统自己的选择器；chooser-frame -> ready：挂载、Return 选中真实路径、Escape 取消、无选择时返回被拒；directory-watch -> ready：目录内一次写入产生 1 个事件，监听不存在的目录被明确拒绝"
+    },
+    {
+      "host": "linux",
+      "group": "platform",
+      "status": "probed",
+      "outcome": "not-verified",
+      "evidence": "clipboard -> ready：写回一个 35 字符的非 ASCII 串并读回成功（由状态后端回答）；url-handler -> ready：xdg-open 在 PATH 上，选项形状与无 scheme 的目标在启动前被拒；url-handover -> not-verified：探针不得打开用户的浏览器，交接只在宿主自己的测试里对受控处理程序验证"
+    },
+    {
+      "host": "linux",
+      "group": "scope",
+      "status": "probed",
+      "outcome": "ready",
+      "evidence": "project-trust -> ready：未信任工程被拒且没有写出标记文件，信任后仍需授权范围，撤销授权后再次被拒，产物里带完整授权记录；notifications -> ready：真实失败的任务/进程、缺失程序与真实权限拒绝各自成为带原因与下一步的通知，重复只计数；project-scope -> ready：两个工程各自启动一个进程，关闭其一后它的进程消失、另一个存活、关闭的作用域句柄拒绝新工作，且关闭顺序被如实回报"
+    },
+    {
+      "host": "macos",
+      "group": "startup",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "group": "input",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "group": "process",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "group": "file",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "group": "platform",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "group": "scope",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "group": "startup",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "group": "input",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "group": "process",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "group": "file",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "group": "platform",
+      "status": "blocked",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "group": "scope",
+      "status": "blocked",
+      "reason": null
+    }
+  ]
+}

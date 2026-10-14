@@ -29,6 +29,7 @@ pub mod files;
 pub mod format;
 pub mod import;
 pub mod json;
+pub mod kit;
 pub mod page;
 pub mod recent;
 pub mod session;

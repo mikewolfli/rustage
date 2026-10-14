@@ -120,6 +120,7 @@ cargo run -- --validate target/new-project/project.json --rescan target/scan.jso
 cargo run -- --new-workspace target/area            # 一份工作区文档，暂无成员
 cargo run -- --workspace target/area/workspace.json --add app=app --apply --trust   # 添加成员；目录必须已经在那里
 cargo run -- --workspace target/area/workspace.json --file app:pages/main.json      # 按成员区分同名文件
+cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # 工具组合里缺什么
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

@@ -147,6 +147,12 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Kit(options) => {
+            if !kit(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Workspace(options) => {
             if !workspace(&options) {
                 crate::host::log::flush();
@@ -527,6 +533,160 @@ fn stop_without_writing(session: &ProjectSession, before: &[u8]) -> bool {
         println!("rustage: and the document is not what it was, which it must be");
     }
     false
+}
+
+/// Shows which tools a kit is made of, and what this machine has of them (task T02.10).
+///
+/// Showing runs nothing. `--diagnose` asks this machine about each member — which runs the programs
+/// the kit names, so it asks the kit's directory question first and takes the permission the decision
+/// table gives a command — and `--triple` is the output the kit is asked about. The exit code says
+/// whether anything was *decided* to be wrong: "nobody looked" leaves the kit incomplete and is not
+/// reported as a failure, because a script that treats it as one would be told to fix what may be
+/// fine.
+fn kit(options: &crate::cli::KitOptions) -> bool {
+    use crate::project::kit::{Found, Kit, Observed, Probe};
+    use crate::project::session::{TrustDecision, TrustQuestion};
+
+    let permissions = PermissionService::new();
+    let kit = match Kit::read(&options.path) {
+        Ok(kit) => kit,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    for line in kit.render() {
+        println!("{line}");
+    }
+
+    let mut observed = Observed::nothing();
+    if options.diagnose {
+        let question = TrustQuestion::read(kit.root());
+        println!("{}", question.ask());
+        let outcome = crate::project::session::answer(
+            &question,
+            &permissions,
+            if options.trust {
+                TrustDecision::Trust
+            } else {
+                TrustDecision::DoNotTrust
+            },
+        );
+        println!("answer: {}", outcome.message());
+        if !outcome.trusted() {
+            return false;
+        }
+        if let Err(refusal) = permissions.permit(
+            crate::contracts::permission::EffectClass::Command,
+            crate::host::permission::Scope::Project(kit.root()),
+            crate::contracts::permission::Principal::Human,
+        ) {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+        for member in kit.members() {
+            let found = match member.probe() {
+                Probe::Program { command, argument } => {
+                    ask_the_program(&permissions, kit.root(), command, argument.as_deref())
+                }
+                Probe::Path { written } => {
+                    let path = kit.root().resolve_for_creation(written);
+                    match path {
+                        Ok(path) if path.exists() => Found::Value(path.display().to_string()),
+                        Ok(path) => Found::Nothing {
+                            reason: format!("there is nothing at {}", path.display()),
+                        },
+                        Err(error) => Found::NotChecked {
+                            reason: error.message(),
+                        },
+                    }
+                }
+                Probe::Variable { name } => match std::env::var(name) {
+                    Ok(value) if value.is_empty() => Found::Nothing {
+                        reason: format!("the {name} variable is set to nothing"),
+                    },
+                    Ok(value) => Found::Value(value),
+                    Err(_) => Found::Nothing {
+                        reason: format!("the {name} variable is not set"),
+                    },
+                },
+                Probe::Undetermined { reason } => Found::NotChecked {
+                    reason: reason.clone(),
+                },
+            };
+            observed = observed.with(member.name(), found);
+        }
+    } else {
+        println!(
+            "answer: not asked; nothing was run, so every member is reported as not checked \
+             (use --diagnose --trust to ask this machine)"
+        );
+    }
+
+    let diagnosis = kit.diagnose(&observed, options.triple.as_deref());
+    for line in diagnosis.render() {
+        println!("{line}");
+    }
+    !diagnosis.has_decided_problems()
+}
+
+/// Runs one program a kit names, and reads a version out of what it printed.
+///
+/// The permit is the caller's: this does not decide whether a program may be started. A program that
+/// cannot be started, or that ends badly, is a finding about the machine rather than a failure of
+/// the report, so it is returned as `nothing` with what happened.
+fn ask_the_program(
+    permissions: &PermissionService,
+    root: &crate::host::paths::ProjectRoot,
+    command: &str,
+    argument: Option<&str>,
+) -> crate::project::kit::Found {
+    use crate::project::kit::{Found, version_like};
+
+    let mut spec = crate::host::subprocess::ProcessSpec::new(
+        format!(
+            "{command}{}",
+            argument
+                .map(|argument| format!(" {argument}"))
+                .unwrap_or_default()
+        ),
+        command,
+    );
+    if let Some(argument) = argument {
+        spec = spec.arg(argument);
+    }
+    let permit = match permissions.permit(
+        crate::contracts::permission::EffectClass::Command,
+        crate::host::permission::Scope::Project(root),
+        crate::contracts::permission::Principal::Human,
+    ) {
+        Ok(permit) => permit,
+        Err(refusal) => {
+            return Found::NotChecked {
+                reason: refusal.message(),
+            };
+        }
+    };
+    let mut process = match crate::host::subprocess::OwnedProcess::spawn(spec, &permit) {
+        Ok(process) => process,
+        Err(error) => {
+            return Found::Nothing {
+                reason: format!("`{command}` could not be started: {error}"),
+            };
+        }
+    };
+    let exit = process.wait();
+    let output = process.output_so_far();
+    let text = format!("{}\n{}", output.stdout, output.stderr);
+    match (exit.is_success(), version_like(&text)) {
+        (true, Some(version)) => Found::Value(version),
+        (true, None) => Found::Nothing {
+            reason: format!("`{command}` printed no version this build could read"),
+        },
+        (false, _) => Found::Nothing {
+            reason: format!("`{command}` ended with {}", exit.message()),
+        },
+    }
 }
 
 /// Shows a workspace, and plans or carries out one change to its members (task T02.09).

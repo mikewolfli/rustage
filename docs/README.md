@@ -68,7 +68,9 @@ order they are being closed in. It is a work list, not a statement of implemente
   keeps the file that was read, and the validation and re-scan T02.08 asks for, which answers every
   need with present/missing/not-checked/refused and prints the project's own bytes unchanged as its
   last line, and the workspace T02.09 asks for, whose files are identified by the member that names
-  them and whose member removal touches no directory; the
+  them and whose member removal touches no directory, and the versioned kit T02.10 asks for, whose
+  members declare the triples they can serve and which is asked about a triple rather than a
+  profile; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

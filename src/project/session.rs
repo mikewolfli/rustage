@@ -239,6 +239,19 @@ pub struct ToolVersion {
 }
 
 impl ToolVersion {
+    /// Reads the version out of the line a program printed.
+    ///
+    /// `cargo 1.99.0 (5f94df478 2026-08-27)`: the version is the word after the program's name, not
+    /// the last word on the line, which is a commit date. A line with one word is that word, which
+    /// is what a program that prints only a version looks like.
+    pub fn from_line(program: &str, line: &str) -> Self {
+        Self {
+            program: program.to_owned(),
+            version: line.split_whitespace().nth(1).unwrap_or(line).to_owned(),
+            line: line.to_owned(),
+        }
+    }
+
     /// The program's name.
     pub fn program(&self) -> &str {
         &self.program
@@ -566,18 +579,7 @@ impl ProjectSession {
                     reason: format!("it ended with {} and said `{}`", exit.message(), line),
                 });
             }
-            // `cargo 1.98.1 (hash 2026-08-05)`: the version is the word after the program, not the
-            // last word on the line, which is a commit date.
-            let version = line
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or(line.as_str())
-                .to_owned();
-            Ok(ToolVersion {
-                program: program.to_owned(),
-                version,
-                line,
-            })
+            Ok(ToolVersion::from_line(program, &line))
         };
 
         let cargo = read("cargo");

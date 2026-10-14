@@ -63,6 +63,8 @@ pub enum Command {
     Workspace(WorkspaceOptions),
     /// Creates an empty workspace document in a directory (task T02.09).
     NewWorkspace(NewWorkspaceOptions),
+    /// Shows which tools a kit is made of, and what this machine has of them (task T02.10).
+    Kit(KitOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -164,6 +166,37 @@ impl ImportOptions {
             path: path.into(),
             apply: false,
             check_backup: false,
+            trust: false,
+        }
+    }
+}
+
+/// How a kit should be diagnosed (task T02.10).
+///
+/// Showing a kit runs nothing. `diagnose` asks this machine about each member — which runs the
+/// programs the kit names, so it needs the directory to be trusted and the permission the decision
+/// table gives a command — and `triple` is the output the kit is asked about. Which profile is being
+/// built is not part of the question: that belongs to the project's configuration, and a kit is a
+/// combination of tools.
+#[derive(Debug, PartialEq, Eq)]
+pub struct KitOptions {
+    /// The kit document.
+    pub path: PathBuf,
+    /// Whether to ask this machine about each member.
+    pub diagnose: bool,
+    /// The output triple to ask about, when there is one.
+    pub triple: Option<String>,
+    /// Whether the person answering the directory's question said yes.
+    pub trust: bool,
+}
+
+impl KitOptions {
+    /// Options that show a kit and ask nothing.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            diagnose: false,
+            triple: None,
             trust: false,
         }
     }
@@ -624,6 +657,33 @@ where
             options.trust = trust;
             return Ok(Command::FileOp(options));
         }
+        "--kit" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = KitOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--diagnose" => options.diagnose = true,
+                    "--trust" => options.trust = true,
+                    "--triple" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(triple) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if triple.trim().is_empty() {
+                            return Err(ParseError { argument: value });
+                        }
+                        options.triple = Some(triple.trim().to_owned());
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Kit(options));
+        }
         "--new-workspace" => {
             let Some(directory) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -854,6 +914,7 @@ pub fn help_text() -> &'static str {
             rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n\
             rustage --validate <file> [--diagnose] [--trust]\n\
                                  [--record <file> | --rescan <file>]\n\
+            rustage --kit <file> [--diagnose] [--trust] [--triple <triple>]\n\
             rustage --new-workspace <directory> [--name <name>]\n\
             rustage --workspace <file> [--add <name>=<root> | --remove <name> |\n\
                                        --activate <name> | --file <member>:<path>]\n\
@@ -905,6 +966,11 @@ pub fn help_text() -> &'static str {
                                      later --rescan has something to compare against\n\
        --rescan <file>               With --validate, compare the project with the scan recorded in\n\
                                      <file> and name what appeared, vanished or changed\n\
+       --kit <file>                  Show which tools a kit is made of, and what this machine has\n\
+                                     of them; --diagnose asks it about each member (runs the\n\
+                                     programs the kit names), --triple says which output to ask about\n\
+       --triple <triple>             With --kit, the output triple to ask about: a kit never\n\
+                                     carries which profile is being built\n\
        --new-workspace <directory>   Create a workspace document in a directory, with no members\n\
                                      yet; --name <name> (default: the directory)\n\
        --workspace <file>            Show a workspace: its members, what each holds, and its files\n\
@@ -926,7 +992,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions,
+        Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions, KitOptions,
         LaunchOptions, NewProjectOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
         WorkspaceAction, WorkspaceOptions, log_level_of, parse,
     };
@@ -1125,6 +1191,39 @@ mod tests {
         assert!(parse(["\u{2d}\u{2d}import"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_kit_options() {
+        assert_eq!(
+            parse(["--kit", "area/kit.json"]),
+            Ok(Command::Kit(KitOptions::new(PathBuf::from(
+                "area/kit.json"
+            ))))
+        );
+        assert_eq!(
+            parse([
+                "--kit",
+                "area/kit.json",
+                "--diagnose",
+                "--trust",
+                "--triple",
+                "x86_64-unknown-linux-gnu",
+            ]),
+            Ok(Command::Kit(KitOptions {
+                path: PathBuf::from("area/kit.json"),
+                diagnose: true,
+                trust: true,
+                triple: Some("x86_64-unknown-linux-gnu".to_owned()),
+            }))
+        );
+
+        // A missing path, an unknown flag, an empty triple and a value that is not there are usage
+        // errors: none of them can be read as "it is fine", which is what a silent default would be.
+        assert!(parse(["--kit"]).is_err());
+        assert!(parse(["--kit", "area/kit.json", "--wat"]).is_err());
+        assert!(parse(["--kit", "area/kit.json", "--triple", "  "]).is_err());
+        assert!(parse(["--kit", "area/kit.json", "--triple"]).is_err());
     }
 
     #[test]

@@ -132,6 +132,7 @@ cargo run -- --validate target/new-project/project.json --rescan target/scan.jso
 cargo run -- --new-workspace target/area            # one workspace document, no members yet
 cargo run -- --workspace target/area/workspace.json --add app=app --apply --trust   # a member; the directory is already there
 cargo run -- --workspace target/area/workspace.json --file app:pages/main.json      # one file, told apart by its member
+cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # which tools, and what is missing
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

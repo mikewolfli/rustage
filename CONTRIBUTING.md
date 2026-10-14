@@ -76,6 +76,8 @@ cargo run -- --workspace target/area/workspace.json --add app=app --apply --trus
 cargo run -- --workspace target/area/workspace.json --remove lib --apply --trust    # the directory stays where it is
 cargo run -- --workspace target/area/workspace.json --file lib:pages/main.json      # which of two same-named files this is
 cargo run -- --workspace target/area/workspace.json --activate lib                  # which member is active, on this machine
+cargo run -- --kit target/area/kit.json        # which tools the kit is made of; runs nothing
+cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # asks this machine
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -307,6 +309,28 @@ root and the member's own identity — there is no second notion of either here.
 directory somebody moved is still the member that owns its paths, and it says so. The tree panel, the
 member explorer and the drag-and-drop that would drive this belong to the shell (T04/T09); reading
 `Cargo.toml` to discover members, features and the dependency tree belongs to T02.11.
+
+`--kit <file>` is where this milestone's seventh acceptance line lives: "the kit is separate from the
+output profile and target triple, and a missing member and an incompatible combination are diagnosed
+explicitly". A kit is a **versioned** combination of tools — a toolchain, an SDK, a debugger, a device
+and the environment — written down in one document, and the separation is in the type: `Kit::diagnose`
+is asked about a *triple*, never about a profile, because a tool has no opinion about which profile is
+being built; members declare the triples they can serve explicitly (`*` or a list, so "any" and "none"
+are never inferred from an omitted field); and a document that writes a `profile` where a member
+belongs is refused with that reason rather than read as if it had been understood. Showing a kit runs
+nothing and says so; `--diagnose` asks this machine about each member — the directory's question is
+asked first and the `run-command` permission is taken, because a probe that is a program is a program
+this build starts — reading versions out of a program's own output by one stated rule (`version_like`:
+the first run of digits and dots that holds a dot). What a probe can answer decides what may be
+demanded of it: a path can say something is there and cannot say which version it is, so a version
+requirement beside a path probe is refused instead of silently satisfied. The findings keep three
+different sentences apart — `not checked` (nobody asked, with the reason), `missing` (somebody looked
+and found nothing), `not the version the kit asks for` — and a version this build cannot compare
+(`1.99.0-nightly`) is `not checked` rather than met or unmet. Two more rules are document refusals
+rather than later surprises: one member per role (two toolchains are a question, not a combination)
+and a version requirement in one of three shapes. The command's exit code reports whether anything was
+*decided* to be wrong, so "nobody looked" does not come out as a failure. The Kit/feature/target UI
+belongs to the shell (T18.01), and Cargo members, features and the dependency tree belong to T02.11.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

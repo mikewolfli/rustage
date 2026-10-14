@@ -130,6 +130,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-WORKSPACE-KEYED-BY-MEMBER | 工作区里每个文件由「成员 + 该成员写出的路径」标识：同一路径在两个成员中是两个文件；离开本成员仍留在工作区内的引用按它落地的成员命名，越出工作区的引用被拒绝，落在工作区内却没有成员拥有的路径单独报告 | `C-PROJECT` | [`src/project/workspace.rs`](../../src/project/workspace.rs) | `a_file_is_identified_by_its_member_and_not_by_its_path_alone` | 结构 + 测试 |
 | INV-MEMBER-REMOVAL-TOUCHES-NOTHING | 添加与移除成员只改工作区文档：不创建也不删除任何目录；被别的成员文档引用时先阻断并逐条列出引用；写之前比对磁盘上仍是读到的那一份，冲突则一个字节都不写 | `C-PROJECT` | [`src/project/workspace.rs`](../../src/project/workspace.rs) | `removing_a_member_writes_the_document_and_touches_no_directory` | 测试 |
 | INV-WORKSPACE-ACTIVE-IS-MACHINE-LOCAL | 活动成员是本机状态：按工作区身份记录在宿主配置目录，共享文档不因切换成员而改变；记录里的成员已经不在了则如实报告，不改指另一个成员 | `C-PROJECT` | [`src/project/workspace.rs`](../../src/project/workspace.rs) | `the_active_member_is_machine_state_and_belongs_to_one_workspace` | 结构 + 测试 |
+| INV-KIT-IS-NOT-AN-OUTPUT | Kit 只描述工具组合，从不描述输出：文档里没有 profile/triple 作为它自己的属性（写进来会被读入时拒绝），输出只以 triple 提问，成员各自显式声明能服务哪些 triple | `C-PROJECT` | [`src/project/kit.rs`](../../src/project/kit.rs) | `a_kit_is_not_an_output_and_a_profile_in_it_is_refused` | 结构 + 测试 |
+| INV-KIT-DIAGNOSES-EXPLICITLY | 缺成员、版本不符、无法服务与不兼容组合都显式给出，且绝不互相冒充：「没人问过」不是缺，无法比较的版本不判满足也不判不满足，必需角色没有成员时明说无法构建 | `C-PROJECT` | [`src/project/kit.rs`](../../src/project/kit.rs) | `not_asked_a_missing_member_and_a_wrong_version_are_three_different_findings` | 结构 + 测试 |
+| INV-KIT-IS-VERSIONED-AND-KEYED-BY-ROLE | Kit 自带版本（两个版本是两个 Kit），成员按角色唯一：同一角色两个成员、角色不认识、版本要求读不出来、路径探针配版本要求，都在读入时拒绝，不留到解析时按「找到哪个算哪个」决定 | `C-PROJECT` | [`src/project/kit.rs`](../../src/project/kit.rs) | `a_document_that_cannot_be_a_combination_is_refused_when_it_is_read` | 测试 |
 
 ## 不变量的补充说明
 
@@ -169,6 +172,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-WORKSPACE-KEYED-BY-MEMBER | WorkspaceFile 的地址就是 member:path，解析时没有成员一律拒绝（两条同名的文件在别的层看来完全一样）；文件表按（成员, 路径）去重，所以页面文档与 startup 指向同一文件时是一行；CrossRoot 四态：WithinMember / AnotherMember{成员,落地路径} / Outside{原因} / NoMemberOwns{路径}，最后一条正是「加成员」能回答的；判断是否留在本成员用路径层自己的 resolve_for_creation（同一条越界规则，且不要求父目录已存在），因此「即将创建的文件」不会被读成「跑到别处去了」 |
 | INV-MEMBER-REMOVAL-TOUCHES-NOTHING | 成员是文档里的一行，所以移除不碰目录，用例在移除后逐字节比对那个目录里原来的文件；添加只接受一个「已经在那里的目录」（命名一个 root 不等于创建它，造目录属于创建路径）；被引用时的阻断项与引用一起给出（Referrer），不做静默修正；受影响时不写盘由用例直接断言（文档原文未变）；写路径是唯一一次写：先比对 original 再原子替换，失败即「工作区原样」而不是半个状态 |
 | INV-WORKSPACE-ACTIVE-IS-MACHINE-LOCAL | ActiveMember 四态（Named / MemberIsGone / AnotherWorkspace / NeverChosen）与 T02.06 的活动目标同一套思路与同一套判定词；WorkspaceState 是按工作区身份键控的本机文件（未写入者不写盘、原子写、更新构建的记录拒绝读），用例断言激活后工作区文档里没有任何「活动成员」字样；未知成员名被拒绝而不是记录一个空选择 |
+| INV-KIT-IS-NOT-AN-OUTPUT | Kit::diagnose 只接一个 triple，没有任何参数是 profile；成员用 Serves（Every 或一组 triple，两种都写出来，不靠省略字段表达「都行」）；不认识的成员在读入时被拒绝并说明「哪个 profile 由工程配置回答」，因此「把 profile 塞进 kit」不是被忽略而是报错；报告的每一行都写着这一点 |
+| INV-KIT-DIAGNOSES-EXPLICITLY | Finding 五态（Ok/Missing/Version/NotChecked/CannotServe）合并任意两个都会把「没查」说成「没有」或把「版本不符」说成「没装」；Observed 里没有记录的成员返回 NotChecked 而不是 Nothing，理由原文保留；Requirement::holds 对无法比较的版本返回 None → NotChecked，并把版本与要求都写出来；必需角色（只有 toolchain）缺成员时报告里带「nothing can be built without one」；命令的退出码看 has_decided_problems（被判定为错），不看 is_complete，所以「没查过」不会冒充失败 |
+| INV-KIT-IS-VERSIONED-AND-KEYED-BY-ROLE | identity 的三个成员是 id/name/version，version 为空即拒绝；角色用 ProjectError::Duplicate 拒绝第二个同角色成员（两个 toolchain 是提问而不是组合）；版本要求只有 `*`、`1.2.3`、`>=1.2.3` 三种形状，其它形状在读入时报出写法；路径探针的「版本」只能是 `*`，因为路径无法回答版本，能检查的要求才准写进去 |
 
 ## 为什么权限表要交叉校验
 

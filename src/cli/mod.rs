@@ -8,7 +8,7 @@
 mod command;
 
 pub use command::{
-    Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions,
+    Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions, KitOptions,
     NewWorkspaceOptions, OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions,
     help_text, log_level_of, parse,
 };

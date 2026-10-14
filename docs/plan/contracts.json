@@ -485,6 +485,33 @@
       "test": "the_active_member_is_machine_state_and_belongs_to_one_workspace",
       "evidence": "结构 + 测试",
       "note": "ActiveMember 四态（Named / MemberIsGone / AnotherWorkspace / NeverChosen）与 T02.06 的活动目标同一套思路与同一套判定词；WorkspaceState 是按工作区身份键控的本机文件（未写入者不写盘、原子写、更新构建的记录拒绝读），用例断言激活后工作区文档里没有任何「活动成员」字样；未知成员名被拒绝而不是记录一个空选择"
+    },
+    {
+      "id": "INV-KIT-IS-NOT-AN-OUTPUT",
+      "statement": "Kit 只描述工具组合，从不描述输出：文档里没有 profile/triple 作为它自己的属性（写进来会被读入时拒绝），输出只以 triple 提问，成员各自显式声明能服务哪些 triple",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/kit.rs",
+      "test": "a_kit_is_not_an_output_and_a_profile_in_it_is_refused",
+      "evidence": "结构 + 测试",
+      "note": "Kit::diagnose 只接一个 triple，没有任何参数是 profile；成员用 Serves（Every 或一组 triple，两种都写出来，不靠省略字段表达「都行」）；不认识的成员在读入时被拒绝并说明「哪个 profile 由工程配置回答」，因此「把 profile 塞进 kit」不是被忽略而是报错；报告的每一行都写着这一点"
+    },
+    {
+      "id": "INV-KIT-DIAGNOSES-EXPLICITLY",
+      "statement": "缺成员、版本不符、无法服务与不兼容组合都显式给出，且绝不互相冒充：「没人问过」不是缺，无法比较的版本不判满足也不判不满足，必需角色没有成员时明说无法构建",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/kit.rs",
+      "test": "not_asked_a_missing_member_and_a_wrong_version_are_three_different_findings",
+      "evidence": "结构 + 测试",
+      "note": "Finding 五态（Ok/Missing/Version/NotChecked/CannotServe）合并任意两个都会把「没查」说成「没有」或把「版本不符」说成「没装」；Observed 里没有记录的成员返回 NotChecked 而不是 Nothing，理由原文保留；Requirement::holds 对无法比较的版本返回 None → NotChecked，并把版本与要求都写出来；必需角色（只有 toolchain）缺成员时报告里带「nothing can be built without one」；命令的退出码看 has_decided_problems（被判定为错），不看 is_complete，所以「没查过」不会冒充失败"
+    },
+    {
+      "id": "INV-KIT-IS-VERSIONED-AND-KEYED-BY-ROLE",
+      "statement": "Kit 自带版本（两个版本是两个 Kit），成员按角色唯一：同一角色两个成员、角色不认识、版本要求读不出来、路径探针配版本要求，都在读入时拒绝，不留到解析时按「找到哪个算哪个」决定",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/kit.rs",
+      "test": "a_document_that_cannot_be_a_combination_is_refused_when_it_is_read",
+      "evidence": "测试",
+      "note": "identity 的三个成员是 id/name/version，version 为空即拒绝；角色用 ProjectError::Duplicate 拒绝第二个同角色成员（两个 toolchain 是提问而不是组合）；版本要求只有 `*`、`1.2.3`、`>=1.2.3` 三种形状，其它形状在读入时报出写法；路径探针的「版本」只能是 `*`，因为路径无法回答版本，能检查的要求才准写进去"
     }
   ]
 }

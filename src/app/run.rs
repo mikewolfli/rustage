@@ -18,6 +18,7 @@ use crate::host::permission::PermissionService;
 use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
 use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
+use crate::project::entries::{ProjectEntries, ProjectTree};
 use crate::project::format::{ProjectContent, ProjectFile};
 use crate::project::recent::RecentProjects;
 use crate::project::session::{ProjectSession, SessionState, TrustDecision};
@@ -112,6 +113,18 @@ pub fn run(command: Command) {
         }
         Command::OpenProject(options) => {
             if !open_project(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::ProjectTree(path) => {
+            if !show_tree(&path) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::DropEntry(options) => {
+            if !drop_entry(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
@@ -232,6 +245,136 @@ fn open_project(options: &crate::cli::OpenProjectOptions) -> bool {
         // Read-only is a state this build reports and honours, not a failure: the acceptance is that
         // the project *can* be opened read-only.
         SessionState::ReadOnly { .. } => true,
+    }
+}
+
+/// Shows what a project has, classified, and which entry it starts with.
+fn show_tree(path: &Path) -> bool {
+    let session = match ProjectSession::open(path) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    let Some(document) = session.file().document() else {
+        println!(
+            "rustage: {} is {}, so what it holds cannot be classified",
+            session.path().display(),
+            session.file().verdict().message()
+        );
+        return false;
+    };
+    let root = session.root().as_path().to_string_lossy().into_owned();
+    let tree = ProjectTree::of(document, Some(&root));
+    for line in tree.render() {
+        println!("{line}");
+    }
+    println!("entries: {}", ProjectEntries::of(document).len());
+    for line in ProjectEntries::of(document).render() {
+        println!("  {line}");
+    }
+    println!("format: {}", session.file().verdict().message());
+    if let Some(startup) = document.startup_written() {
+        println!("startup: {startup}");
+    } else {
+        println!("startup: none chosen");
+    }
+    true
+}
+
+/// Removes an entry, fixing what points at it or refusing to remove it.
+///
+/// The removal goes through the same decisions every other effect goes through: the project has to
+/// be trusted (a person's answer, `--trust`) and writing a file needs the permission the decision
+/// table gives it. Nothing is written when either says no.
+fn drop_entry(options: &crate::cli::DropEntryOptions) -> bool {
+    let permissions = PermissionService::new();
+    let session = match ProjectSession::open(&options.path) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    println!("{}", session.question().ask());
+    let outcome = session.decide(
+        &permissions,
+        if options.trust {
+            TrustDecision::Trust
+        } else {
+            TrustDecision::DoNotTrust
+        },
+    );
+    println!("answer: {}", outcome.message());
+    if !outcome.trusted() {
+        return false;
+    }
+    if let Err(refusal) = permissions.permit(
+        crate::contracts::permission::EffectClass::FileWrite,
+        crate::host::permission::Scope::Project(session.root()),
+        crate::contracts::permission::Principal::Human,
+    ) {
+        println!("rustage: {}", refusal.message());
+        return false;
+    }
+
+    let Some(document) = session.file().document() else {
+        println!("rustage: the document cannot be interpreted, so nothing was removed");
+        return false;
+    };
+    let Some(index) = document
+        .pages()
+        .iter()
+        .position(|page| page.document().written() == options.document)
+    else {
+        println!(
+            "rustage: no entry names `{}`; nothing was removed",
+            options.document
+        );
+        return false;
+    };
+
+    let resolution = if options.fix {
+        crate::project::format::Resolution::FixReferences
+    } else {
+        crate::project::format::Resolution::Block
+    };
+    let (removed, fixed) = match document.remove_entry(index, resolution) {
+        Ok(outcome) => outcome,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    println!("removed {}", options.document);
+    for line in &fixed {
+        println!("  fixed: {line}");
+    }
+    if fixed.is_empty() {
+        println!("  nothing pointed at it");
+    }
+    match session.file().write_document(&removed) {
+        Ok(written) => {
+            println!("{}", written.message());
+            match ProjectFile::open(session.path()) {
+                Ok(again) => {
+                    println!("read back: {}", again.verdict().message());
+                    true
+                }
+                Err(error) => {
+                    println!(
+                        "rustage: what was written cannot be read back: {}",
+                        error.message()
+                    );
+                    false
+                }
+            }
+        }
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            false
+        }
     }
 }
 

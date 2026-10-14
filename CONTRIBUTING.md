@@ -58,6 +58,8 @@ cargo run -- --project-check examples/demo-project/project.json   # project form
 cargo run -- --new-project target/new-project --template application   # creates a project; exits 4 when refused
 cargo run -- --open-project target/new-project/project.json   # opens it read-only and prints what would be asked
 cargo run -- --recent                                        # projects opened before, and where they are now
+cargo run -- --project-tree target/new-project/project.json  # what the project has, classified
+cargo run -- --drop-entry target/new-project/project.json --document pages/main.json --trust
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -168,6 +170,18 @@ notices which entries are gone and remembers that. Repairing a moved entry is by
 that now holds a different project is refused with both identities named. This does not establish
 that a window, a toolbar or a dialog exists, that a toolchain can build this project, or that the
 wizard's steps have buttons — those are the shell's and the build tasks'.
+
+`--project-tree <file>` shows what a project has, grouped the way a project tree groups it — pages
+(which are also the entries), resources, generated files, stylesheets, target profiles and network
+services — with, per item, whether the file behind it is present, missing or refused. `--drop-entry
+<file> --document <path>` removes an entry and is where this milestone's acceptance lives: an entry
+that other things still point at (a generated file that comes from it, the target's startup entry) is
+**not** removed quietly. Without `--fix` the removal is refused, listing every reference, and nothing
+is written at all; with `--fix` the references are rewritten and every one of them is reported, the
+result is checked with the reader's own rules, and the document is put in place through the same write
+path a save uses (conflict check, migration backup, atomic write) after the project is trusted and the
+`write-file` permission is granted. `--project-tree` and this removal are the model and the command
+line; the tree panel, its icons and its drag-and-drop belong to the shell (T04/T09).
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

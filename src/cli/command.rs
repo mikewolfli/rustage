@@ -41,6 +41,10 @@ pub enum Command {
     OpenProject(OpenProjectOptions),
     /// Lists the projects that were opened before, and where they are now.
     Recent,
+    /// Shows what a project has, classified the way a project tree groups it (task T02.04).
+    ProjectTree(PathBuf),
+    /// Removes an entry, fixing what points at it or refusing to remove it (task T02.04).
+    DropEntry(DropEntryOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -93,6 +97,31 @@ impl OpenProjectOptions {
             path: path.into(),
             trust: false,
             diagnose: false,
+        }
+    }
+}
+
+/// Which entry to remove, and how to treat what points at it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DropEntryOptions {
+    /// The project document.
+    pub path: PathBuf,
+    /// The page document of the entry, as the project writes it.
+    pub document: String,
+    /// Whether the references to it may be fixed, instead of refusing the removal.
+    pub fix: bool,
+    /// Whether the person answering the project's question said yes.
+    pub trust: bool,
+}
+
+impl DropEntryOptions {
+    /// Options that remove an entry and refuse while anything points at it.
+    pub fn new(path: impl Into<PathBuf>, document: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            document: document.into(),
+            fix: false,
+            trust: false,
         }
     }
 }
@@ -282,6 +311,43 @@ where
             }
             return Ok(Command::Recent);
         }
+        "--project-tree" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut rest = arguments;
+            if let Some(argument) = rest.next() {
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::ProjectTree(PathBuf::from(path)));
+        }
+        "--drop-entry" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = DropEntryOptions::new(PathBuf::from(path), "");
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--document" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(document) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.document = document.to_owned();
+                    }
+                    "--fix" => options.fix = true,
+                    "--trust" => options.trust = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            if options.document.is_empty() {
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::DropEntry(options));
+        }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
             let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -314,7 +380,9 @@ pub fn help_text() -> &'static str {
             rustage [--render-icons <directory> | --probe-apis <directory>]\n\
             rustage [--probe-host <directory> | --project-check <file>]\n\
             rustage --new-project <directory> [--template <name>] [--name <name>]\n\
-            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n\n\
+            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n\
+            rustage [--project-tree <file>]\n\
+            rustage --drop-entry <file> --document <path> [--fix] [--trust]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -331,7 +399,12 @@ pub fn help_text() -> &'static str {
        --open-project <file>         Open a project read-only, and print what would be asked\n\
        --trust                       With --open-project, answer the question with yes\n\
        --diagnose                    With --open-project, read the toolchain (runs two programs)\n\
-       --recent                      List the projects opened before, and where they are now\n\n\
+       --recent                      List the projects opened before, and where they are now\n\
+       --project-tree <file>         Show what the project has, classified, with what is on disk\n\
+       --drop-entry <file>           Remove the entry in --document; refuses while anything points\n\
+                                     at it unless --fix is given, which fixes those references\n\
+       --document <path>             With --drop-entry, the page document of the entry\n\
+       --fix                         With --drop-entry, fix the references instead of refusing\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -341,7 +414,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, LaunchOptions, NewProjectOptions, OpenProjectOptions, log_level_of, parse,
+        Command, DropEntryOptions, LaunchOptions, NewProjectOptions, OpenProjectOptions,
+        log_level_of, parse,
     };
     use crate::host::log::Level;
     use crate::project::create::Template;
@@ -441,6 +515,45 @@ mod tests {
         assert!(parse(["--open-project"]).is_err());
         assert!(parse(["--open-project", "demo/project.json", "--wat"]).is_err());
         assert!(parse(["--recent", "extra"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_project_tree_and_the_entry_removal() {
+        assert_eq!(
+            parse(["--project-tree", "demo/project.json"]),
+            Ok(Command::ProjectTree(PathBuf::from("demo/project.json")))
+        );
+        assert_eq!(
+            parse([
+                "--drop-entry",
+                "demo/project.json",
+                "--document",
+                "pages/main.json"
+            ]),
+            Ok(Command::DropEntry(DropEntryOptions::new(
+                PathBuf::from("demo/project.json"),
+                "pages/main.json"
+            )))
+        );
+        assert_eq!(
+            parse([
+                "--drop-entry",
+                "demo/project.json",
+                "--document",
+                "pages/main.json",
+                "--fix",
+                "--trust"
+            ]),
+            Ok(Command::DropEntry(DropEntryOptions {
+                path: PathBuf::from("demo/project.json"),
+                document: "pages/main.json".to_owned(),
+                fix: true,
+                trust: true,
+            }))
+        );
+        assert!(parse(["--project-tree"]).is_err());
+        assert!(parse(["--drop-entry", "demo/project.json"]).is_err());
+        assert!(parse(["--drop-entry", "demo/project.json", "--wat"]).is_err());
     }
 
     #[test]

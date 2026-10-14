@@ -58,7 +58,9 @@ order they are being closed in. It is a work list, not a statement of implemente
   committed project under `examples/demo-project/`, and the page document format and the creation
   path T02.02 asks for, which write a project into a staging directory and put it in place with one
   rename, and opening a project T02.03 asks for, with the trust question, the machine-local recent
-  list and the toolchain check that runs only under a permit; the
+  list and the toolchain check that runs only under a permit, and the project format version 2
+  T02.04 asks for, with its versioned migration step, the entry a target starts with, the classified
+  project tree, and the rule that removing an entry fixes the references to it or blocks; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

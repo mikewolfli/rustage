@@ -123,6 +123,7 @@ cargo run -- --probe-host target/host    # writes target/host/host-readiness.jso
 cargo run -- --project-check examples/demo-project/project.json   # reads a project document, writes its round trip next to it
 cargo run -- --new-project target/new-project       # creates a project: plan, stage, one rename
 cargo run -- --open-project target/new-project/project.json   # opens a project read-only and prints the trust question
+cargo run -- --project-tree target/new-project/project.json   # what the project has, classified
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

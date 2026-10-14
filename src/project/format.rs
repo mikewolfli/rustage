@@ -642,7 +642,7 @@ impl Reference {
         matches!(self.verdict, ReferenceVerdict::Refused { .. })
     }
 
-    fn resolves_like(&self, other: &Self) -> bool {
+    pub(crate) fn resolves_like(&self, other: &Self) -> bool {
         match (self.resolved(), other.resolved()) {
             (Some(mine), Some(theirs)) => mine == theirs,
             _ => self.written == other.written,
@@ -996,6 +996,118 @@ impl ProjectDocument {
             .collect()
     }
 
+    /// Chooses the entry a target starts with, or clears the choice.
+    ///
+    /// The entry has to be one the document declares, which is the same rule the reader applies: a
+    /// document this build produces can always be read back by this build.
+    pub fn with_startup(
+        &self,
+        root: &ProjectRoot,
+        written: Option<&str>,
+    ) -> Result<Self, ProjectError> {
+        let mut document = self.clone();
+        document.startup = match written {
+            None => None,
+            Some(written) => {
+                let reference = reference(root, ReferenceKind::PageDocument, written.to_owned());
+                check_startup(&document.pages, Some(&reference)).map_err(|error| {
+                    ProjectError::Dangling {
+                        path: "startup".to_owned(),
+                        name: error.message(),
+                    }
+                })?;
+                Some(reference)
+            }
+        };
+        Ok(document)
+    }
+
+    /// Who points at an entry: what would break if it were removed.
+    pub fn references_to(&self, entry: &PageEntry) -> EntryReferences {
+        let target = entry.document();
+        EntryReferences {
+            generated: self
+                .generated
+                .iter()
+                .filter(|generated| generated.from().resolves_like(target))
+                .map(|generated| generated.output().written().to_owned())
+                .collect(),
+            startup: self
+                .startup
+                .as_ref()
+                .is_some_and(|startup| startup.resolves_like(target)),
+        }
+    }
+
+    /// Removes the page at an index, fixing what pointed at it or refusing when anything does.
+    ///
+    /// This is the acceptance of T02.04: an entry other things point at is **not** removed quietly.
+    /// With [`Resolution::Block`] the removal is refused and the caller is told what still points at
+    /// it; with [`Resolution::FixReferences`] the references are fixed — the generated mappings from
+    /// that entry go, and the startup choice is cleared — and what was fixed is reported, so nothing
+    /// disappears without a record.
+    ///
+    /// The result is checked with the reader's own rules before it is returned: a document this
+    /// method produced is one this build can read back.
+    pub fn remove_entry(
+        &self,
+        index: usize,
+        resolution: Resolution,
+    ) -> Result<(Self, Vec<String>), DeleteRefusal> {
+        let Some(entry) = self.pages.get(index) else {
+            return Err(DeleteRefusal::NoSuchEntry {
+                index,
+                known: self.pages.len(),
+            });
+        };
+        let written = entry.document().written().to_owned();
+        let references = self.references_to(entry);
+        if !references.is_empty() && resolution == Resolution::Block {
+            return Err(DeleteRefusal::Referenced {
+                document: written,
+                references,
+            });
+        }
+
+        let target = entry.document().clone();
+        let mut document = self.clone();
+        document.pages.remove(index);
+        let mut fixed = Vec::new();
+        let generated: Vec<GeneratedTarget> = document
+            .generated
+            .iter()
+            .filter(|generated| !generated.from().resolves_like(&target))
+            .cloned()
+            .collect();
+        for removed in document
+            .generated
+            .iter()
+            .filter(|generated| generated.from().resolves_like(&target))
+        {
+            fixed.push(format!(
+                "the generated file {} no longer comes from {written}",
+                removed.output().written()
+            ));
+        }
+        document.generated = generated;
+        if document
+            .startup
+            .as_ref()
+            .is_some_and(|startup| startup.resolves_like(&target))
+        {
+            document.startup = None;
+            fixed.push(format!(
+                "{written} is no longer the entry the target starts with"
+            ));
+        }
+        check_startup(&document.pages, document.startup.as_ref()).map_err(|error| {
+            DeleteRefusal::WouldNotRead {
+                reason: error.message(),
+            }
+        })?;
+        Ok((document, fixed))
+    }
+
     /// The document as JSON, with the members this build did not know put back where they were.
     ///
     /// Writing is a separate decision from rendering: [`ProjectFile::writer`] is what refuses a
@@ -1057,6 +1169,116 @@ impl ProjectDocument {
     }
 }
 
+/// Who points at an entry that is about to be removed.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct EntryReferences {
+    generated: Vec<String>,
+    startup: bool,
+}
+
+impl EntryReferences {
+    /// The generated files that come from this entry.
+    pub fn generated(&self) -> &[String] {
+        &self.generated
+    }
+
+    /// Whether the target starts with this entry.
+    pub const fn startup(&self) -> bool {
+        self.startup
+    }
+
+    /// Whether anything points at it at all.
+    pub fn is_empty(&self) -> bool {
+        self.generated.is_empty() && !self.startup
+    }
+
+    /// How many things point at it.
+    pub fn len(&self) -> usize {
+        self.generated.len() + usize::from(self.startup)
+    }
+
+    /// One line per reference, for a report.
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .generated
+            .iter()
+            .map(|output| format!("generated[{output}] comes from this entry"))
+            .collect();
+        if self.startup {
+            lines.push("the target's startup entry is this one".to_owned());
+        }
+        lines
+    }
+}
+
+/// What to do with an entry that other things still point at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Resolution {
+    /// Refuse the removal and say what still points at it: the caller decides what happens to those.
+    Block,
+    /// Remove it and fix what pointed at it, reporting every reference that was rewritten.
+    FixReferences,
+}
+
+/// Why an entry was not removed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DeleteRefusal {
+    /// No page is there at that index.
+    NoSuchEntry {
+        /// The index that was asked for.
+        index: usize,
+        /// How many pages the document has.
+        known: usize,
+    },
+    /// Something still points at it, and the caller asked to be blocked rather than to fix them.
+    Referenced {
+        /// The entry, as the document writes it.
+        document: String,
+        /// What points at it.
+        references: EntryReferences,
+    },
+    /// Removing it would leave a document this build could not read back.
+    WouldNotRead {
+        /// Why.
+        reason: String,
+    },
+}
+
+impl DeleteRefusal {
+    /// A sentence naming what was found, for a diagnostic or a terminal.
+    pub fn message(&self) -> String {
+        match self {
+            Self::NoSuchEntry { index, known } => {
+                format!("there is no page at index {index} (the document declares {known})")
+            }
+            Self::Referenced {
+                document,
+                references,
+            } => {
+                let mut message = format!(
+                    "{document} is still pointed at by {} thing(s); nothing was removed. \
+                     Fix those references, or ask for them to be fixed:",
+                    references.len()
+                );
+                for line in references.lines() {
+                    message.push_str("\n  ");
+                    message.push_str(&line);
+                }
+                message
+            }
+            Self::WouldNotRead { reason } => format!(
+                "removing it would leave a document this build could not read back: {reason}"
+            ),
+        }
+    }
+}
+
+impl fmt::Display for DeleteRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message())
+    }
+}
+
 /// A project whose format version this build does not know.
 ///
 /// Only the identity is read, and only when it is still where version 1 put it; everything else is
@@ -1096,6 +1318,11 @@ impl ForeignProject {
 }
 
 /// What a project file holds.
+///
+/// The interpreted variant is much larger than the other one, and deliberately not boxed: a document
+/// is built once per opened file and moved a handful of times, so an allocation on the path every
+/// read takes would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ProjectContent {
     /// A version this build knows, member by member.
@@ -1279,6 +1506,58 @@ impl ProjectFile {
         self.migrated_from
     }
 
+    /// The document as it was read, when the version is one this build interprets.
+    pub fn document(&self) -> Option<&ProjectDocument> {
+        self.content.document()
+    }
+
+    /// Writes a document of this project, under the same rules a save follows.
+    ///
+    /// The conflict check, the atomic write and the migration backup are one implementation: a
+    /// caller that changed the document (removing an entry, T02.04) puts the result in place through
+    /// the same path a plain save uses, so it cannot skip any of them.
+    pub fn write_document(&self, document: &ProjectDocument) -> Result<Written, ProjectError> {
+        let backup = match self.migrated_from {
+            Some(from) => {
+                let backup = self.path.with_extension(format!("v{}.bak", from.get()));
+                std::fs::write(&backup, &self.original).map_err(|error| ProjectError::Io {
+                    path: backup.clone(),
+                    action: "keeping the file that was read",
+                    reason: error.to_string(),
+                })?;
+                Some(backup)
+            }
+            None => None,
+        };
+        let target = self.write(document, &self.path)?;
+        Ok(Written {
+            target,
+            backup,
+            migrated_from: self.migrated_from,
+        })
+    }
+
+    /// The one place a project document is put on disk.
+    fn write(&self, document: &ProjectDocument, path: &Path) -> Result<PathBuf, ProjectError> {
+        if path == self.path {
+            let current = std::fs::read(path).map_err(|error| ProjectError::Io {
+                path: path.to_path_buf(),
+                action: "reading before writing",
+                reason: error.to_string(),
+            })?;
+            if current != self.original {
+                return Err(ProjectError::ChangedOnDisk {
+                    path: path.to_path_buf(),
+                });
+            }
+        }
+        json::write_atomically(path, &document.render()).map_err(|error| ProjectError::Io {
+            path: path.to_path_buf(),
+            action: "writing",
+            reason: error.to_string(),
+        })
+    }
+
     /// Every member this build did not know.
     pub fn unknown_fields(&self) -> &[UnknownField] {
         self.content.unknown_fields()
@@ -1384,22 +1663,48 @@ impl ProjectWriter<'_> {
     /// target, which is the save path the roadmap asks for: prepare, write, commit, confirm. A
     /// failure in the middle leaves the target as it was.
     pub fn save_to(&self, path: impl AsRef<Path>) -> Result<PathBuf, ProjectError> {
-        let path = path.as_ref().to_path_buf();
-        if path == self.file.path {
-            let current = std::fs::read(&path).map_err(|error| ProjectError::Io {
-                path: path.clone(),
-                action: "reading before writing",
-                reason: error.to_string(),
-            })?;
-            if current != self.file.original {
-                return Err(ProjectError::ChangedOnDisk { path });
-            }
+        self.file.write(self.document, path.as_ref())
+    }
+}
+
+/// What writing a document did.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Written {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+    migrated_from: Option<FormatVersion>,
+}
+
+impl Written {
+    /// The file that was written.
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    /// The file that was kept before a migration, when one happened.
+    pub fn backup(&self) -> Option<&Path> {
+        self.backup.as_deref()
+    }
+
+    /// The version the document was read as, when it was older than the one this build writes.
+    pub const fn migrated_from(&self) -> Option<FormatVersion> {
+        self.migrated_from
+    }
+
+    /// One sentence for a person.
+    pub fn message(&self) -> String {
+        match &self.backup {
+            Some(backup) => format!(
+                "wrote {} (the {from} document is kept at {backup})",
+                self.target.display(),
+                from = self
+                    .migrated_from
+                    .map(|version| version.to_string())
+                    .unwrap_or_else(|| "older".to_owned()),
+                backup = backup.display()
+            ),
+            None => format!("wrote {}", self.target.display()),
         }
-        json::write_atomically(&path, &self.render()).map_err(|error| ProjectError::Io {
-            path: path.clone(),
-            action: "writing",
-            reason: error.to_string(),
-        })
     }
 }
 
@@ -2444,13 +2749,14 @@ pub(crate) fn sub_objects<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        MIGRATION_STEPS, PROJECT_FILE_NAME, ProjectContent, ProjectDocument, ProjectDraft,
-        ProjectError, ProjectFile, ProjectWriteRefusal, ReferenceKind, ReferenceVerdict,
-        VERSION_MEMBERS, VersionVerdict, migration_path,
+        DeleteRefusal, MIGRATION_STEPS, PROJECT_FILE_NAME, ProjectContent, ProjectDocument,
+        ProjectDraft, ProjectError, ProjectFile, ProjectWriteRefusal, ReferenceKind,
+        ReferenceVerdict, Resolution, VERSION_MEMBERS, VersionVerdict, migration_path,
     };
     use crate::contracts::revision::FormatVersion;
     use crate::host::network::{CredentialRef, CredentialSource, ServicePolicy, TlsPolicy};
     use crate::host::paths::ProjectRoot;
+    use crate::project::format::{check_generated_sources, check_startup, check_unique};
     use crate::project::json;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3546,6 +3852,130 @@ mod tests {
                 .message()
                 .contains("nothing in this project declares")
         );
+    }
+
+    #[test]
+    fn removing_an_entry_that_is_pointed_at_is_refused_until_the_references_are_dealt_with() {
+        let sandbox = sandbox();
+        sandbox.write("pages/main.json", "{}");
+        sandbox.write("pages/settings.json", "{}");
+        let document = sandbox.document(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \
+             \"pages\": [{\"document\": \"pages/main.json\"}, {\"document\": \"pages/settings.json\"}], \
+             \"generated\": [{\"output\": \"src/generated/main.rs\", \"from\": \"pages/main.json\"}], \
+             \"startup\": \"pages/main.json\"}",
+        );
+
+        // What points at the first entry: the generated mapping and the startup choice.
+        let references = document.references_to(&document.pages()[0]);
+        assert_eq!(references.len(), 2);
+        assert_eq!(references.generated(), ["src/generated/main.rs"]);
+        assert!(references.startup());
+        assert!(!references.is_empty());
+        assert_eq!(references.lines().len(), 2);
+        assert!(document.references_to(&document.pages()[1]).is_empty());
+
+        // Blocking is the default answer, and it says what still points at it.
+        let refusal = document
+            .remove_entry(0, Resolution::Block)
+            .expect_err("an entry other things point at is not removed");
+        let DeleteRefusal::Referenced {
+            document: named,
+            references,
+        } = &refusal
+        else {
+            unreachable!("expected a refused removal, found {refusal:?}");
+        };
+        assert_eq!(named, "pages/main.json");
+        assert_eq!(references.len(), 2);
+        assert!(refusal.message().contains("nothing was removed"));
+        assert!(
+            refusal
+                .message()
+                .contains("generated[src/generated/main.rs]")
+        );
+
+        // Fixing the references removes it and reports every one of them.
+        let (removed, fixed) = document
+            .remove_entry(0, Resolution::FixReferences)
+            .expect("the references can be fixed");
+        assert_eq!(removed.pages().len(), 1);
+        assert_eq!(
+            removed.pages()[0].document().written(),
+            "pages/settings.json"
+        );
+        assert!(removed.generated().is_empty());
+        assert_eq!(removed.startup_written(), None);
+        assert_eq!(fixed.len(), 2);
+        assert!(fixed[0].contains("src/generated/main.rs"));
+        assert!(fixed[1].contains("no longer the entry the target starts with"));
+        // What was produced is a document this build can read back: the same checks the reader runs.
+        check_unique(&removed.pages).expect("the pages are still unique");
+        check_generated_sources(&removed.pages, &removed.generated)
+            .expect("the generated mappings still point at a declared page");
+        check_startup(&removed.pages, removed.startup.as_ref())
+            .expect("the startup still names a declared page");
+        let text = removed.render();
+        let again = sandbox
+            .parse(&text)
+            .expect("the document reads back")
+            .content()
+            .document()
+            .expect("interpreted")
+            .clone();
+        assert_eq!(again, removed);
+
+        // An entry nothing points at is removed without any fixing, and an index that is not there
+        // is refused for that reason.
+        let (only, fixed) = removed
+            .remove_entry(0, Resolution::Block)
+            .expect("nothing points at it");
+        assert!(only.pages().is_empty());
+        assert!(fixed.is_empty());
+        let refusal = only
+            .remove_entry(3, Resolution::Block)
+            .expect_err("no such page");
+        assert!(matches!(
+            refusal,
+            DeleteRefusal::NoSuchEntry { index: 3, known: 0 }
+        ));
+        assert!(refusal.message().contains("no page at index 3"));
+    }
+
+    #[test]
+    fn the_startup_entry_is_chosen_and_cleared_by_the_document_that_owns_it() {
+        let sandbox = sandbox();
+        sandbox.write("pages/main.json", "{}");
+        sandbox.write("pages/settings.json", "{}");
+        let document = sandbox.document(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \
+             \"pages\": [{\"document\": \"pages/main.json\"}, {\"document\": \"pages/settings.json\"}], \
+             \"startup\": null}",
+        );
+        let root = sandbox.root();
+
+        let chosen = document
+            .with_startup(&root, Some("pages/settings.json"))
+            .expect("a declared page can be chosen");
+        assert_eq!(chosen.startup_written(), Some("pages/settings.json"));
+        assert!(
+            chosen
+                .render()
+                .contains("\"startup\": \"pages/settings.json\"")
+        );
+        // Everything else is untouched: choosing an entry is not an edit of the rest.
+        assert_eq!(chosen.pages(), document.pages());
+
+        let cleared = chosen
+            .with_startup(&root, None)
+            .expect("the choice can be cleared");
+        assert_eq!(cleared.startup_written(), None);
+        assert_eq!(cleared.render(), document.render());
+
+        let refusal = document
+            .with_startup(&root, Some("pages/nowhere.json"))
+            .expect_err("a page the document does not declare cannot start");
+        assert!(refusal.message().contains("startup"));
     }
 
     #[test]

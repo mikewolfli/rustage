@@ -70,7 +70,7 @@ test('the committed data, document and whitepaper pass', () => {
   const result = checkContracts(root);
   assert.deepEqual(result.errors, []);
   assert.equal(result.stats.areas, 8);
-  assert.equal(result.stats.permissions, 7);
+  assert.equal(result.stats.permissions, 8);
   assert.equal(result.stats.invariants, 11);
 });
 

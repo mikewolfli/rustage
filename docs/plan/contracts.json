@@ -73,7 +73,8 @@
     "needs-confirmation": "等待人工确认该变更",
     "human-only": "该操作只有人的路径",
     "generated-code-read-only": "生成物只读，改动应回到设计模型",
-    "scope-not-authorized": "执行范围尚未授权"
+    "scope-not-authorized": "执行范围尚未授权",
+    "service-not-configured": "服务不在工程网络策略里：先声明该服务并授权，再发起请求"
   },
   "permissions": [
     {
@@ -138,6 +139,15 @@
       "reason": "影响全部 profile 与门禁",
       "deniedAs": "needs-confirmation",
       "test": "the_default_table_matches_the_whitepaper_rows"
+    },
+    {
+      "operationWording": "对工程网络策略里的服务发起请求",
+      "operation": "request-network-service",
+      "grantWording": "**工程已信任且服务范围获授权后 agent 可触发**",
+      "grant": "authorized-when-trusted",
+      "reason": "会外发数据并可能携带凭据；只允许到达工程策略里声明并授权的服务，不暗自联网",
+      "deniedAs": "untrusted-project",
+      "test": "a_network_request_needs_the_service_declared_and_authorized"
     }
   ],
   "writers": [
@@ -261,7 +271,7 @@
       "enforcedBy": "src/contracts/permission.rs",
       "test": "every_external_effect_class_is_decided_or_explained",
       "evidence": "测试",
-      "note": "命令与文件分别由 run-cargo-check 与 write-file 裁定，映射理由写在 EffectClass 的文档注释里；网络与部署返回未决定并给出原因，宿主因此拒绝，而不是发明一条授权"
+      "note": "命令、文件与网络分别由 run-cargo-check、write-file 与 request-network-service 裁定，映射理由写在 EffectClass 的文档注释里；部署仍是未决定（C-REMOTE 为延期能力）并给出原因，宿主因此拒绝，而不是发明一条授权"
     }
   ]
 }

@@ -46,6 +46,14 @@ pub enum Capability {
     WriteFile,
     /// Running `cargo check`: it can run build scripts, proc macros and reach the network.
     RunCargoCheck,
+    /// Making a request to a service the project's network policy declares.
+    ///
+    /// The row this comes from is "a request to a service in the project's network policy", and the
+    /// table did not have it until T01.09: the roadmap asks for network authorization in several
+    /// places (§5 F16 "no silent network", §5 F20 "network authorization and diagnosable auth
+    /// failures", §5 F23 "everything sent out is authorized item by item"), and a decision list
+    /// without a row for it could only refuse the effect with "no decision exists".
+    RequestNetworkService,
     /// Adding a dependency or editing `Cargo.toml`, which affects every profile.
     ChangeDependencies,
 }
@@ -53,7 +61,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in the order of the whitepaper's table. The contract check depends on this
     /// list being complete.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::EditWidgetProperty,
         Self::AddOrRemoveNode,
         Self::EditGeneratedCode,
@@ -61,6 +69,7 @@ impl Capability {
         Self::WriteFile,
         Self::RunCargoCheck,
         Self::ChangeDependencies,
+        Self::RequestNetworkService,
     ];
 
     /// The machine name used by the contract data file and the checks. Stable: it is how the table
@@ -73,6 +82,7 @@ impl Capability {
             Self::EditHandwrittenCode => "edit-handwritten-code",
             Self::WriteFile => "write-file",
             Self::RunCargoCheck => "run-cargo-check",
+            Self::RequestNetworkService => "request-network-service",
             Self::ChangeDependencies => "change-dependencies",
         }
     }
@@ -85,7 +95,7 @@ impl Capability {
             Self::EditGeneratedCode => Grant::AgentReadOnly,
             Self::EditHandwrittenCode | Self::ChangeDependencies => Grant::NeedsConfirmation,
             Self::WriteFile => Grant::HumanOnly,
-            Self::RunCargoCheck => Grant::AuthorizedWhenTrusted,
+            Self::RunCargoCheck | Self::RequestNetworkService => Grant::AuthorizedWhenTrusted,
         }
     }
 }
@@ -108,9 +118,10 @@ impl Capability {
 ///   the table is about running commands in general, and inventing a second row for one would be a
 ///   second copy of a security decision.
 /// * `FileWrite` → [`Capability::WriteFile`], whose grant is human-only.
-/// * `Network` → none. The table has no row for reaching the network; T01.09 owns network
-///   authorization and T02.11 owns "commands with side effects are authorized by their real
-///   effect". Until a row exists, an automatic network effect has no decision to refer to.
+/// * `Network` → [`Capability::RequestNetworkService`]. T01.09 added that row to §12.5, because the
+///   roadmap asks for network authorization in several places and a table with no row for it could
+///   only refuse the effect with "no decision exists". The row's reason has the same shape as the
+///   command row's: a request can carry a credential and send data out, so it is not read-only.
 /// * `Deploy` → none. Deployment is a deferred capability (`C-REMOTE`, roadmap §1.3 "future
 ///   extension"), so there is no decision to refer to either.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -154,7 +165,8 @@ impl EffectClass {
         match self {
             Self::Command => Some(Capability::RunCargoCheck),
             Self::FileWrite => Some(Capability::WriteFile),
-            Self::Network | Self::Deploy => None,
+            Self::Network => Some(Capability::RequestNetworkService),
+            Self::Deploy => None,
         }
     }
 
@@ -162,10 +174,7 @@ impl EffectClass {
     /// [`Self::decided_by`] is `None`, so a caller cannot get an unexplained "no".
     pub const fn undecided_reason(self) -> Option<&'static str> {
         match self {
-            Self::Command | Self::FileWrite => None,
-            Self::Network => Some(
-                "no decision-table row covers reaching the network; T01.09 owns network authorization",
-            ),
+            Self::Command | Self::FileWrite | Self::Network => None,
             Self::Deploy => Some(
                 "deployment is a deferred capability (C-REMOTE), so no row covers it and nothing \
                  authorizes it",
@@ -235,6 +244,8 @@ pub enum DenialReason {
     GeneratedCodeReadOnly,
     /// The project is trusted but this execution scope was never authorized.
     ScopeNotAuthorized,
+    /// The service is not in the project's network policy, so nothing may reach it.
+    ServiceNotConfigured,
 }
 
 impl DenialReason {
@@ -247,6 +258,7 @@ impl DenialReason {
             Self::HumanOnly => "human-only",
             Self::GeneratedCodeReadOnly => "generated-code-read-only",
             Self::ScopeNotAuthorized => "scope-not-authorized",
+            Self::ServiceNotConfigured => "service-not-configured",
         }
     }
 
@@ -262,6 +274,10 @@ impl DenialReason {
                 "change the design instead; the generator owns this file and would overwrite edits"
             }
             Self::ScopeNotAuthorized => "authorize this execution scope for the project first",
+            Self::ServiceNotConfigured => {
+                "declare this service in the project's network policy, and authorize network requests \
+                 for the project"
+            }
         }
     }
 }
@@ -305,6 +321,13 @@ pub struct PermissionGate {
     trust: TrustState,
     approvals: BTreeSet<Capability>,
     authorizations: BTreeSet<Capability>,
+    /// Whether the project has a network policy at all.
+    ///
+    /// Not "which services": the allow-list is the project's own configuration (T02.01 owns where it
+    /// lives), and duplicating it here would be a second copy of a security-relevant list. This flag
+    /// is only what the decision table needs to tell "no policy" from "policy that does not name
+    /// this service" — both are refusals, but the second one is a human who can fix it by name.
+    has_network_policy: bool,
 }
 
 impl PermissionGate {
@@ -329,6 +352,20 @@ impl PermissionGate {
         self.trust = TrustState::Untrusted;
         self.approvals.clear();
         self.authorizations.clear();
+        // The policy belongs to a project a human has seen; keeping it after trust is withdrawn
+        // would leave a reachable destination behind a project nobody vouches for.
+        self.has_network_policy = false;
+    }
+
+    /// Records that the project declares a network policy, so service requests have a list to be
+    /// judged against. Setting it is a project-configuration act, not a grant.
+    pub fn set_network_policy(&mut self, declared: bool) {
+        self.has_network_policy = declared;
+    }
+
+    /// Whether the project declares a network policy.
+    pub const fn has_network_policy(&self) -> bool {
+        self.has_network_policy
     }
 
     /// Records a human approving an agent proposal category (review or confirmation).
@@ -364,8 +401,20 @@ impl PermissionGate {
     /// Decides an attempt. The order of the checks is the contract: trust cannot be bypassed by an
     /// approval, and "human only" cannot be unlocked by one either.
     pub fn decide(&self, principal: Principal, capability: Capability) -> Decision {
-        if capability == Capability::RunCargoCheck && self.trust == TrustState::Untrusted {
+        // Trust comes first for the capabilities §12.5 makes conditional on it: a project nobody has
+        // vouched for is the more basic problem, and saying "declare this service" to somebody whose
+        // project is untrusted would point at the wrong next step.
+        let needs_trust = matches!(
+            capability,
+            Capability::RunCargoCheck | Capability::RequestNetworkService
+        );
+        if needs_trust && self.trust == TrustState::Untrusted {
             return Decision::denied(capability, DenialReason::UntrustedProject);
+        }
+        if capability == Capability::RequestNetworkService && !self.has_network_policy {
+            // Nothing may reach a service the project has not declared, whoever is asking: the
+            // policy is what turns "the network" into a list of named destinations.
+            return Decision::denied(capability, DenialReason::ServiceNotConfigured);
         }
 
         let grant = capability.default_grant();
@@ -414,6 +463,10 @@ mod tests {
             (Capability::WriteFile, Grant::HumanOnly),
             (Capability::RunCargoCheck, Grant::AuthorizedWhenTrusted),
             (Capability::ChangeDependencies, Grant::NeedsConfirmation),
+            (
+                Capability::RequestNetworkService,
+                Grant::AuthorizedWhenTrusted,
+            ),
         ];
 
         assert_eq!(Capability::ALL.len(), expected.len());
@@ -556,6 +609,7 @@ mod tests {
             DenialReason::HumanOnly,
             DenialReason::GeneratedCodeReadOnly,
             DenialReason::ScopeNotAuthorized,
+            DenialReason::ServiceNotConfigured,
         ];
 
         for reason in reasons {
@@ -597,7 +651,10 @@ mod tests {
             EffectClass::FileWrite.decided_by(),
             Some(Capability::WriteFile),
         );
-        assert_eq!(EffectClass::Network.decided_by(), None);
+        assert_eq!(
+            EffectClass::Network.decided_by(),
+            Some(Capability::RequestNetworkService),
+        );
         assert_eq!(EffectClass::Deploy.decided_by(), None);
 
         for effect in EffectClass::ALL {
@@ -610,6 +667,54 @@ mod tests {
                 "{name} is not a machine name",
             );
         }
+    }
+
+    #[test]
+    fn a_network_request_needs_the_service_declared_and_authorized() {
+        let mut gate = PermissionGate::new();
+        gate.trust_project();
+        gate.authorize(Capability::RequestNetworkService);
+        gate.approve(Capability::RequestNetworkService);
+
+        // Trusted and authorized, but the project declares no policy: there is no destination a
+        // request could be judged against, so nothing may go out.
+        assert_eq!(
+            gate.decide(Principal::Agent, Capability::RequestNetworkService)
+                .denial(),
+            Some((
+                Capability::RequestNetworkService,
+                DenialReason::ServiceNotConfigured
+            )),
+        );
+        assert_eq!(
+            gate.decide(Principal::Human, Capability::RequestNetworkService)
+                .denial(),
+            Some((
+                Capability::RequestNetworkService,
+                DenialReason::ServiceNotConfigured
+            )),
+            "a policy nobody declared is not a shortcut for a human either",
+        );
+
+        gate.set_network_policy(true);
+        assert!(
+            gate.decide(Principal::Agent, Capability::RequestNetworkService)
+                .is_allowed()
+        );
+        assert!(gate.has_network_policy());
+
+        // Withdrawing trust withdraws the policy with it, and the refusal goes back to the more
+        // basic fact: the project is not trusted at all.
+        gate.distrust_project();
+        assert!(!gate.has_network_policy());
+        assert_eq!(
+            gate.decide(Principal::Human, Capability::RequestNetworkService)
+                .denial(),
+            Some((
+                Capability::RequestNetworkService,
+                DenialReason::UntrustedProject
+            )),
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@
 //! | Permissions | [`permission`] | project trust, the one gate that decides what may run, the permits that gate mints, and the record of every decision |
 //! | Notifications | [`notify`] | the actionable half of a failure: its cause, its next step, the link to what it is about, and the de-duplication that keeps a repeat from prompting twice |
 //! | Service registry | [`registry`] | one scope per open project, the order a close takes, and the guarantee that a failed start changes nothing |
+//! | Network services | [`network`] | credential references, proxy and TLS configuration, the permit a declared service is reached under, and the redaction that keeps a credential out of what is shown |
 //! | Readiness | [`readiness`] | what those services can actually do in this environment, with the evidence |
 //!
 //! Each service is its own module rather than another `platform` file, and each is behind a small
@@ -62,6 +63,7 @@ pub mod clipboard;
 pub mod dialog;
 pub mod error;
 pub mod log;
+pub mod network;
 pub mod notify;
 pub mod open_url;
 pub mod paths;

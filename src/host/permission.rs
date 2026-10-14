@@ -365,6 +365,11 @@ pub enum AuthorizationEventKind {
         /// The approvals and authorizations that were in force and are now gone.
         withdrawn: Vec<Capability>,
     },
+    /// The project's network policy was declared or withdrawn.
+    NetworkPolicy {
+        /// Whether a policy is now in force.
+        declared: bool,
+    },
     /// The project was closed, so this session's decisions about it are forgotten.
     ///
     /// Recorded separately from [`Self::Distrusted`] because the two are different facts: one is a
@@ -403,6 +408,7 @@ impl AuthorizationEventKind {
         match self {
             Self::Trusted { .. } => "trusted",
             Self::Distrusted { .. } => "distrusted",
+            Self::NetworkPolicy { .. } => "network-policy",
             Self::Closed { .. } => "closed",
             Self::Granted { .. } => "granted",
             Self::Revoked { .. } => "revoked",
@@ -443,6 +449,13 @@ impl AuthorizationEvent {
                             .collect::<Vec<_>>()
                             .join(", "),
                     )
+                }
+            }
+            AuthorizationEventKind::NetworkPolicy { declared } => {
+                if *declared {
+                    "a network policy is in force".to_owned()
+                } else {
+                    "no network policy is in force".to_owned()
                 }
             }
             AuthorizationEventKind::Closed { withdrawn } => {
@@ -717,6 +730,49 @@ impl PermissionService {
             ),
         );
         withdrawn
+    }
+
+    /// Records whether the project declares a network policy.
+    ///
+    /// A project-configuration act rather than a grant: the policy is *what* may be reached, and this
+    /// is only the fact the decision table needs to tell "no policy" from "a policy that does not
+    /// name this service". It is recorded so the authorization record can answer "why was this
+    /// allowed" with the configuration that was in force.
+    pub fn declare_network_policy(&self, root: &ProjectRoot, declared: bool) {
+        let at = self.clock.elapsed_millis();
+        let mut state = lock(&self.state);
+        if let Some(entry) = state.projects.get_mut(root.as_path()) {
+            entry.gate.set_network_policy(declared);
+        } else if declared {
+            // A policy declared before the project is trusted: the gate exists, but trust still
+            // comes first, so this only records the intent.
+            let mut gate = PermissionGate::new();
+            gate.set_network_policy(true);
+            state.projects.insert(
+                root.as_path().to_path_buf(),
+                ProjectPermission {
+                    prompt: TrustPrompt::read(root),
+                    gate,
+                    trusted_at_millis: at,
+                },
+            );
+        }
+        record(
+            &mut state,
+            at,
+            Scope::Project(root).label(),
+            Principal::Human,
+            AuthorizationEventKind::NetworkPolicy { declared },
+        );
+        emit(
+            Level::Info,
+            "host::permission",
+            &format!(
+                "network policy for {}: {}",
+                root.as_path().display(),
+                if declared { "declared" } else { "none" },
+            ),
+        );
     }
 
     /// Whether this project is trusted right now.
@@ -1346,28 +1402,54 @@ mod tests {
     }
 
     #[test]
-    fn network_and_deployment_have_no_decision_to_give() {
+    fn deployment_is_the_one_effect_with_no_decision_to_give() {
         let service = PermissionService::new();
 
-        for effect in [EffectClass::Network, EffectClass::Deploy] {
-            let refusal = service
-                .permit(effect, Scope::Session, Principal::Human)
-                .expect_err("no §12.5 row decides this effect");
-            match refusal {
-                PermissionRefusal::Undecided {
-                    effect: refused,
-                    reason,
-                    scope,
-                } => {
-                    assert_eq!(refused, effect);
-                    assert_eq!(scope, "session");
-                    assert!(
-                        reason.contains("row"),
-                        "the reason must name the missing decision: {reason}",
-                    );
-                }
-                other => panic!("expected an undecided refusal, got {other:?}"),
+        let refusal = service
+            .permit(EffectClass::Deploy, Scope::Session, Principal::Human)
+            .expect_err("no §12.5 row decides deployment");
+
+        match refusal {
+            PermissionRefusal::Undecided {
+                effect,
+                reason,
+                scope,
+            } => {
+                assert_eq!(effect, EffectClass::Deploy);
+                assert_eq!(scope, "session");
+                assert!(
+                    reason.contains("row"),
+                    "the reason must name the missing decision: {reason}",
+                );
             }
+            other => panic!("expected an undecided refusal, got {other:?}"),
+        }
+    }
+
+    /// The network effect is decided by T01.09's own §12.5 row, so its refusal is the contract's
+    /// reason and not "no decision exists" — which is the difference the row buys.
+    #[test]
+    fn a_network_effect_is_refused_by_the_contract_not_by_absence() {
+        let sandbox = sandbox("network");
+        let root = sandbox.root();
+        let service = PermissionService::new();
+
+        let refusal = service
+            .permit(
+                EffectClass::Network,
+                Scope::Project(&root),
+                Principal::Human,
+            )
+            .expect_err("an untrusted project reaches nothing");
+
+        match refusal {
+            PermissionRefusal::Denied {
+                capability, reason, ..
+            } => {
+                assert_eq!(capability, Capability::RequestNetworkService);
+                assert_eq!(reason, DenialReason::UntrustedProject);
+            }
+            other => panic!("expected a denial with a reason, got {other:?}"),
         }
     }
 

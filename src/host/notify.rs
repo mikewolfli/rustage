@@ -1140,8 +1140,8 @@ mod tests {
     #[test]
     fn an_effect_with_no_decision_says_which_decision_is_missing() {
         let refusal = PermissionService::new()
-            .permit(EffectClass::Network, Scope::Session, Principal::Human)
-            .expect_err("the network has no decision");
+            .permit(EffectClass::Deploy, Scope::Session, Principal::Human)
+            .expect_err("deployment has no decision");
 
         let cause = Cause::Permission(refusal);
 

@@ -28,7 +28,7 @@
 | input | 输入：指针与键盘事件真的到达已挂载的控件 | input-events |
 | process | 进程：后台任务可提交可取消，且只清理本会话拥有的进程树 | background-executor, process-trees |
 | file | 文件：选择器（系统与自绘）、目录事件，以及选择结果是否指向真实文件 | native-file-dialog, chooser-frame, directory-watch |
-| platform | 平台服务：剪贴板、URL 处理程序与交接 | clipboard, url-handler, url-handover |
+| platform | 平台服务：剪贴板、URL 处理程序与交接、网络服务授权与脱敏 | clipboard, url-handler, url-handover, network-services |
 | scope | 工程作用域与权限：信任、通知、关闭后不留悬挂服务 | project-trust, notifications, project-scope |
 
 ## 状态与结果词汇
@@ -73,7 +73,7 @@ macOS 或 Windows 测试机，本探针一次都没有在那里运行过。表�
 | linux | input | ready | input-events -> ready：控件内部按下并抬起 -> clicked(1)；按下后在控件外抬起 -> clicked 仍为 1 且 canceled(1)（证明真的做了命中测试）；按 Return -> clicked(2) |
 | linux | process | ready | background-executor -> ready：提交在 8µs 返回而任务仍在跑，cancelling 可观察，配合的 job 被取消，无视 30ms 期限的 job 被记为 abandoned，关闭后拒绝新工作；process-trees -> ready：本会话启动的进程与其后代被整组清理，同名但本会话之外启动的进程存活 |
 | linux | file | gap | native-file-dialog -> gap：固定修订在这三个桌面后端上不创建文件对话框控件（create_file_dialog 返回 0），因此拿不到系统自己的选择器；chooser-frame -> ready：挂载、Return 选中真实路径、Escape 取消、无选择时返回被拒；directory-watch -> ready：目录内一次写入产生 1 个事件，监听不存在的目录被明确拒绝 |
-| linux | platform | not-verified | clipboard -> ready：写回一个 35 字符的非 ASCII 串并读回成功（由状态后端回答）；url-handler -> ready：xdg-open 在 PATH 上，选项形状与无 scheme 的目标在启动前被拒；url-handover -> not-verified：探针不得打开用户的浏览器，交接只在宿主自己的测试里对受控处理程序验证 |
+| linux | platform | not-verified | clipboard -> ready：写回一个 35 字符的非 ASCII 串并读回成功（由状态后端回答）；url-handler -> ready：xdg-open 在 PATH 上，选项形状与无 scheme 的目标在启动前被拒；url-handover -> not-verified：探针不得打开用户的浏览器，交接只在宿主自己的测试里对受控处理程序验证；network-services -> ready：声明的回环服务在许可下真的收到 4 字节请求并被应答，策略未声明的服务被拒，记录过期的凭据在发出请求前被诊断并给出下一步，凭据在许可渲染与日志行里都不出现 |
 | linux | scope | ready | project-trust -> ready：未信任工程被拒且没有写出标记文件，信任后仍需授权范围，撤销授权后再次被拒，产物里带完整授权记录；notifications -> ready：真实失败的任务/进程、缺失程序与真实权限拒绝各自成为带原因与下一步的通知，重复只计数；project-scope -> ready：两个工程各自启动一个进程，关闭其一后它的进程消失、另一个存活、关闭的作用域句柄拒绝新工作，且关闭顺序被如实回报 |
 
 ## 规则

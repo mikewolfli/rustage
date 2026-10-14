@@ -35,6 +35,10 @@ use rust_widgets::widget::runtime;
 
 use super::clipboard::{ClipboardHost, ClipboardRead, ClipboardWrite, NativeClipboard};
 use super::dialog::{DialogMode, DialogOutcome, DialogRequest, FileChooser, FrameChooser};
+use super::network::{
+    CredentialRef, CredentialSource, NetworkGateway, NetworkPolicy, NetworkRefusal, Secret,
+    ServicePolicy, TlsPolicy, connect, default_store, exchange, redact,
+};
 use super::notify::{Cause, NotificationCentre, Severity};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
 use super::paths::{HostDirectories, HostDirectory, ProjectRoot, SystemPaths};
@@ -88,11 +92,14 @@ pub enum Capability {
     /// Project scope: two open projects cannot reach each other's work, and closing one leaves
     /// nothing of it running.
     ProjectScope,
+    /// Network services: a declared service is reached only under a permit, an undeclared one is
+    /// refused, a stale credential is diagnosed, and a credential never appears in the output.
+    NetworkServices,
 }
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::StartupSession,
         Self::InputEvents,
         Self::NativeFileDialog,
@@ -107,6 +114,7 @@ impl Capability {
         Self::ProjectTrust,
         Self::Notifications,
         Self::ProjectScope,
+        Self::NetworkServices,
     ];
 
     /// The name this capability is known by in the artifact.
@@ -126,6 +134,7 @@ impl Capability {
             Self::ProjectTrust => "project-trust",
             Self::Notifications => "notifications",
             Self::ProjectScope => "project-scope",
+            Self::NetworkServices => "network-services",
         }
     }
 }
@@ -241,6 +250,7 @@ impl ReadinessReport {
         checks.push(check_project_trust());
         checks.push(check_notifications());
         checks.push(check_project_scope());
+        checks.push(check_network_services());
 
         Self {
             rustage_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2096,6 +2106,217 @@ fn check_project_scope() -> CapabilityCheck {
         },
         evidence,
     )
+}
+
+/// Whether a declared service is reachable only under a permit, and whether a credential stays out
+/// of everything that is shown.
+///
+/// This is T01.09's acceptance line. The connection is real — a loopback listener this check starts
+/// and a request that arrives at it — and so are the two refusals around it: an undeclared service,
+/// and a credential whose recorded expiry has passed. The credential is a value this check makes up,
+/// which is the point: what is verified is the host's *treatment* of material, not a real token.
+fn check_network_services() -> CapabilityCheck {
+    let scratch = match Scratch::new("network") {
+        Ok(scratch) => scratch,
+        Err(reason) => {
+            return CapabilityCheck::new(
+                Capability::NetworkServices,
+                CheckStatus::NotVerified { reason },
+                "no project directory",
+            );
+        }
+    };
+    let root = match ProjectRoot::new(scratch.path()) {
+        Ok(root) => root,
+        Err(error) => {
+            return CapabilityCheck::new(
+                Capability::NetworkServices,
+                CheckStatus::NotVerified {
+                    reason: error.to_string(),
+                },
+                "the project directory could not be resolved",
+            );
+        }
+    };
+
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener,
+        Err(error) => {
+            return CapabilityCheck::new(
+                Capability::NetworkServices,
+                CheckStatus::NotVerified {
+                    reason: format!("a loopback listener could not be opened: {error}"),
+                },
+                "no loopback address to reach",
+            );
+        }
+    };
+    let port = listener
+        .local_addr()
+        .map(|address| address.port())
+        .unwrap_or_default();
+    let answered = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&answered);
+    let _server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buffer = [0u8; 64];
+            if let Ok(read) = std::io::Read::read(&mut stream, &mut buffer) {
+                counter.fetch_add(read, Ordering::SeqCst);
+                let _ = std::io::Write::write_all(&mut stream, &buffer[..read]);
+            }
+        }
+    });
+
+    let permission = Arc::new(PermissionService::new());
+    permission.trust(&root);
+    let authorized = permission
+        .authorize(
+            super::permission::Scope::Project(&root),
+            PermissionCapability::RequestNetworkService,
+        )
+        .is_ok();
+    let token = Secret::new("readiness-loopback-token");
+    let gateway = NetworkGateway::new(Arc::clone(&permission), default_store());
+    let mut policy = NetworkPolicy::new();
+    // The stale credential is the *service* credential, so the finding the host produces is the one
+    // this part of the check is about: an expiry, not a certificate configuration problem.
+    policy.declare(
+        ServicePolicy::new("readiness-loopback", "127.0.0.1", port, TlsPolicy::new())
+            .with_credential(
+                CredentialRef::new("readiness-token", CredentialSource::SystemKeyring)
+                    .expiring_at(std::time::SystemTime::now() - Duration::from_secs(60)),
+            ),
+    );
+    gateway.declare_policy(&root, &policy);
+
+    // 1. A service the policy does not name is refused, and the refusal names what is declared.
+    let undeclared = matches!(
+        gateway.permit(&root, &policy, "not-declared", Principal::Human),
+        Err(NetworkRefusal::NotConfigured { .. }),
+    );
+
+    // 2. The declared service needs a usable credential, and this one is stale: diagnosed before
+    //    anything is sent, with a next step rather than a far-end failure.
+    let stale = match gateway.permit(&root, &policy, "readiness-loopback", Principal::Human) {
+        Err(NetworkRefusal::Credential { health, .. }) => health.next_step().is_some(),
+        _ => false,
+    };
+
+    // 3. With a credential that has no recorded expiry, the permit is minted and a real request
+    //    arrives at the listener.
+    let mut usable = NetworkPolicy::new();
+    usable.declare(
+        ServicePolicy::new("readiness-loopback", "127.0.0.1", port, TlsPolicy::new())
+            .with_credential(CredentialRef::new(
+                "readiness-token",
+                CredentialSource::SystemKeyring,
+            )),
+    );
+    let live_gateway = NetworkGateway::new(
+        Arc::clone(&permission),
+        Arc::new(ReadinessStore {
+            material: token.clone(),
+        }),
+    );
+    live_gateway.declare_policy(&root, &usable);
+    let permitted = live_gateway
+        .permit(&root, &usable, "readiness-loopback", Principal::Human)
+        .ok();
+    let answered_bytes = match &permitted {
+        Some(permit) => match connect(permit, Duration::from_secs(5)) {
+            Ok(mut stream) => match exchange(&mut stream, "ping") {
+                Ok(answer) => {
+                    let _ = answer;
+                    answered.load(Ordering::SeqCst)
+                }
+                Err(_) => 0,
+            },
+            Err(_) => 0,
+        },
+        None => 0,
+    };
+
+    // 4. The credential never appears in what a person is shown: not in the permit's own rendering,
+    //    not in a file read through the redacting reader, and not in a log line built from them.
+    let rendered = permitted
+        .as_ref()
+        .map(|permit| permit.render())
+        .unwrap_or_default();
+    let through_a_log_line = redact(
+        &format!("the answer was {} and the token {}", "ping", token.expose()),
+        &[&token],
+    );
+    let hidden = !rendered.contains(token.expose())
+        && !through_a_log_line.contains(token.expose())
+        && rendered.contains("redacted");
+    let presents = permitted
+        .as_ref()
+        .is_some_and(|permit| permit.presents_credential());
+
+    let evidence = format!(
+        "a declared loopback service on port {port}: {} bytes answered by the listener; permit \
+         minted: {}; the credential is present: {presents} and never shown: {hidden}; a service the \
+         policy does not name: refused ({undeclared}); a credential whose recorded expiry passed: \
+         refused with a next step ({stale}); the scope authorized: {authorized}",
+        answered_bytes,
+        permitted.is_some(),
+    );
+
+    let mut missing = Vec::new();
+    if !authorized {
+        missing.push("the network scope could not be authorized");
+    }
+    if !undeclared {
+        missing.push("a service the policy does not name was reachable");
+    }
+    if !stale {
+        missing.push("an expired credential was not diagnosed before the request");
+    }
+    if permitted.is_none() {
+        missing.push("a declared service with a usable credential got no permit");
+    }
+    if answered_bytes == 0 {
+        missing.push("the permitted request never arrived at the listener");
+    }
+    if !presents {
+        missing.push("the permit did not carry the credential the service declares");
+    }
+    if !hidden {
+        missing.push("the credential appeared in something a person is shown");
+    }
+
+    if missing.is_empty() {
+        return CapabilityCheck::new(Capability::NetworkServices, CheckStatus::Ready, evidence);
+    }
+    CapabilityCheck::new(
+        Capability::NetworkServices,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
+}
+
+/// A store that answers with one value, so the check can exercise the host's *treatment* of
+/// material without a keyring and without a real token.
+struct ReadinessStore {
+    material: Secret,
+}
+
+impl super::network::CredentialStore for ReadinessStore {
+    fn lookup(&self, _reference: &CredentialRef) -> Option<Secret> {
+        Some(self.material.clone())
+    }
+
+    fn absence(&self, reference: &CredentialRef) -> super::network::CredentialHealth {
+        super::network::CredentialHealth::Missing {
+            reason: format!("{} is not in the readiness store", reference.name()),
+        }
+    }
+
+    fn description(&self) -> String {
+        "the readiness check's own store".to_owned()
+    }
 }
 
 /// A severity in one word, for an evidence line.

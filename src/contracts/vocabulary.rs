@@ -130,10 +130,22 @@ mod tests {
                 }
             }
         }
+        // Deployment is the one effect the decision table still has no row for, and the line has to
+        // say so rather than look like a refusal of a capability that exists.
+        let undecided: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("undecided"))
+            .collect();
+        assert_eq!(undecided.len(), 1, "{lines:?}");
+        assert!(
+            undecided[0].contains(EffectClass::Deploy.name()),
+            "{undecided:?}"
+        );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("no decision-table row"))
+                .any(|line| line.contains(Capability::RequestNetworkService.name())),
+            "the network row now decides an effect, so it has to be named: {lines:?}",
         );
     }
 }

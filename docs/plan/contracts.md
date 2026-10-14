@@ -69,6 +69,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | human-only | 该操作只有人的路径 |
 | generated-code-read-only | 生成物只读，改动应回到设计模型 |
 | scope-not-authorized | 执行范围尚未授权 |
+| service-not-configured | 服务不在工程网络策略里：先声明该服务并授权，再发起请求 |
 
 ## 操作类别与默认权限（白皮书 §12.5）
 
@@ -81,6 +82,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | 落盘写文件 | `write-file` | `human-only` | **仅人可触发** | A-2 | `human-only` | `an_approval_never_opens_a_human_only_path` |
 | 运行 `cargo check` | `run-cargo-check` | `authorized-when-trusted` | **工程已信任且执行范围获授权后 agent 可触发** | 可运行 build script/过程宏或访问网络，不是只读；须经宿主任务/权限门禁 | `untrusted-project` | `running_cargo_needs_trust_first_and_the_scope_afterwards` |
 | 新增依赖 / 改 `Cargo.toml` | `change-dependencies` | `needs-confirmation` | **必须人确认** | 影响全部 profile 与门禁 | `needs-confirmation` | `the_default_table_matches_the_whitepaper_rows` |
+| 对工程网络策略里的服务发起请求 | `request-network-service` | `authorized-when-trusted` | **工程已信任且服务范围获授权后 agent 可触发** | 会外发数据并可能携带凭据；只允许到达工程策略里声明并授权的服务，不暗自联网 | `untrusted-project` | `a_network_request_needs_the_service_declared_and_authorized` |
 
 ## 唯一写入入口
 
@@ -119,7 +121,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-STALE-LABELED | 快照与源映射各自带 stamp，可被同一套 Staleness 判定 |
 | INV-DIAGNOSTIC-LOCATABLE | 位置同时携带节点与源码区间，两者不是二选一 |
 | INV-MOST-SPECIFIC-MAPPING | 未映射的节点与位置另有用例覆盖 |
-| INV-EFFECT-DECIDED | 命令与文件分别由 run-cargo-check 与 write-file 裁定，映射理由写在 EffectClass 的文档注释里；网络与部署返回未决定并给出原因，宿主因此拒绝，而不是发明一条授权 |
+| INV-EFFECT-DECIDED | 命令、文件与网络分别由 run-cargo-check、write-file 与 request-network-service 裁定，映射理由写在 EffectClass 的文档注释里；部署仍是未决定（C-REMOTE 为延期能力）并给出原因，宿主因此拒绝，而不是发明一条授权 |
 
 ## 为什么权限表要交叉校验
 

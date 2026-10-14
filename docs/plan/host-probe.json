@@ -22,32 +22,53 @@
     {
       "id": "startup",
       "wording": "启动：会话起得来，环境说得清楚",
-      "checks": ["startup-session", "host-directories"]
+      "checks": [
+        "startup-session",
+        "host-directories"
+      ]
     },
     {
       "id": "input",
       "wording": "输入：指针与键盘事件真的到达已挂载的控件",
-      "checks": ["input-events"]
+      "checks": [
+        "input-events"
+      ]
     },
     {
       "id": "process",
       "wording": "进程：后台任务可提交可取消，且只清理本会话拥有的进程树",
-      "checks": ["background-executor", "process-trees"]
+      "checks": [
+        "background-executor",
+        "process-trees"
+      ]
     },
     {
       "id": "file",
       "wording": "文件：选择器（系统与自绘）、目录事件，以及选择结果是否指向真实文件",
-      "checks": ["native-file-dialog", "chooser-frame", "directory-watch"]
+      "checks": [
+        "native-file-dialog",
+        "chooser-frame",
+        "directory-watch"
+      ]
     },
     {
       "id": "platform",
-      "wording": "平台服务：剪贴板、URL 处理程序与交接",
-      "checks": ["clipboard", "url-handler", "url-handover"]
+      "wording": "平台服务：剪贴板、URL 处理程序与交接、网络服务授权与脱敏",
+      "checks": [
+        "clipboard",
+        "url-handler",
+        "url-handover",
+        "network-services"
+      ]
     },
     {
       "id": "scope",
       "wording": "工程作用域与权限：信任、通知、关闭后不留悬挂服务",
-      "checks": ["project-trust", "notifications", "project-scope"]
+      "checks": [
+        "project-trust",
+        "notifications",
+        "project-scope"
+      ]
     }
   ],
   "hosts": [
@@ -116,7 +137,7 @@
       "group": "platform",
       "status": "probed",
       "outcome": "not-verified",
-      "evidence": "clipboard -> ready：写回一个 35 字符的非 ASCII 串并读回成功（由状态后端回答）；url-handler -> ready：xdg-open 在 PATH 上，选项形状与无 scheme 的目标在启动前被拒；url-handover -> not-verified：探针不得打开用户的浏览器，交接只在宿主自己的测试里对受控处理程序验证"
+      "evidence": "clipboard -> ready：写回一个 35 字符的非 ASCII 串并读回成功（由状态后端回答）；url-handler -> ready：xdg-open 在 PATH 上，选项形状与无 scheme 的目标在启动前被拒；url-handover -> not-verified：探针不得打开用户的浏览器，交接只在宿主自己的测试里对受控处理程序验证；network-services -> ready：声明的回环服务在许可下真的收到 4 字节请求并被应答，策略未声明的服务被拒，记录过期的凭据在发出请求前被诊断并给出下一步，凭据在许可渲染与日志行里都不出现"
     },
     {
       "host": "linux",

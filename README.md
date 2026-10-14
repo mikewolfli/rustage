@@ -125,6 +125,7 @@ cargo run -- --new-project target/new-project       # creates a project: plan, s
 cargo run -- --open-project target/new-project/project.json   # opens a project read-only and prints the trust question
 cargo run -- --project-tree target/new-project/project.json   # what the project has, classified
 cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json   # previews a move and rewrites what named it; --apply does it
+cargo run -- --configuration target/new-project/project.json   # which target builds it, and what each value came from
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

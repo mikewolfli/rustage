@@ -62,6 +62,8 @@ cargo run -- --project-tree target/new-project/project.json  # what the project 
 cargo run -- --drop-entry target/new-project/project.json --document pages/main.json --trust
 cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json   # preview; writes nothing
 cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json --apply --trust
+cargo run -- --configuration target/new-project/project.json          # which target, what each value came from
+cargo run -- --configuration target/new-project/project.json --target default --remember   # choose one for this machine
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -203,6 +205,26 @@ puts it back, and if the held copy cannot be removed afterwards the command says
 of reporting a clean delete. A file's path, the references to it and the operation's own failures
 therefore all have a stated outcome; rewriting the *design* files a resource is used in, undo of a
 successful operation, and the file operations' own window belong to later tasks (T03/T05).
+
+`--configuration <file>` is where this milestone's third acceptance line lives: "the source is
+visible, and an active configuration does not leak between projects". A value is never just a value
+— `Setting` carries the layer it came from and the values it replaced, so the report reads "profile:
+release (from target `release`; it replaced `debug` from the built-in default)", and a layer that
+says nothing is not a layer that said "no": silence means the layer below decides. The layers are the
+built-in default, the target the project document declares, and this machine's overrides; there is
+deliberately no project-level profile member, because version 2 of the format does not have one and
+adding one would be a format change this task does not need. The active target and the overrides are
+machine-local state (the host's configuration directory), and every entry in that file carries the
+**identity** of the project it was recorded for: what was chosen for one project is reported as
+belonging to another rather than used, an override recorded for another project or another target is
+listed under "not applied" with the reason, and a resolution carries the identity it was made for —
+`ResolvedConfiguration::for_project` is what refuses it to anybody else. `--remember` records the
+target and the overrides for this project; `--forget` removes them. The credential side of the same
+view lists each service's credential as a reference — the name, where the material lives (`system
+credential store`, or an environment variable) and the health the host's store reports — and never
+the material, which is why the view has no field a secret could be put in. A settings window, the
+per-setting editors and the credential picker belong to the shell (T26); kit-versus-profile and the
+target triple belong to T02.10.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

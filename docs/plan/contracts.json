@@ -377,6 +377,33 @@
       "test": "a_failure_after_the_moves_puts_them_back",
       "evidence": "测试",
       "note": "移动先做、文档最后写，因此失败只可能落在文档写入上；FileFailure::is_recovered 说“是否还需要人看一眼”，命令的退出码不因此变成成功（原则 22：不把失败藏在成功里）"
+    },
+    {
+      "id": "INV-CONFIG-SOURCE-VISIBLE",
+      "statement": "构建/运行配置的每个生效值都带来源（内置默认 / 目标 / 本机覆盖）以及它替换掉的各层取值：没有“只看值”的读取路径",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/configuration.rs",
+      "test": "every_value_says_where_it_came_from",
+      "evidence": "结构 + 测试",
+      "note": "Setting 同时持有 value、source 与 replaced，因此调用方拿到值就拿到来源；某一层沉默不等于它说了“无”——沉默时下层决定，报告据实写出（quiet 目标用例）；本机覆盖替换列表时也逐条报告被替换项，避免“被去掉的特性”看起来像“从来没要过”"
+    },
+    {
+      "id": "INV-CONFIG-NOT-SHARED",
+      "statement": "本机记录的活动目标与覆盖都带工程身份：读取时必须给出身份，属于别的工程的选择与覆盖一律不使用并说明原因",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/configuration.rs",
+      "test": "an_active_configuration_does_not_leak_between_projects",
+      "evidence": "结构 + 测试",
+      "note": "active_for(id) 只回答该身份；别处的选择返回 AnotherProject 并把双方身份都写出来，解析时不采用；覆盖按 工程+目标 判定，未命中的进 Skipped 并带原因；ResolvedConfiguration::for_project 拒绝把配置交给别的工程"
+    },
+    {
+      "id": "INV-CREDENTIAL-VIEW-NEVER-MATERIAL",
+      "statement": "机密引用视图只呈现“名字 + 材料在哪 + 存储怎么说”，从不读取、持有或渲染材料本身",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/configuration.rs",
+      "test": "a_credential_is_shown_as_a_reference_and_its_health_never_its_material",
+      "evidence": "结构 + 测试",
+      "note": "凭据视图由 CredentialRef::health(store, now) 得出（该接口只回答 Usable/ExpiringSoon/Expired/Missing/Unavailable）；lookup 只在网络层发出请求前调用；本模块的类型里没有 Secret 字段，因此“渲染出机密”不是纪律而是不可表达"
     }
   ]
 }

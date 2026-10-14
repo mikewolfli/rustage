@@ -19,7 +19,7 @@ use std::{
 };
 
 use crate::host::log::Level;
-use crate::project::{create::Template, files::FileOperation};
+use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -47,6 +47,8 @@ pub enum Command {
     DropEntry(DropEntryOptions),
     /// Previews or performs one file operation on a project (task T02.05).
     FileOp(FileOpOptions),
+    /// Shows the build configuration of a project, and what each value came from (task T02.06).
+    Configuration(ConfigurationOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -124,6 +126,43 @@ impl DropEntryOptions {
             document: document.into(),
             fix: false,
             trust: false,
+        }
+    }
+}
+
+/// An override given on the command line: which setting, and what value.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OverrideWord {
+    /// The setting's word.
+    pub key: String,
+    /// The value, as a word or as a list.
+    pub value: SettingValue,
+}
+
+/// How a project's configuration should be shown, and whether anything should be recorded.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConfigurationOptions {
+    /// The project document.
+    pub path: PathBuf,
+    /// The target to resolve for, instead of the one this machine chose.
+    pub target: Option<String>,
+    /// Overrides for this run, which are also what `--remember` records.
+    pub overrides: Vec<OverrideWord>,
+    /// Whether the target and the overrides should be recorded for this project on this machine.
+    pub remember: bool,
+    /// Whether everything recorded for this project should be forgotten.
+    pub forget: bool,
+}
+
+impl ConfigurationOptions {
+    /// Options that show a project's configuration and record nothing.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            target: None,
+            overrides: Vec::new(),
+            remember: false,
+            forget: false,
         }
     }
 }
@@ -436,6 +475,58 @@ where
             options.trust = trust;
             return Ok(Command::FileOp(options));
         }
+        "--configuration" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = ConfigurationOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--target" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(target) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.target = Some(target.trim().to_owned());
+                    }
+                    "--override" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(word) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        let Some((key, value)) = word.split_once('=') else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if key.trim().is_empty() {
+                            return Err(ParseError {
+                                argument: word.into(),
+                            });
+                        }
+                        // One spelling on the command line, two shapes in the model: a setting that
+                        // holds a list takes a comma-separated one, and an empty word means the empty
+                        // list rather than a missing value.
+                        let value = if key.trim() == "features" || value.contains(',') {
+                            SettingValue::list(value.split(','))
+                        } else {
+                            SettingValue::Word(value.trim().to_owned())
+                        };
+                        options.overrides.push(OverrideWord {
+                            key: key.trim().to_owned(),
+                            value,
+                        });
+                    }
+                    "--remember" => options.remember = true,
+                    "--forget" => options.forget = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Configuration(options));
+        }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
             let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -473,6 +564,8 @@ pub fn help_text() -> &'static str {
             rustage --drop-entry <file> --document <path> [--fix] [--trust]\n\
             rustage --file-op <file> [--add <path> | --exclude <path> | --delete <path>]\n\
                                  [--move <from> <to>] [--apply] [--trust]\n\n\
+            rustage --configuration <file> [--target <name>] [--override <key>=<value>]\n\
+                                  [--remember | --forget]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -500,6 +593,14 @@ pub fn help_text() -> &'static str {
                                      what it would do unless --apply is given, which does it\n\
        --apply                       With --file-op, do it: move the files, then write the\n\
                                      document, putting the moves back if the write fails\n\n\
+       --configuration <file>        Show which target would build this project, what each\n\
+                                     value came from, and what this machine overrode\n\
+       --target <name>               With --configuration, resolve for this target\n\
+       --override <key>=<value>      With --configuration, set `profile` or `features` for this\n\
+                                     run; a list is comma-separated\n\
+       --remember                    With --configuration, record the target and the overrides\n\
+                                     for this project on this machine\n\
+       --forget                      With --configuration, forget everything recorded for it\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -509,11 +610,11 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, DropEntryOptions, FileOpOptions, LaunchOptions, NewProjectOptions,
-        OpenProjectOptions, log_level_of, parse,
+        Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, LaunchOptions,
+        NewProjectOptions, OpenProjectOptions, log_level_of, parse,
     };
     use crate::host::log::Level;
-    use crate::project::{create::Template, files::FileOperation};
+    use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
     use std::time::Duration;
 
     #[test]
@@ -673,6 +774,64 @@ mod tests {
         assert!(log_level_of(["--log-level"]).is_err());
         assert!(log_level_of(["--log-level", "shout"]).is_err());
         assert!(parse(["--log-level", "shout", "--help"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_configuration_options() {
+        assert_eq!(
+            parse(["--configuration", "demo/project.json"]),
+            Ok(Command::Configuration(ConfigurationOptions::new(
+                PathBuf::from("demo/project.json")
+            )))
+        );
+        assert_eq!(
+            parse([
+                "--configuration",
+                "demo/project.json",
+                "--target",
+                "release",
+                "--override",
+                "profile=release",
+                "--override",
+                "features=desktop,gpu",
+                "--remember"
+            ]),
+            Ok(Command::Configuration(ConfigurationOptions {
+                path: PathBuf::from("demo/project.json"),
+                target: Some("release".to_owned()),
+                overrides: vec![
+                    super::OverrideWord {
+                        key: "profile".to_owned(),
+                        value: SettingValue::Word("release".to_owned()),
+                    },
+                    super::OverrideWord {
+                        key: "features".to_owned(),
+                        value: SettingValue::List(vec!["desktop".to_owned(), "gpu".to_owned()]),
+                    },
+                ],
+                remember: true,
+                forget: false,
+            }))
+        );
+        assert_eq!(
+            parse(["--configuration", "p.json", "--forget"]),
+            Ok(Command::Configuration(ConfigurationOptions {
+                path: PathBuf::from("p.json"),
+                target: None,
+                overrides: Vec::new(),
+                remember: false,
+                forget: true,
+            }))
+        );
+
+        // A missing path, a missing value, an override without `=` and an unknown flag are usage
+        // errors: none of them can be read as "record nothing", which would look like success.
+        assert!(parse(["--configuration"]).is_err());
+        assert!(parse(["--configuration", "p.json", "--target"]).is_err());
+        assert!(parse(["--configuration", "p.json", "--override"]).is_err());
+        assert!(parse(["--configuration", "p.json", "--override", "profile"]).is_err());
+        assert!(parse(["--configuration", "p.json", "--override", "=release"]).is_err());
+        assert!(parse(["--configuration", "p.json", "--wat"]).is_err());
     }
 
     #[test]

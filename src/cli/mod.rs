@@ -8,7 +8,8 @@
 mod command;
 
 pub use command::{
-    Command, DropEntryOptions, FileOpOptions, OpenProjectOptions, help_text, log_level_of, parse,
+    Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, OpenProjectOptions, help_text,
+    log_level_of, parse,
 };
 
 /// The process exit codes, defined once in the host and re-exported so a command-line caller and a

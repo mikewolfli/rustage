@@ -118,6 +118,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-MIGRATION-IS-VERSIONED | 格式变更附带带版本的迁移步骤；能到达本构建版本的旧文档被读取并在写回时先保留原文件，到不了的版本明确拒绝 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `an_older_version_is_migrated_by_versioned_steps` | 测试 |
 | INV-FILE-OP-PREVIEWS | 文件操作先出计划：计划只读工程、写出要做的每一步，不写盘；有设计引用指向该文件时阻断并列出引用，而不是静默丢弃引用 | `C-PROJECT` | [`src/project/files.rs`](../../src/project/files.rs) | `a_plan_is_a_preview_that_touches_nothing` | 测试 |
 | INV-FILE-OP-FAILURE-RECOVERS | 文件操作失败时已做的移动按逆序回滚，并如实报告回滚了哪些、没能回滚什么；写文档失败不会留下半个工程 | `C-PROJECT` | [`src/project/files.rs`](../../src/project/files.rs) | `a_failure_after_the_moves_puts_them_back` | 测试 |
+| INV-CONFIG-SOURCE-VISIBLE | 构建/运行配置的每个生效值都带来源（内置默认 / 目标 / 本机覆盖）以及它替换掉的各层取值：没有“只看值”的读取路径 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `every_value_says_where_it_came_from` | 结构 + 测试 |
+| INV-CONFIG-NOT-SHARED | 本机记录的活动目标与覆盖都带工程身份：读取时必须给出身份，属于别的工程的选择与覆盖一律不使用并说明原因 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `an_active_configuration_does_not_leak_between_projects` | 结构 + 测试 |
+| INV-CREDENTIAL-VIEW-NEVER-MATERIAL | 机密引用视图只呈现“名字 + 材料在哪 + 存储怎么说”，从不读取、持有或渲染材料本身 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `a_credential_is_shown_as_a_reference_and_its_health_never_its_material` | 结构 + 测试 |
 
 ## 不变量的补充说明
 
@@ -145,6 +148,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-MIGRATION-IS-VERSIONED | 决策 Q6：迁移前不原地覆盖原文件（save 对旧版本拒绝，save_migrating 先写 .v1.bak）；决策 U1：只向前、按步；文档声明 v1 却带 v2 才有的成员会被拒绝，而不是被相信 |
 | INV-FILE-OP-PREVIEWS | 阻断项（blockers）与计划同一次读出，因此“能不能做”先于“做了什么”；删除一个页面文档被阻断，指向它的设计引用逐条列出（页面成员与属性），并给出替代做法：删条目而不是删文件 |
 | INV-FILE-OP-FAILURE-RECOVERS | 移动先做、文档最后写，因此失败只可能落在文档写入上；FileFailure::is_recovered 说“是否还需要人看一眼”，命令的退出码不因此变成成功（原则 22：不把失败藏在成功里） |
+| INV-CONFIG-SOURCE-VISIBLE | Setting 同时持有 value、source 与 replaced，因此调用方拿到值就拿到来源；某一层沉默不等于它说了“无”——沉默时下层决定，报告据实写出（quiet 目标用例）；本机覆盖替换列表时也逐条报告被替换项，避免“被去掉的特性”看起来像“从来没要过” |
+| INV-CONFIG-NOT-SHARED | active_for(id) 只回答该身份；别处的选择返回 AnotherProject 并把双方身份都写出来，解析时不采用；覆盖按 工程+目标 判定，未命中的进 Skipped 并带原因；ResolvedConfiguration::for_project 拒绝把配置交给别的工程 |
+| INV-CREDENTIAL-VIEW-NEVER-MATERIAL | 凭据视图由 CredentialRef::health(store, now) 得出（该接口只回答 Usable/ExpiringSoon/Expired/Missing/Unavailable）；lookup 只在网络层发出请求前调用；本模块的类型里没有 Secret 字段，因此“渲染出机密”不是纪律而是不可表达 |
 
 ## 为什么权限表要交叉校验
 

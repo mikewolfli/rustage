@@ -11,12 +11,16 @@
 //! `crate::host::readiness`.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::cli::{self, Command};
 use crate::host::paths::{HostDirectories, HostDirectory};
 use crate::host::permission::PermissionService;
 use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
+use crate::project::configuration::{
+    ActiveVerdict, MachineConfiguration, Override, ResolvedConfiguration, SettingKey,
+};
 use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
 use crate::project::entries::{ProjectEntries, ProjectTree};
 use crate::project::files::FilePlan;
@@ -132,6 +136,12 @@ pub fn run(command: Command) {
         }
         Command::FileOp(options) => {
             if !file_op(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Configuration(options) => {
+            if !configuration(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
@@ -476,6 +486,178 @@ fn file_op(options: &crate::cli::FileOpOptions) -> bool {
             println!("recovered: {}", failure.is_recovered());
             // The operation did not happen, so this is not a success even when everything was put
             // back; the recovery is reported because it decides whether anyone has to look.
+            false
+        }
+    }
+}
+
+/// Shows which target would build a project, what every value came from, and what this machine
+/// overrode (task T02.06).
+///
+/// Reading a configuration decides nothing and needs no permission: it reads the project document,
+/// this machine's configuration file, and whether each credential's material is where the reference
+/// says. Recording what was shown is a write — of the host's own state, not the project's, which is
+/// why it takes no permission and why every entry it writes carries the project's identity.
+fn configuration(options: &crate::cli::ConfigurationOptions) -> bool {
+    let directories = match HostDirectories::from_environment() {
+        Ok(directories) => directories,
+        Err(error) => {
+            println!("rustage: this machine's configuration directory is unknown: {error}");
+            return false;
+        }
+    };
+    let mut machine = match MachineConfiguration::load(
+        directories
+            .path(HostDirectory::Config)
+            .join("configuration.json"),
+    ) {
+        Ok(machine) => machine,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+
+    let file = match ProjectFile::open(&options.path) {
+        Ok(file) => file,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    let Some(document) = file.document() else {
+        println!("rustage: the document cannot be interpreted, so it has no configuration");
+        return false;
+    };
+    let identity = document.identity();
+
+    if options.forget {
+        let forgotten = machine.forget(identity.id());
+        println!(
+            "forgot {forgotten} thing(s) recorded for {} ({})",
+            identity.name(),
+            identity.id()
+        );
+        return match machine.save() {
+            Ok(path) => {
+                println!("wrote {}", path.display());
+                true
+            }
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                false
+            }
+        };
+    }
+
+    // The overrides given on the command line are the ones this run resolves with; recording them is
+    // a separate decision, so a person can see what they do before they persist.
+    let mut remembered = Vec::new();
+    for word in &options.overrides {
+        let Some(key) = SettingKey::parse(&word.key) else {
+            println!("rustage: `{}` is not a setting", word.key);
+            return false;
+        };
+        let entry = match Override::new(
+            identity.id(),
+            options.target.clone(),
+            key,
+            word.value.clone(),
+            SystemTime::now(),
+        ) {
+            Ok(entry) => entry,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        };
+        remembered.push(entry);
+    }
+
+    // What this run resolves with: the machine's state as it is, plus the words on the command line.
+    let mut effective = machine.clone();
+    for entry in &remembered {
+        effective.remember(entry.clone());
+    }
+    let resolved = match ResolvedConfiguration::of(document, options.target.as_deref(), &effective)
+    {
+        Ok(resolved) => resolved,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+
+    // Nothing in the project is written either way, so no question is asked: what `--remember`
+    // writes is this machine's own state, which is the host's business and not the project's.
+    if options.remember {
+        println!(
+            "project: read only; no question is asked, because what is recorded belongs to this \
+             machine and not to the project"
+        );
+    } else {
+        println!("project: read only; nothing is written and no question is asked");
+    }
+
+    // The choice recorded for another project is printed rather than used: that is the acceptance,
+    // and saying it out loud is what makes it visible.
+    match effective.active_for(identity.id()) {
+        ActiveVerdict::Chosen(choice) => println!(
+            "chosen target: `{}` (chosen for this project on this machine)",
+            choice.target()
+        ),
+        ActiveVerdict::AnotherProject(choice) => println!(
+            "chosen target: none for this project; `{}` is chosen for {} ({}), and a choice belongs \
+             to one project",
+            choice.target(),
+            choice.name(),
+            choice.project()
+        ),
+        ActiveVerdict::NeverChosen => {
+            println!("chosen target: none has been chosen for this project on this machine")
+        }
+    }
+    for line in resolved.render() {
+        println!("{line}");
+    }
+    // The store is the environment, which is what this host has; a credential whose material lives in
+    // the system keyring is reported as unavailable rather than as missing, and never as a value.
+    let store = crate::host::network::default_store();
+    let views =
+        crate::project::configuration::credentials(document, store.as_ref(), SystemTime::now());
+    if views.is_empty() {
+        println!("credentials: no service of this project names one");
+    } else {
+        for view in views {
+            println!("  credential: {}", view.render());
+        }
+    }
+
+    if !options.remember {
+        return true;
+    }
+    if options.target.is_none() && remembered.is_empty() {
+        println!("rustage: --remember needs a --target or an --override to record");
+        return false;
+    }
+
+    if let Some(target) = options.target.as_deref() {
+        machine.set_active(identity.id(), identity.name(), target, SystemTime::now());
+    }
+    for entry in remembered {
+        machine.remember(entry);
+    }
+    match machine.save() {
+        Ok(path) => {
+            println!("recorded for {} ({}):", identity.name(), identity.id());
+            for line in machine.render() {
+                println!("  {line}");
+            }
+            println!("wrote {}", path.display());
+            true
+        }
+        Err(error) => {
+            println!("rustage: {}", error.message());
             false
         }
     }

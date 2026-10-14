@@ -22,6 +22,7 @@
 
 #![allow(dead_code)]
 
+pub mod configuration;
 pub mod create;
 pub mod entries;
 pub mod files;

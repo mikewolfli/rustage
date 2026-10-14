@@ -77,19 +77,82 @@ use crate::project::json::{self, Json, JsonError, JsonKind, JsonObject, Number};
 /// The name a project's metadata document has inside its root.
 pub const PROJECT_FILE_NAME: &str = "project.json";
 
-/// The member names version 1 defines, in the order the writer writes them.
+/// The member names the current version defines, in the order the writer writes them.
 ///
 /// It is a value rather than a comment so that the cost of adding a member is visible in one place;
-/// a member added here without a format version bump is exactly what decision `F1` forbids.
-pub const VERSION_1_MEMBERS: [&str; 7] = [
+/// a member added here without a format version bump is exactly what decision `F1` forbids, and
+/// `startup` is what that bump looked like: version 2 added it, and version 1 documents are read by
+/// the migration table below.
+pub const VERSION_MEMBERS: [&str; 8] = [
     "format",
     "project",
     "pages",
     "resources",
     "targets",
     "generated",
+    "startup",
     "network",
 ];
+
+/// One step between two format versions.
+///
+/// Decision `Q6` asks every format change to come with a **versioned** migration step and a
+/// repeatable test, and decision `U1` makes migration forward-only: a step never goes back, and a
+/// version with no step out of it is refused rather than guessed at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MigrationStep {
+    from: FormatVersion,
+    to: FormatVersion,
+    what: &'static str,
+}
+
+impl MigrationStep {
+    /// The version a document has before the step.
+    pub const fn from(self) -> FormatVersion {
+        self.from
+    }
+
+    /// The version it has after.
+    pub const fn to(self) -> FormatVersion {
+        self.to
+    }
+
+    /// What the step does, in one sentence.
+    pub const fn what(self) -> &'static str {
+        self.what
+    }
+}
+
+/// Every step this build can take, oldest first.
+///
+/// A step that needs no rewriting of the bytes is still a step: it has a version and it is tested,
+/// which is what makes "which versions does this build read" answerable without reading the code.
+pub const MIGRATION_STEPS: [MigrationStep; 1] = [MigrationStep {
+    from: FormatVersion::from_raw(1),
+    to: FormatVersion::from_raw(2),
+    what: "version 2 added `startup`; a version 1 document is read unchanged, and its startup is \
+           simply not chosen yet",
+}];
+
+/// The steps between a version and the one this build writes.
+///
+/// `Ok(steps)` when a path of steps exists, `Err(found)` when it does not: a version with no step out
+/// of it is refused, which is what "forward-only, stepwise" means when the answer is no.
+pub fn migration_path(from: FormatVersion) -> Result<Vec<MigrationStep>, FormatVersion> {
+    let mut steps = Vec::new();
+    let mut current = from;
+    while current < FormatVersion::CURRENT {
+        let Some(step) = MIGRATION_STEPS
+            .into_iter()
+            .find(|step| step.from == current)
+        else {
+            return Err(current);
+        };
+        steps.push(step);
+        current = step.to;
+    }
+    Ok(steps)
+}
 
 /// What this build makes of the version a document declares.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -98,6 +161,19 @@ pub enum VersionVerdict {
     Current {
         /// The version.
         version: FormatVersion,
+    },
+    /// An older version this build migrates on the way in (decision `Q6`, `U1`).
+    ///
+    /// The document is interpreted by this build's rules, and writing it needs the migration path:
+    /// the file that was read is kept first (decision `Q6`: a migration never overwrites the
+    /// original in place before it is done).
+    Migrated {
+        /// The version the document declares.
+        found: FormatVersion,
+        /// The version this build writes.
+        current: FormatVersion,
+        /// How many steps the path has.
+        steps: usize,
     },
     /// A version this build does not know: readable, never written (decision `U1`).
     Newer {
@@ -111,13 +187,20 @@ pub enum VersionVerdict {
 impl VersionVerdict {
     /// Whether this build may write the document.
     pub const fn is_writable(self) -> bool {
-        matches!(self, Self::Current { .. })
+        matches!(self, Self::Current { .. } | Self::Migrated { .. })
+    }
+
+    /// Whether writing it means migrating it first, which keeps the file that was read.
+    pub const fn needs_migration(self) -> bool {
+        matches!(self, Self::Migrated { .. })
     }
 
     /// The version the document declares.
     pub const fn version(self) -> FormatVersion {
         match self {
-            Self::Current { version } | Self::Newer { found: version, .. } => version,
+            Self::Current { version }
+            | Self::Migrated { found: version, .. }
+            | Self::Newer { found: version, .. } => version,
         }
     }
 
@@ -127,6 +210,14 @@ impl VersionVerdict {
             Self::Current { version } => {
                 format!("{version}, which this build writes")
             }
+            Self::Migrated {
+                found,
+                current,
+                steps,
+            } => format!(
+                "{found}, which this build reads and migrates to {current} in {steps} step(s); \
+                 writing it keeps the file that was read"
+            ),
             Self::Newer { found, current } => format!(
                 "{found} is newer than {current}, which this build writes; \
                  it is opened read-only and this build will not write it"
@@ -271,6 +362,20 @@ pub enum ProjectError {
         /// The path.
         path: PathBuf,
     },
+    /// The document is an older version, and writing it means migrating it first.
+    MigrationNeedsBackup {
+        /// The path.
+        path: PathBuf,
+        /// The version the document declares.
+        from: FormatVersion,
+        /// The version this build writes.
+        to: FormatVersion,
+    },
+    /// There is nothing to migrate: the document is already the version this build writes.
+    NothingToMigrate {
+        /// The path.
+        path: PathBuf,
+    },
 }
 
 impl ProjectError {
@@ -317,6 +422,17 @@ impl ProjectError {
             }
             Self::ChangedOnDisk { path } => format!(
                 "{} changed on disk since it was read; nothing was written, so no edit was lost",
+                path.display()
+            ),
+            Self::MigrationNeedsBackup { path, from, to } => format!(
+                "{} is {from} and this build writes {to}; nothing was written, because a migration \
+                 keeps the file it read first (see the migrating save, which writes \
+                 `.v{}.bak` beside it)",
+                path.display(),
+                from.get()
+            ),
+            Self::NothingToMigrate { path } => format!(
+                "{} is already the version this build writes, so there is nothing to migrate",
                 path.display()
             ),
         }
@@ -775,6 +891,8 @@ pub struct ProjectDocument {
     resources: Vec<ResourceEntry>,
     targets: Vec<TargetProfile>,
     generated: Vec<GeneratedTarget>,
+    /// Which entry a target starts with, when one is chosen. Version 2 added this member.
+    startup: Option<Reference>,
     services: Vec<ServiceEntry>,
     network_preserved: Preserved,
     preserved: Preserved,
@@ -812,6 +930,19 @@ impl ProjectDocument {
         &self.generated
     }
 
+    /// The entry a target starts with, when one is chosen.
+    ///
+    /// `None` is a real state, not a missing default: a project can have pages and nothing to start
+    /// yet, and version 2 says so with `null` rather than by leaving the member out.
+    pub fn startup(&self) -> Option<&Reference> {
+        self.startup.as_ref()
+    }
+
+    /// Which entry starts, as the document writes it.
+    pub fn startup_written(&self) -> Option<&str> {
+        self.startup.as_ref().map(Reference::written)
+    }
+
     /// The network services the project declares, in document order.
     pub fn services(&self) -> &[ServiceEntry] {
         &self.services
@@ -845,6 +976,9 @@ impl ProjectDocument {
         for generated in &self.generated {
             out.push(&generated.output);
             out.push(&generated.from);
+        }
+        if let Some(startup) = &self.startup {
+            out.push(startup);
         }
         for service in &self.services {
             if let Some(roots) = &service.roots_file {
@@ -898,6 +1032,13 @@ impl ProjectDocument {
                     .map(encode_generated)
                     .collect::<Vec<_>>(),
             ),
+        );
+        out.insert(
+            "startup",
+            match &self.startup {
+                Some(reference) => Json::string(reference.written()),
+                None => Json::Null,
+            },
         );
         let mut network = JsonObject::new();
         network.insert(
@@ -1024,6 +1165,8 @@ pub struct ProjectFile {
     root: ProjectRoot,
     original: Vec<u8>,
     content: ProjectContent,
+    /// The version the document was read as, when it is older than the one this build writes.
+    migrated_from: Option<FormatVersion>,
 }
 
 impl ProjectFile {
@@ -1085,12 +1228,15 @@ impl ProjectFile {
             path: path.clone(),
             error,
         })?;
+        let declared = format_version(&value)?;
         let content = read(root, &value)?;
+        let migrated_from = (declared < FormatVersion::CURRENT).then_some(declared);
         Ok(Self {
             path,
             root: root.clone(),
             original: bytes,
             content,
+            migrated_from,
         })
     }
 
@@ -1116,7 +1262,21 @@ impl ProjectFile {
 
     /// What this build makes of the version.
     pub fn verdict(&self) -> VersionVerdict {
-        self.content.verdict()
+        match self.migrated_from {
+            Some(found) => VersionVerdict::Migrated {
+                found,
+                current: FormatVersion::CURRENT,
+                steps: migration_path(found)
+                    .map(|steps| steps.len())
+                    .unwrap_or_default(),
+            },
+            None => self.content.verdict(),
+        }
+    }
+
+    /// The version the document was read as, when it is older than the one this build writes.
+    pub const fn migrated_from(&self) -> Option<FormatVersion> {
+        self.migrated_from
     }
 
     /// Every member this build did not know.
@@ -1152,6 +1312,7 @@ impl ProjectFile {
                 Ok(ProjectWriter {
                     file: self,
                     document,
+                    migrated_from: self.migrated_from,
                 })
             }
         }
@@ -1163,6 +1324,7 @@ impl ProjectFile {
 pub struct ProjectWriter<'a> {
     file: &'a ProjectFile,
     document: &'a ProjectDocument,
+    migrated_from: Option<FormatVersion>,
 }
 
 impl ProjectWriter<'_> {
@@ -1176,7 +1338,44 @@ impl ProjectWriter<'_> {
     /// A writer is a ticket for one write of what was read: it refuses when the file changed on disk
     /// in the meantime, so an editor's or a script's change is never overwritten by a stale copy.
     pub fn save(&self) -> Result<PathBuf, ProjectError> {
+        if let Some(from) = self.migrated_from {
+            return Err(ProjectError::MigrationNeedsBackup {
+                path: self.file.path.clone(),
+                from,
+                to: FormatVersion::CURRENT,
+            });
+        }
         self.save_to(self.file.path.clone())
+    }
+
+    /// Writes a migrated document, keeping the file that was read first.
+    ///
+    /// Decision `Q6`: a migration never overwrites the original in place before it is done. The
+    /// document as it was read is written beside it under its own version's name, and only then is
+    /// the migrated document put in place — so a migration that goes wrong leaves the version a
+    /// person could still read.
+    pub fn save_migrating(&self) -> Result<MigrationSave, ProjectError> {
+        let Some(from) = self.migrated_from else {
+            return Err(ProjectError::NothingToMigrate {
+                path: self.file.path.clone(),
+            });
+        };
+        let backup = self
+            .file
+            .path
+            .with_extension(format!("v{}.bak", from.get()));
+        std::fs::write(&backup, &self.file.original).map_err(|error| ProjectError::Io {
+            path: backup.clone(),
+            action: "keeping the file that was read",
+            reason: error.to_string(),
+        })?;
+        let target = self.save_to(self.file.path.clone())?;
+        Ok(MigrationSave {
+            target,
+            backup,
+            from,
+            to: FormatVersion::CURRENT,
+        })
     }
 
     /// Writes the document to a path of the caller's choosing.
@@ -1204,16 +1403,69 @@ impl ProjectWriter<'_> {
     }
 }
 
+/// What a migrating save did: the file that was kept, and the file that was put in place.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MigrationSave {
+    target: PathBuf,
+    backup: PathBuf,
+    from: FormatVersion,
+    to: FormatVersion,
+}
+
+impl MigrationSave {
+    /// The migrated document's path.
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    /// The file that was kept, which holds the document as it was read.
+    pub fn backup(&self) -> &Path {
+        &self.backup
+    }
+
+    /// The version the document was read as.
+    pub const fn from(&self) -> FormatVersion {
+        self.from
+    }
+
+    /// The version it was written as.
+    pub const fn to(&self) -> FormatVersion {
+        self.to
+    }
+
+    /// One sentence for a person: what moved where.
+    pub fn message(&self) -> String {
+        format!(
+            "migrated {} to {}: the {from} document is kept at {backup}",
+            self.target.display(),
+            self.to,
+            from = self.from,
+            backup = self.backup.display()
+        )
+    }
+}
+
 /// Reads a document that was already parsed, and says what this build makes of it.
 pub fn read(root: &ProjectRoot, value: &Json) -> Result<ProjectContent, ProjectError> {
     let version = format_version(value)?;
     match version.get().cmp(&FormatVersion::CURRENT.get()) {
-        Ordering::Equal => Ok(ProjectContent::Interpreted(interpret(root, value)?)),
+        Ordering::Equal => Ok(ProjectContent::Interpreted(interpret(
+            root,
+            value,
+            FormatVersion::CURRENT,
+        )?)),
         Ordering::Greater => Ok(ProjectContent::Foreign(foreign(version, value))),
-        Ordering::Less => Err(ProjectError::OlderFormat {
-            found: version,
-            current: FormatVersion::CURRENT,
-        }),
+        Ordering::Less => {
+            // Decision `Q6`: an older version is migrated by versioned steps before it is used, and a
+            // version with no step out of it is refused rather than guessed at.
+            migration_path(version).map_err(|stuck| ProjectError::OlderFormat {
+                found: stuck,
+                current: FormatVersion::CURRENT,
+            })?;
+            Ok(ProjectContent::Interpreted(interpret(
+                root, value, version,
+            )?))
+        }
     }
 }
 
@@ -1291,7 +1543,11 @@ fn best_effort_identity(value: &Json) -> Option<ProjectIdentity> {
     })
 }
 
-fn interpret(root: &ProjectRoot, value: &Json) -> Result<ProjectDocument, ProjectError> {
+fn interpret(
+    root: &ProjectRoot,
+    value: &Json,
+    declared: FormatVersion,
+) -> Result<ProjectDocument, ProjectError> {
     let context = Context { root };
     let mut reader = Reader::object(String::new(), value)?;
     // The version was read before the dispatch; taking it here is what stops it being reported as a
@@ -1302,12 +1558,14 @@ fn interpret(root: &ProjectRoot, value: &Json) -> Result<ProjectDocument, Projec
     let resources = decode_resources(&context, &mut reader)?;
     let targets = decode_targets(&mut reader)?;
     let generated = decode_generated(&context, &mut reader)?;
+    let startup = decode_startup(&context, &mut reader, declared)?;
     let (services, network_preserved) = decode_services(&context, &mut reader)?;
     let preserved = reader.finish();
     check_unique(&pages)?;
     check_unique(&resources)?;
     check_unique(&targets)?;
     check_generated_sources(&pages, &generated)?;
+    check_startup(&pages, startup.as_ref())?;
 
     let mut unknown = Vec::new();
     preserved.names_at("", &mut unknown);
@@ -1347,6 +1605,7 @@ fn interpret(root: &ProjectRoot, value: &Json) -> Result<ProjectDocument, Projec
         resources,
         targets,
         generated,
+        startup,
         services,
         network_preserved,
         preserved,
@@ -1612,6 +1871,7 @@ pub struct ProjectDraft<'a> {
     resources: Vec<ResourceEntry>,
     targets: Vec<TargetProfile>,
     generated: Vec<GeneratedTarget>,
+    startup: Option<Reference>,
     services: Vec<ServiceEntry>,
 }
 
@@ -1636,6 +1896,7 @@ impl<'a> ProjectDraft<'a> {
             resources: Vec::new(),
             targets: Vec::new(),
             generated: Vec::new(),
+            startup: None,
             services: Vec::new(),
         })
     }
@@ -1690,12 +1951,23 @@ impl<'a> ProjectDraft<'a> {
         self
     }
 
+    /// Chooses the entry a target starts with.
+    pub fn with_startup(mut self, document: &str) -> Self {
+        self.startup = Some(reference(
+            self.root,
+            ReferenceKind::PageDocument,
+            document.to_owned(),
+        ));
+        self
+    }
+
     /// The document, checked by the reader's own rules.
     pub fn build(self) -> Result<ProjectDocument, ProjectError> {
         check_unique(&self.pages)?;
         check_unique(&self.resources)?;
         check_unique(&self.targets)?;
         check_generated_sources(&self.pages, &self.generated)?;
+        check_startup(&self.pages, self.startup.as_ref())?;
         Ok(ProjectDocument {
             identity: ProjectIdentity {
                 id: self.id,
@@ -1706,6 +1978,7 @@ impl<'a> ProjectDraft<'a> {
             resources: self.resources,
             targets: self.targets,
             generated: self.generated,
+            startup: self.startup,
             services: self.services,
             network_preserved: Preserved::default(),
             preserved: Preserved::default(),
@@ -1858,6 +2131,70 @@ impl Unique for TargetProfile {
     fn claim_path(&self) -> String {
         format!("targets[].name `{}`", self.name)
     }
+}
+
+/// The entry a target starts with: a reference to a page document, or `null` for "not chosen yet".
+fn decode_startup(
+    context: &Context<'_>,
+    reader: &mut Reader<'_>,
+    declared: FormatVersion,
+) -> Result<Option<Reference>, ProjectError> {
+    let path = reader.member_path("startup");
+    let Some(value) = reader.take("startup") else {
+        // A version 1 document has no such member, and its absence means the same as `null`:
+        // nothing is chosen. That equivalence is what the version 1 -> 2 step in `MIGRATION_STEPS`
+        // is: it needs no rewriting because the member was added as optional.
+        return Ok(None);
+    };
+    if declared < FormatVersion::CURRENT {
+        // The member version 2 added cannot be in a version 1 document: reading it would be believing
+        // a file that contradicts its own version, and the migration step is about a document that
+        // does not have it.
+        return Err(ProjectError::Inconsistent {
+            path,
+            reason: format!(
+                "{declared} does not define `startup`, so a document of that version cannot choose \
+                 an entry"
+            ),
+        });
+    }
+    if value.kind() == JsonKind::Null {
+        return Ok(None);
+    }
+    let Some(written) = value.as_str() else {
+        return Err(ProjectError::WrongType {
+            path,
+            expected: "a path to a page document, or `null`",
+            found: value.kind(),
+        });
+    };
+    if written.is_empty() {
+        return Err(ProjectError::EmptyValue { path });
+    }
+    Ok(Some(context.reference(
+        ReferenceKind::PageDocument,
+        written.to_owned(),
+    )))
+}
+
+/// The startup entry has to be a page the document declares, or nothing may save it.
+pub(crate) fn check_startup(
+    pages: &[PageEntry],
+    startup: Option<&Reference>,
+) -> Result<(), ProjectError> {
+    let Some(startup) = startup else {
+        return Ok(());
+    };
+    let declared = pages
+        .iter()
+        .any(|page| page.document.resolves_like(startup));
+    if declared {
+        return Ok(());
+    }
+    Err(ProjectError::Dangling {
+        path: "startup".to_owned(),
+        name: startup.written().to_owned(),
+    })
 }
 
 pub(crate) fn check_generated_sources(
@@ -2107,9 +2444,11 @@ pub(crate) fn sub_objects<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        PROJECT_FILE_NAME, ProjectContent, ProjectDocument, ProjectError, ProjectFile,
-        ProjectWriteRefusal, ReferenceKind, ReferenceVerdict, VERSION_1_MEMBERS, VersionVerdict,
+        MIGRATION_STEPS, PROJECT_FILE_NAME, ProjectContent, ProjectDocument, ProjectDraft,
+        ProjectError, ProjectFile, ProjectWriteRefusal, ReferenceKind, ReferenceVerdict,
+        VERSION_MEMBERS, VersionVerdict, migration_path,
     };
+    use crate::contracts::revision::FormatVersion;
     use crate::host::network::{CredentialRef, CredentialSource, ServicePolicy, TlsPolicy};
     use crate::host::paths::ProjectRoot;
     use crate::project::json;
@@ -2118,11 +2457,11 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     /// The smallest document this build writes, spelled exactly the way the writer spells it.
-    const MINIMAL: &str = "{\n  \"format\": 1,\n  \"project\": {\n    \"id\": \"3f2b\",\n    \"name\": \"Demo\"\n  },\n  \"pages\": [],\n  \"resources\": [],\n  \"targets\": [],\n  \"generated\": [],\n  \"network\": {\n    \"services\": []\n  }\n}\n";
+    const MINIMAL: &str = "{\n  \"format\": 2,\n  \"project\": {\n    \"id\": \"3f2b\",\n    \"name\": \"Demo\"\n  },\n  \"pages\": [],\n  \"resources\": [],\n  \"targets\": [],\n  \"generated\": [],\n  \"startup\": null,\n  \"network\": {\n    \"services\": []\n  }\n}\n";
 
     /// A document that uses every member version 1 defines.
     const FULL: &str = r#"{
-  "format": 1,
+  "format": 2,
   "project": {
     "id": "9c1f",
     "name": "Demo"
@@ -2157,6 +2496,7 @@ mod tests {
       "from": "pages/main.json"
     }
   ],
+  "startup": "pages/main.json",
   "network": {
     "services": [
       {
@@ -2259,7 +2599,7 @@ mod tests {
     }
 
     #[test]
-    fn a_version_1_document_is_interpreted_member_by_member() {
+    fn a_document_is_interpreted_member_by_member() {
         let sandbox = sandbox();
         sandbox.write("pages/main.json", "{}");
         sandbox.write("pages/settings.json", "{}");
@@ -2270,7 +2610,7 @@ mod tests {
 
         let document = sandbox.document(FULL);
 
-        assert_eq!(document.format().get(), 1);
+        assert_eq!(document.format().get(), 2);
         assert_eq!(document.identity().id(), "9c1f");
         assert_eq!(document.identity().name(), "Demo");
         assert_eq!(document.pages().len(), 2);
@@ -2300,6 +2640,16 @@ mod tests {
             "src/generated/main.rs"
         );
         assert_eq!(document.generated()[0].from().written(), "pages/main.json");
+        assert_eq!(document.startup_written(), Some("pages/main.json"));
+        assert_eq!(
+            document.startup().map(|entry| entry.kind()),
+            Some(ReferenceKind::PageDocument)
+        );
+        assert_eq!(
+            document.startup().map(|entry| entry.verdict()),
+            Some(&ReferenceVerdict::Present),
+            "the page the demo starts with is there"
+        );
 
         let service = document.services()[0].policy();
         assert_eq!(service.service(), "api");
@@ -2352,8 +2702,8 @@ mod tests {
 
         let json = document.to_json();
         let names: Vec<&str> = json.as_object().expect("an object").names().collect();
-        assert_eq!(names, VERSION_1_MEMBERS);
-        assert_eq!(VERSION_1_MEMBERS.len(), 7);
+        assert_eq!(names, VERSION_MEMBERS);
+        assert_eq!(VERSION_MEMBERS.len(), 8);
     }
 
     #[test]
@@ -2419,15 +2769,15 @@ mod tests {
         let sandbox = sandbox();
         let path = sandbox.write(
             PROJECT_FILE_NAME,
-            "{\"format\": 2, \"project\": {\"id\": \"3f2b\", \"name\": \"Demo\"}}\n",
+            "{\"format\": 3, \"project\": {\"id\": \"3f2b\", \"name\": \"Demo\"}}\n",
         );
         let file = ProjectFile::open(&path).expect("a newer version still opens");
 
-        assert_eq!(file.version().get(), 2);
+        assert_eq!(file.version().get(), 3);
         assert_eq!(
             file.verdict(),
             VersionVerdict::Newer {
-                found: crate::contracts::revision::FormatVersion::from_raw(2),
+                found: crate::contracts::revision::FormatVersion::from_raw(3),
                 current: crate::contracts::revision::FormatVersion::CURRENT,
             }
         );
@@ -2436,7 +2786,7 @@ mod tests {
         assert_eq!(
             refusal,
             ProjectWriteRefusal::UnknownFormat {
-                found: crate::contracts::revision::FormatVersion::from_raw(2),
+                found: crate::contracts::revision::FormatVersion::from_raw(3),
                 current: crate::contracts::revision::FormatVersion::CURRENT,
             }
         );
@@ -2446,7 +2796,7 @@ mod tests {
         // disk changed.
         assert_eq!(
             std::fs::read_to_string(&path).expect("the file is still there"),
-            "{\"format\": 2, \"project\": {\"id\": \"3f2b\", \"name\": \"Demo\"}}\n"
+            "{\"format\": 3, \"project\": {\"id\": \"3f2b\", \"name\": \"Demo\"}}\n"
         );
     }
 
@@ -2454,7 +2804,7 @@ mod tests {
     fn a_future_version_is_read_without_being_interpreted() {
         let sandbox = sandbox();
         let text = r#"{
-  "format": 2,
+  "format": 3,
   "project": {
     "id": "3f2b",
     "name": "Demo"
@@ -2474,7 +2824,7 @@ mod tests {
             ProjectContent::Foreign(foreign) => foreign,
             other => panic!("expected a foreign project, found {other:?}"),
         };
-        assert_eq!(foreign.version().get(), 2);
+        assert_eq!(foreign.version().get(), 3);
         assert_eq!(
             foreign.identity().map(|identity| identity.name()),
             Some("Demo")
@@ -2708,8 +3058,13 @@ mod tests {
                 ReferenceKind::Resource,
                 ReferenceKind::GeneratedOutput,
                 ReferenceKind::DesignSource,
+                ReferenceKind::PageDocument,
                 ReferenceKind::CertificateAuthority,
             ]
+        );
+        assert_eq!(
+            document.startup().map(|entry| entry.written()),
+            Some("pages/main.json")
         );
     }
 
@@ -2898,13 +3253,13 @@ mod tests {
         // Somebody else writes the file after it was read: the stale copy is not written back.
         std::fs::write(
             &path,
-            "{\"format\": 1, \"project\": {\"id\": \"a\", \"name\": \"edited\"}}",
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"edited\"}}",
         )
         .unwrap();
         let stale = ProjectFile::open(&path).expect("the edited project opens");
         std::fs::write(
             &path,
-            "{\"format\": 1, \"project\": {\"id\": \"a\", \"name\": \"newer\"}}",
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"newer\"}}",
         )
         .unwrap();
         let error = stale
@@ -3011,6 +3366,185 @@ mod tests {
             document.pages()[0].document().verdict(),
             &ReferenceVerdict::Absent,
             "a page's own document arrives with T02.02, so the demo has none yet"
+        );
+    }
+
+    #[test]
+    fn an_older_version_is_migrated_by_versioned_steps() {
+        // Decision `Q6`: every format change comes with a versioned migration step, and decision
+        // `U1`: the steps only go forward and a version with no step out of it is refused.
+        assert_eq!(
+            migration_path(FormatVersion::from_raw(1))
+                .expect("one step")
+                .len(),
+            1
+        );
+        assert!(
+            migration_path(FormatVersion::from_raw(2))
+                .expect("nothing to do")
+                .is_empty()
+        );
+        assert_eq!(
+            migration_path(FormatVersion::from_raw(0)).expect_err("no step out of version 0"),
+            FormatVersion::from_raw(0)
+        );
+        let step = MIGRATION_STEPS[0];
+        assert_eq!(step.from().get(), 1);
+        assert_eq!(step.to().get(), 2);
+        assert!(step.what().contains("startup"));
+        assert_eq!(FormatVersion::OLDEST_READABLE.get(), 1);
+
+        let sandbox = sandbox();
+        let version_1 = "{\n  \"format\": 1,\n  \"project\": {\n    \"id\": \"3f2b\",\n    \"name\": \"Older\"\n  },\n  \"pages\": [],\n  \"resources\": [],\n  \"targets\": [],\n  \"generated\": [],\n  \"network\": {\n    \"services\": []\n  }\n}\n";
+        let path = sandbox.write(PROJECT_FILE_NAME, version_1);
+        let file = ProjectFile::open(&path).expect("an older version is read, then migrated");
+
+        assert_eq!(file.migrated_from(), Some(FormatVersion::from_raw(1)));
+        assert_eq!(
+            file.content().version().get(),
+            2,
+            "it is read by this build's rules"
+        );
+        assert_eq!(
+            file.verdict(),
+            VersionVerdict::Migrated {
+                found: FormatVersion::from_raw(1),
+                current: FormatVersion::CURRENT,
+                steps: 1,
+            }
+        );
+        assert!(file.verdict().needs_migration());
+        assert!(
+            file.is_writable(),
+            "a version with a step is writable after migrating"
+        );
+        let document = file.content().document().expect("interpreted");
+        assert_eq!(document.identity().name(), "Older");
+        assert_eq!(document.startup_written(), None, "version 1 chose no entry");
+
+        // Writing it does not overwrite the file that was read: it is kept first (decision `Q6`).
+        let writer = file.writer().expect("a version with a step is writable");
+        let refusal = writer
+            .save()
+            .expect_err("a migration keeps the file it read");
+        assert!(matches!(refusal, ProjectError::MigrationNeedsBackup { .. }));
+        assert!(refusal.message().contains("keeps the file it read first"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            version_1,
+            "nothing was written"
+        );
+
+        let migrated = writer.save_migrating().expect("the migration writes");
+        assert_eq!(migrated.from().get(), 1);
+        assert_eq!(migrated.to().get(), 2);
+        assert_eq!(migrated.target(), file.path());
+        assert_eq!(
+            std::fs::read_to_string(migrated.backup()).unwrap(),
+            version_1,
+            "the version 1 document is at the backup"
+        );
+        assert!(migrated.message().contains("migrated"));
+
+        let again = ProjectFile::open(&path).expect("what was written reads back");
+        assert_eq!(again.migrated_from(), None);
+        assert!(matches!(again.verdict(), VersionVerdict::Current { .. }));
+        assert!(again.content().document().is_some());
+
+        // There is nothing to migrate in a document this build writes.
+        let refusal = again
+            .writer()
+            .expect("writable")
+            .save_migrating()
+            .expect_err("nothing to migrate");
+        assert!(matches!(refusal, ProjectError::NothingToMigrate { .. }));
+    }
+
+    #[test]
+    fn a_version_the_migration_table_does_not_reach_is_refused() {
+        let sandbox = sandbox();
+        let error =
+            sandbox.failure("{\"format\": 0, \"project\": {\"id\": \"a\", \"name\": \"b\"}}");
+        match &error {
+            ProjectError::OlderFormat { found, current } => {
+                assert_eq!(found.get(), 0);
+                assert_eq!(current.get(), 2);
+            }
+            other => panic!("expected an unreachable version, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_document_may_not_choose_an_entry_its_version_does_not_define() {
+        let sandbox = sandbox();
+        // A version 1 document with the member version 2 added: believing it would be reading a file
+        // that contradicts its own version.
+        let error = sandbox.failure(
+            "{\"format\": 1, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \
+             \"startup\": \"pages/main.json\"}",
+        );
+        assert!(
+            error.message().contains("does not define `startup`"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn the_startup_entry_has_to_be_a_page_the_document_declares() {
+        let sandbox = sandbox();
+        let declared = sandbox.document(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \
+             \"pages\": [{\"document\": \"pages/main.json\"}], \
+             \"startup\": \"pages/main.json\"}",
+        );
+        assert_eq!(declared.startup_written(), Some("pages/main.json"));
+
+        // `null` is a state, not a missing member: a project can have pages and nothing to start yet.
+        let nothing = sandbox.document(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \
+             \"pages\": [{\"document\": \"pages/main.json\"}], \"startup\": null}",
+        );
+        assert_eq!(nothing.startup_written(), None);
+        assert!(nothing.render().contains("\"startup\": null"));
+
+        let dangling = sandbox.failure(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \
+             \"pages\": [{\"document\": \"pages/main.json\"}], \
+             \"startup\": \"pages/other.json\"}",
+        );
+        match dangling {
+            ProjectError::Dangling { path, name } => {
+                assert_eq!(path, "startup");
+                assert_eq!(name, "pages/other.json");
+            }
+            other => panic!("expected a dangling entry, found {other:?}"),
+        }
+
+        let wrong = sandbox.failure(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \"startup\": 3}",
+        );
+        assert!(
+            wrong
+                .message()
+                .contains("must be a path to a page document")
+        );
+        let empty = sandbox.failure(
+            "{\"format\": 2, \"project\": {\"id\": \"a\", \"name\": \"b\"}, \"startup\": \"\"}",
+        );
+        assert!(empty.message().contains("startup is empty"));
+
+        // A draft cannot choose an entry it does not declare either.
+        let root = sandbox.root();
+        let refusal = ProjectDraft::new(&root, "a", "b")
+            .expect("a draft")
+            .with_startup("pages/main.json")
+            .build()
+            .expect_err("a draft may not start with a page it does not declare");
+        assert!(
+            refusal
+                .message()
+                .contains("nothing in this project declares")
         );
     }
 

@@ -88,7 +88,7 @@ mod tests {
     fn the_version_line_names_both_versions() {
         let line = version_line();
 
-        assert!(line.contains("format v1"), "{line}");
+        assert!(line.contains("format v2"), "{line}");
         assert!(line.contains("generator 0.1.0"), "{line}");
     }
 

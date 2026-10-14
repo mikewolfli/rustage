@@ -28,6 +28,12 @@ use crate::contracts::revision::FormatVersion;
 use crate::project::format::{ProjectError, format_version, unix_millis};
 use crate::project::json::{self, Json, JsonKind, JsonObject, Number};
 
+/// The recent list format this build writes.
+///
+/// Its own sequence, like the page document's: this file is machine-local state, and it must not
+/// change meaning because a project document gained a member.
+pub const RECENT_FORMAT: FormatVersion = FormatVersion::from_raw(1);
+
 /// The member names a recent list version 1 defines, in the order the writer writes them.
 pub const RECENT_DOCUMENT_MEMBERS: [&str; 3] = ["format", "recent", "absent"];
 
@@ -231,18 +237,18 @@ impl RecentProjects {
             error,
         })?;
         let version = format_version(&value)?;
-        match version.get().cmp(&FormatVersion::CURRENT.get()) {
+        match version.get().cmp(&RECENT_FORMAT.get()) {
             std::cmp::Ordering::Equal => {}
             std::cmp::Ordering::Greater => {
                 return Err(ProjectError::NewerFormat {
                     found: version,
-                    current: FormatVersion::CURRENT,
+                    current: RECENT_FORMAT,
                 });
             }
             std::cmp::Ordering::Less => {
                 return Err(ProjectError::OlderFormat {
                     found: version,
-                    current: FormatVersion::CURRENT,
+                    current: RECENT_FORMAT,
                 });
             }
         }
@@ -413,10 +419,7 @@ impl RecentProjects {
     /// The list as JSON.
     pub fn to_json(&self) -> Json {
         let mut out = JsonObject::new();
-        out.insert(
-            "format",
-            Json::number(u64::from(FormatVersion::CURRENT.get())),
-        );
+        out.insert("format", Json::number(u64::from(RECENT_FORMAT.get())));
         out.insert(
             "recent",
             Json::array(self.entries.iter().map(encode_entry).collect::<Vec<_>>()),

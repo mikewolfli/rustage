@@ -350,6 +350,15 @@
       "test": "a_directory_that_changed_while_the_question_was_on_screen_is_not_trusted",
       "evidence": "测试",
       "note": "提问的 findings 由目录本身读出（build.rs / .cargo/config / rust-toolchain*），因此“提问后新增 build.rs”会被发现；拒绝与撤销两次都记录在授权记录里"
+    },
+    {
+      "id": "INV-MIGRATION-IS-VERSIONED",
+      "statement": "格式变更附带带版本的迁移步骤；能到达本构建版本的旧文档被读取并在写回时先保留原文件，到不了的版本明确拒绝",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/format.rs",
+      "test": "an_older_version_is_migrated_by_versioned_steps",
+      "evidence": "测试",
+      "note": "决策 Q6：迁移前不原地覆盖原文件（save 对旧版本拒绝，save_migrating 先写 .v1.bak）；决策 U1：只向前、按步；文档声明 v1 却带 v2 才有的成员会被拒绝，而不是被相信"
     }
   ]
 }

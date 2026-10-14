@@ -64,6 +64,12 @@ use crate::project::format::{
 };
 use crate::project::json::{self, Json, JsonKind, JsonObject, Number};
 
+/// The page document format this build writes.
+///
+/// Its own sequence: a page document and a project document are different formats, and a member
+/// added to one of them says nothing about the other.
+pub const PAGE_FORMAT: FormatVersion = FormatVersion::from_raw(1);
+
 /// The member names a page document version 1 defines, in the order the writer writes them.
 pub const PAGE_DOCUMENT_MEMBERS: [&str; 3] = ["format", "page", "nodes"];
 
@@ -151,7 +157,7 @@ pub struct PageDocument {
 impl PageDocument {
     /// The format this document is written as, which is the version this build writes.
     pub const fn format(&self) -> FormatVersion {
-        FormatVersion::CURRENT
+        PAGE_FORMAT
     }
 
     /// A page with one root node and nothing else: what an empty page is.
@@ -271,10 +277,7 @@ impl PageDocument {
     /// would be a project file that says something the model does not.
     pub fn to_json(&self) -> Result<Json, ProjectError> {
         let mut out = JsonObject::new();
-        out.insert(
-            "format",
-            Json::number(u64::from(FormatVersion::CURRENT.get())),
-        );
+        out.insert("format", Json::number(u64::from(PAGE_FORMAT.get())));
         let mut page = JsonObject::new();
         page.insert("id", Json::number(self.page.id().get()));
         page.insert("name", Json::string(self.page.name()));
@@ -450,18 +453,18 @@ fn interpret(
 ) -> Result<PageDocument, ProjectError> {
     let context = Context { root };
     let version = crate::project::format::format_version(value)?;
-    match version.get().cmp(&FormatVersion::CURRENT.get()) {
+    match version.get().cmp(&PAGE_FORMAT.get()) {
         std::cmp::Ordering::Equal => {}
         std::cmp::Ordering::Greater => {
             return Err(ProjectError::NewerFormat {
                 found: version,
-                current: FormatVersion::CURRENT,
+                current: PAGE_FORMAT,
             });
         }
         std::cmp::Ordering::Less => {
             return Err(ProjectError::OlderFormat {
                 found: version,
-                current: FormatVersion::CURRENT,
+                current: PAGE_FORMAT,
             });
         }
     }

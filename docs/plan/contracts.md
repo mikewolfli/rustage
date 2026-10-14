@@ -115,6 +115,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-OPEN-DECIDES-NOTHING | 打开工程只读入文档并给出将被提出的问题：不记录决定、不授权、不运行任何程序 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `opening_reads_the_project_and_decides_nothing` | 测试 |
 | INV-RECENT-IS-A-PLACE | 最近项只记“哪里”：用它打开等同于手打路径，同样不信任、不授权、不运行 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `a_recent_entry_opens_the_project_without_trusting_or_running_anything` | 结构 + 测试 |
 | INV-PROMPT-IS-CURRENT | 信任提问在回答前被重新读取；目录在提问之后变了，答案不生效并撤销信任 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `a_directory_that_changed_while_the_question_was_on_screen_is_not_trusted` | 测试 |
+| INV-MIGRATION-IS-VERSIONED | 格式变更附带带版本的迁移步骤；能到达本构建版本的旧文档被读取并在写回时先保留原文件，到不了的版本明确拒绝 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `an_older_version_is_migrated_by_versioned_steps` | 测试 |
 
 ## 不变量的补充说明
 
@@ -139,6 +140,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-OPEN-DECIDES-NOTHING | 授权记录在打开后为空；未信任时 may_write 为假；工具链状态是 NotAsked。路径不是权限：只有 ProjectSession::decide 会记录信任 |
 | INV-RECENT-IS-A-PLACE | recent 模块只持有路径/名字/身份/时间，没有权限服务也没有启动程序的能力；修整（repair）按身份判定，不同工程拒绝，路径仍在则不修 |
 | INV-PROMPT-IS-CURRENT | 提问的 findings 由目录本身读出（build.rs / .cargo/config / rust-toolchain*），因此“提问后新增 build.rs”会被发现；拒绝与撤销两次都记录在授权记录里 |
+| INV-MIGRATION-IS-VERSIONED | 决策 Q6：迁移前不原地覆盖原文件（save 对旧版本拒绝，save_migrating 先写 .v1.bak）；决策 U1：只向前、按步；文档声明 v1 却带 v2 才有的成员会被拒绝，而不是被相信 |
 
 ## 为什么权限表要交叉校验
 

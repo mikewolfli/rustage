@@ -664,7 +664,10 @@ mod tests {
         }
     }
 
-    const PROJECT: &str = "{\n  \"format\": 1,\n  \"project\": {\n    \"id\": \"3f2b\",\n    \"name\": \"Demo\"\n  },\n  \"pages\": [],\n  \"resources\": [],\n  \"targets\": [],\n  \"generated\": [],\n  \"network\": {\n    \"services\": []\n  }\n}\n";
+    const PROJECT: &str = "{\n  \"format\": 2,\n  \"project\": {\n    \"id\": \"3f2b\",\n    \"name\": \"Demo\"\n  },\n  \"pages\": [],\n  \"resources\": [],\n  \"targets\": [],\n  \"generated\": [],\n  \"startup\": null,\n  \"network\": {\n    \"services\": []\n  }\n}\n";
+
+    /// A project document as version 1 wrote it, for the migration path.
+    const VERSION_1: &str = "{\n  \"format\": 1,\n  \"project\": {\n    \"id\": \"3f2b\",\n    \"name\": \"Older\"\n  },\n  \"pages\": [],\n  \"resources\": [],\n  \"targets\": [],\n  \"generated\": [],\n  \"network\": {\n    \"services\": []\n  }\n}\n";
 
     impl Sandbox {
         fn project(&self, name: &str, text: &str) -> PathBuf {
@@ -698,7 +701,7 @@ mod tests {
 
         assert_eq!(session.name(), Some("Demo"));
         assert_eq!(session.id(), Some("3f2b"));
-        assert_eq!(session.version().get(), 1);
+        assert_eq!(session.version().get(), 2);
         assert!(session.state().is_writable());
         assert!(
             session
@@ -724,7 +727,7 @@ mod tests {
     #[test]
     fn a_project_this_build_must_not_write_is_still_readable() {
         let sandbox = sandbox();
-        let newer = sandbox.project("newer", &PROJECT.replace("\"format\": 1", "\"format\": 2"));
+        let newer = sandbox.project("newer", &PROJECT.replace("\"format\": 2", "\"format\": 3"));
         let escaping = sandbox.project(
             "escaping",
             &PROJECT.replace(

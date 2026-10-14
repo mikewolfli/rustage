@@ -56,8 +56,20 @@ impl fmt::Display for Revision {
 pub struct FormatVersion(u32);
 
 impl FormatVersion {
-    /// The format this build writes.
-    pub const CURRENT: Self = Self(1);
+    /// The **project document** format this build writes.
+    ///
+    /// Version 2 added `startup` to the project document: which entry a target starts with. Version 1
+    /// documents are read by the migration table in `crate::project::format` and written back as
+    /// version 2, so this number is the ceiling a reader has to know about, not a floor.
+    ///
+    /// A page document and the machine-local recent list are *other* formats with their own
+    /// sequences (`crate::project::page::PAGE_FORMAT`, `crate::project::recent::RECENT_FORMAT`):
+    /// adding a member to one of them must not silently invalidate the others, which is exactly what
+    /// sharing this constant would do.
+    pub const CURRENT: Self = Self(2);
+
+    /// The oldest format version this build still reads.
+    pub const OLDEST_READABLE: Self = Self(1);
 
     /// Rebuilds a version from the number it was written as.
     pub const fn from_raw(value: u32) -> Self {
@@ -244,7 +256,12 @@ mod tests {
 
     #[test]
     fn versions_display_what_they_are() {
-        assert_eq!(FormatVersion::CURRENT.to_string(), "format v1");
+        assert_eq!(FormatVersion::CURRENT.to_string(), "format v2");
+        assert_eq!(
+            FormatVersion::OLDEST_READABLE.to_string(),
+            "format v1",
+            "the oldest version this build still reads is named too"
+        );
         assert_eq!(
             GeneratorVersion::new(1, 2, 3).to_string(),
             "generator 1.2.3"

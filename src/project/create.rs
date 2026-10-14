@@ -756,8 +756,11 @@ fn template_files(
         Template::Empty => ProjectDraft::new(&anchor, id, name),
         Template::BasicPage | Template::Application => {
             ProjectDraft::new(&anchor, id, name).map(|draft| {
+                // A page project starts with its page: a project whose entry nobody chose would need
+                // a person to choose one before anything could run.
                 draft
                     .with_page(page_document, Some(name), Some(stylesheet))
+                    .with_startup(page_document)
                     .with_target("desktop", Some("debug"), &["desktop"])
             })
         }

@@ -127,6 +127,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-MISSING-IS-NOT-NOT-CHECKED | 「没有看过」与「不在那里」是两条不同结论：未读工具链、许可被拒、凭据存储不可达都报 not-checked，只有真查过而缺失的才报 missing，越出工程根的引用报 refused 而不是 missing | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `not_looking_at_the_toolchain_is_not_the_same_finding_as_a_missing_sdk` | 测试 |
 | INV-OFFLINE-OPEN | 打开工程不向任何远端提问：每条需求的答案都带来源，来源由需求类别唯一决定，而没有任何类别的来源是网络 | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `every_answer_says_where_it_came_from_and_none_of_them_needs_the_network` | 结构 + 测试 |
 | INV-RESCAN-IS-FRESH | 重扫是重新读文件而不是复用记住的状态：记录的扫描只作对照，条目按文档写出的路径标识（一个文件的多个成员只算一条），属于别的工程或来自更新构建的记录一律拒绝 | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `a_re_scan_names_what_appeared_what_vanished_and_what_nothing_touched` | 测试 |
+| INV-WORKSPACE-KEYED-BY-MEMBER | 工作区里每个文件由「成员 + 该成员写出的路径」标识：同一路径在两个成员中是两个文件；离开本成员仍留在工作区内的引用按它落地的成员命名，越出工作区的引用被拒绝，落在工作区内却没有成员拥有的路径单独报告 | `C-PROJECT` | [`src/project/workspace.rs`](../../src/project/workspace.rs) | `a_file_is_identified_by_its_member_and_not_by_its_path_alone` | 结构 + 测试 |
+| INV-MEMBER-REMOVAL-TOUCHES-NOTHING | 添加与移除成员只改工作区文档：不创建也不删除任何目录；被别的成员文档引用时先阻断并逐条列出引用；写之前比对磁盘上仍是读到的那一份，冲突则一个字节都不写 | `C-PROJECT` | [`src/project/workspace.rs`](../../src/project/workspace.rs) | `removing_a_member_writes_the_document_and_touches_no_directory` | 测试 |
+| INV-WORKSPACE-ACTIVE-IS-MACHINE-LOCAL | 活动成员是本机状态：按工作区身份记录在宿主配置目录，共享文档不因切换成员而改变；记录里的成员已经不在了则如实报告，不改指另一个成员 | `C-PROJECT` | [`src/project/workspace.rs`](../../src/project/workspace.rs) | `the_active_member_is_machine_state_and_belongs_to_one_workspace` | 结构 + 测试 |
 
 ## 不变量的补充说明
 
@@ -163,6 +166,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-MISSING-IS-NOT-NOT-CHECKED | Availability 的四个取值合并任意两个都会把「没查」说成「没有」，所以是四个而不是两个；工具链映射取 ToolchainState 自己的话：NotChecked 一律 not-checked（没人问/工程未信任/许可拒绝），Checked 里没答上的程序才是 missing；凭据同理（存储不可达是 not-checked，环境变量没设是 missing）；路径层拒绝的引用是 refused |
 | INV-OFFLINE-OPEN | Where::of(kind) 是全函数：文件→工程自身文件，工具链与目标→本机，凭据→本机凭据存储，网络这一取值在 ALL 里但没有类别映射到它，所以「离线打开同一条路径」是类型的性质而不是散文；报告把来源折成一行念出来，并在真有网络需求时改口（不是一句永远成立的 yes）；用例断言 needs_no_network() 与「每个需求的 source 都不是 Network」，并在无网络命名空间（unshare -rn，curl 取不到主机）里跑过一次真实调用链 |
 | INV-RESCAN-IS-FRESH | Scan::read 重新打开并扫描（用例断言它与「先前读入的文档」在文件出现后给出不同答案）；Scan::of 取文件声明的版本（migrated_from 优先）而不是文档值自带的版本——文档值自带的版本是本构建解释出的版本，这条陷阱以前栽过一次；Scanned::key 是文档写出的路径，因为状态是路径的性质而不是成员的，所以同一文件被多个成员命名时只有一条；Scan::between 先比对工程身份，身份不同的记录被拒绝而不是当成对照 |
+| INV-WORKSPACE-KEYED-BY-MEMBER | WorkspaceFile 的地址就是 member:path，解析时没有成员一律拒绝（两条同名的文件在别的层看来完全一样）；文件表按（成员, 路径）去重，所以页面文档与 startup 指向同一文件时是一行；CrossRoot 四态：WithinMember / AnotherMember{成员,落地路径} / Outside{原因} / NoMemberOwns{路径}，最后一条正是「加成员」能回答的；判断是否留在本成员用路径层自己的 resolve_for_creation（同一条越界规则，且不要求父目录已存在），因此「即将创建的文件」不会被读成「跑到别处去了」 |
+| INV-MEMBER-REMOVAL-TOUCHES-NOTHING | 成员是文档里的一行，所以移除不碰目录，用例在移除后逐字节比对那个目录里原来的文件；添加只接受一个「已经在那里的目录」（命名一个 root 不等于创建它，造目录属于创建路径）；被引用时的阻断项与引用一起给出（Referrer），不做静默修正；受影响时不写盘由用例直接断言（文档原文未变）；写路径是唯一一次写：先比对 original 再原子替换，失败即「工作区原样」而不是半个状态 |
+| INV-WORKSPACE-ACTIVE-IS-MACHINE-LOCAL | ActiveMember 四态（Named / MemberIsGone / AnotherWorkspace / NeverChosen）与 T02.06 的活动目标同一套思路与同一套判定词；WorkspaceState 是按工作区身份键控的本机文件（未写入者不写盘、原子写、更新构建的记录拒绝读），用例断言激活后工作区文档里没有任何「活动成员」字样；未知成员名被拒绝而不是记录一个空选择 |
 
 ## 为什么权限表要交叉校验
 

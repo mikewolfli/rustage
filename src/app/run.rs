@@ -147,6 +147,18 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Workspace(options) => {
+            if !workspace(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::NewWorkspace(options) => {
+            if !new_workspace(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Validate(options) => {
             if !validate(&options) {
                 crate::host::log::flush();
@@ -515,6 +527,239 @@ fn stop_without_writing(session: &ProjectSession, before: &[u8]) -> bool {
         println!("rustage: and the document is not what it was, which it must be");
     }
     false
+}
+
+/// Shows a workspace, and plans or carries out one change to its members (task T02.09).
+///
+/// Showing writes nothing at all. A change is planned first, and `--apply` is the only path that
+/// writes: it asks the directory's question, takes the `write-file` permission, and then writes the
+/// workspace document — no directory is created and none is removed, which is the acceptance and is
+/// said out loud in the output.
+fn workspace(options: &crate::cli::WorkspaceOptions) -> bool {
+    use crate::cli::WorkspaceAction;
+
+    let permissions = PermissionService::new();
+    let workspace = match crate::project::workspace::Workspace::read(&options.path) {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    for line in workspace.render() {
+        println!("{line}");
+    }
+    let mut state = match workspace_state() {
+        Ok(state) => state,
+        Err(reason) => {
+            println!("rustage: {reason}");
+            return false;
+        }
+    };
+    // Which member is active is this machine's state and not the document's, and it is printed
+    // before anything is done with it: a choice that is not usable here says so rather than being
+    // silently replaced.
+    println!("active member: {}", state.active_for(&workspace).render());
+
+    match &options.action {
+        WorkspaceAction::Report => true,
+        WorkspaceAction::Activate { name } => {
+            let choice = match workspace.activate(&mut state, name, SystemTime::now()) {
+                Ok(choice) => choice,
+                Err(refusal) => {
+                    println!("rustage: {}", refusal.message());
+                    return false;
+                }
+            };
+            println!(
+                "active member: `{}` for {} ({})",
+                choice.member(),
+                choice.name(),
+                choice.workspace()
+            );
+            println!(
+                "the workspace document was not written: which member is active belongs to this \
+                 machine"
+            );
+            match state.save() {
+                Ok(path) => {
+                    println!("wrote {}", path.display());
+                    true
+                }
+                Err(error) => {
+                    println!("rustage: {}", error.message());
+                    false
+                }
+            }
+        }
+        WorkspaceAction::File { name } => match workspace.file(name) {
+            Ok(file) => {
+                println!("file: {}", file.render());
+                println!("  named by member `{}`", file.member());
+                println!("  where it lands: {}", file.cross().render());
+                true
+            }
+            Err(lookup) => {
+                println!("rustage: {}", lookup.message());
+                false
+            }
+        },
+        WorkspaceAction::Add { name, root } => change_members(
+            &workspace,
+            &permissions,
+            options,
+            crate::project::workspace::WorkspaceChange::Add {
+                name: name.clone(),
+                root: root.clone(),
+            },
+        ),
+        WorkspaceAction::Remove { name } => change_members(
+            &workspace,
+            &permissions,
+            options,
+            crate::project::workspace::WorkspaceChange::Remove { name: name.clone() },
+        ),
+    }
+}
+
+/// Plans a member change, and carries it out when it was asked for.
+fn change_members(
+    workspace: &crate::project::workspace::Workspace,
+    permissions: &PermissionService,
+    options: &crate::cli::WorkspaceOptions,
+    change: crate::project::workspace::WorkspaceChange,
+) -> bool {
+    use crate::project::session::{TrustDecision, TrustQuestion};
+
+    let plan = workspace.plan(change);
+    for line in plan.render() {
+        println!("{line}");
+    }
+    if !options.apply {
+        println!("answer: not asked; this is a preview and nothing is written");
+        return plan.is_executable();
+    }
+
+    let question = TrustQuestion::read(workspace.root());
+    println!("{}", question.ask());
+    let outcome = crate::project::session::answer(
+        &question,
+        permissions,
+        if options.trust {
+            TrustDecision::Trust
+        } else {
+            TrustDecision::DoNotTrust
+        },
+    );
+    println!("answer: {}", outcome.message());
+    if !outcome.trusted() {
+        return false;
+    }
+    if let Err(refusal) = permissions.permit(
+        crate::contracts::permission::EffectClass::FileWrite,
+        crate::host::permission::Scope::Project(workspace.root()),
+        crate::contracts::permission::Principal::Human,
+    ) {
+        println!("rustage: {}", refusal.message());
+        return false;
+    }
+    match plan.execute() {
+        Ok(written) => {
+            for line in written.render() {
+                println!("{line}");
+            }
+            println!(
+                "no directory was created and none was removed: a member is a line in this \
+                 document, and the roots are the person's own"
+            );
+            true
+        }
+        Err(failure) => {
+            println!("rustage: {}", failure.message());
+            false
+        }
+    }
+}
+
+/// Creates a workspace document in a directory, and reads it back.
+///
+/// It takes no question and no permission, the same way creating a project does not: it is a
+/// person's own action, and what it writes is one document that did not exist. The directory has to
+/// be there, because a workspace is made by naming roots that are already there.
+fn new_workspace(options: &crate::cli::NewWorkspaceOptions) -> bool {
+    use crate::project::create::{ProjectIds, SystemProjectIds};
+    use crate::project::workspace::Workspace;
+
+    let name = options
+        .name
+        .clone()
+        .unwrap_or_else(|| directory_name(&options.directory));
+    if name.trim().is_empty() {
+        println!(
+            "rustage: {} has no name of its own, and this build does not invent one",
+            options.directory.display()
+        );
+        return false;
+    }
+    let id = SystemProjectIds.next_id();
+    println!(
+        "workspace: {}",
+        options
+            .directory
+            .join(crate::project::workspace::WORKSPACE_FILE_NAME)
+            .display()
+    );
+    println!("name: {name}, identity: {id}");
+    let draft = match Workspace::draft(&options.directory, &name, &id) {
+        Ok(draft) => draft,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    match draft.create() {
+        Ok(workspace) => {
+            println!(
+                "created {} ({} member(s))",
+                workspace.path().display(),
+                workspace.members().len()
+            );
+            for line in workspace.render() {
+                println!("{line}");
+            }
+            true
+        }
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            false
+        }
+    }
+}
+
+/// A directory's own name, when it has one.
+fn directory_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// This machine's workspace state: which member is active, per workspace.
+fn workspace_state() -> Result<crate::project::workspace::WorkspaceState, String> {
+    use crate::project::workspace::WorkspaceState;
+
+    let directories = HostDirectories::from_environment()
+        .map_err(|error| format!("this machine's configuration directory is unknown: {error}"))?;
+    WorkspaceState::load(
+        directories
+            .path(HostDirectory::Config)
+            .join("workspace-state.json"),
+    )
+    .map_err(|error| {
+        format!(
+            "this machine's workspace state could not be read: {}",
+            error.message()
+        )
+    })
 }
 
 /// Checks what a project needs, re-scans it when asked, and proves on the way out that nothing was

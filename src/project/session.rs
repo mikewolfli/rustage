@@ -149,6 +149,68 @@ pub enum TrustDecision {
     DoNotTrust,
 }
 
+/// Records the answer to a trust question about a directory.
+///
+/// The question is read again first. A directory can gain a `build.rs` between the prompt and the
+/// answer, and a person who was shown one directory must not end up having trusted another state of
+/// it: when the findings changed, nothing is trusted, trust is withdrawn, and the answer has to be
+/// asked for again.
+///
+/// It takes the question rather than a session because the same question is asked about a directory
+/// that holds no project document — a workspace root, which the host writes one document into — and
+/// that directory has to be trusted by the same rule rather than by a second one beside it.
+pub fn answer(
+    question: &TrustQuestion,
+    permissions: &PermissionService,
+    decision: TrustDecision,
+) -> TrustOutcome {
+    match decision {
+        TrustDecision::DoNotTrust => TrustOutcome {
+            trusted: false,
+            message:
+                "not trusted: the project is open read-only, nothing is written and nothing is \
+                      run"
+                .to_owned(),
+        },
+        TrustDecision::Trust => {
+            // The root is resolved again, from the same path the question was read from: a directory
+            // that cannot be resolved now is not a directory an answer can apply to, and saying so
+            // is better than applying the answer to something else.
+            let Ok(root) = ProjectRoot::new(question.root()) else {
+                return TrustOutcome {
+                    trusted: false,
+                    message: format!(
+                        "{} cannot be resolved now, so no answer applies; the question has to be \
+                         asked again",
+                        question.root().display()
+                    ),
+                };
+            };
+            let prompt = permissions.trust(&root);
+            if prompt.findings() != question.findings() {
+                let withdrawn = permissions.distrust(&root);
+                return TrustOutcome {
+                    trusted: false,
+                    message: format!(
+                        "{} changed since the question was shown, so the answer was not applied; \
+                         trust was withdrawn ({}) and the question has to be asked again",
+                        root.as_path().display(),
+                        withdrawn.len()
+                    ),
+                };
+            }
+            TrustOutcome {
+                trusted: true,
+                message: format!(
+                    "{} is trusted for this session: builds and runs are decided by the permission \
+                     table from here",
+                    root.as_path().display()
+                ),
+            }
+        }
+    }
+}
+
 /// What happened when the question was answered.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TrustOutcome {
@@ -442,43 +504,11 @@ impl ProjectSession {
 
     /// Records the answer to the question.
     ///
-    /// The question is read again first. A directory can gain a `build.rs` between the prompt and
-    /// the answer, and a person who was shown one directory must not end up having trusted another
-    /// state of it: when the findings changed, nothing is trusted, trust is withdrawn, and the
-    /// answer has to be asked for again.
+    /// The rule itself is [`answer`], which is also what a directory that holds no project document
+    /// goes through: one rule for "this directory may be acted on", rather than a second one written
+    /// next to it that can drift away from it.
     pub fn decide(&self, permissions: &PermissionService, decision: TrustDecision) -> TrustOutcome {
-        match decision {
-            TrustDecision::DoNotTrust => TrustOutcome {
-                trusted: false,
-                message: "not trusted: the project is open read-only, nothing is written and \
-                          nothing is run"
-                    .to_owned(),
-            },
-            TrustDecision::Trust => {
-                let prompt = permissions.trust(self.root());
-                if prompt.findings() != self.question.findings() {
-                    let withdrawn = permissions.distrust(self.root());
-                    return TrustOutcome {
-                        trusted: false,
-                        message: format!(
-                            "{} changed since the question was shown, so the answer was not \
-                             applied; trust was withdrawn ({}) and the question has to be asked \
-                             again",
-                            self.root().as_path().display(),
-                            withdrawn.len()
-                        ),
-                    };
-                }
-                TrustOutcome {
-                    trusted: true,
-                    message: format!(
-                        "{} is trusted for this session: builds and runs are decided by the \
-                         permission table from here",
-                        self.root().as_path().display()
-                    ),
-                }
-            }
-        }
+        answer(&self.question, permissions, decision)
     }
 
     /// What is known about the toolchain.

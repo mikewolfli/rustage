@@ -67,7 +67,8 @@ order they are being closed in. It is a work list, not a statement of implemente
   import T02.07 asks for, whose candidate is a diff before anything is written and whose failure
   keeps the file that was read, and the validation and re-scan T02.08 asks for, which answers every
   need with present/missing/not-checked/refused and prints the project's own bytes unchanged as its
-  last line; the
+  last line, and the workspace T02.09 asks for, whose files are identified by the member that names
+  them and whose member removal touches no directory; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

@@ -117,6 +117,9 @@ cargo run -- --configuration target/new-project/project.json   # 用哪个目标
 cargo run -- --import target/new-project/project.json   # 它是什么，导入会改什么
 cargo run -- --validate target/new-project/project.json   # 它需要什么、是否都在；不写盘
 cargo run -- --validate target/new-project/project.json --rescan target/scan.json   # 与记录的扫描相比改了什么
+cargo run -- --new-workspace target/area            # 一份工作区文档，暂无成员
+cargo run -- --workspace target/area/workspace.json --add app=app --apply --trust   # 添加成员；目录必须已经在那里
+cargo run -- --workspace target/area/workspace.json --file app:pages/main.json      # 按成员区分同名文件
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

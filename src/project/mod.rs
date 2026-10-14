@@ -33,3 +33,4 @@ pub mod page;
 pub mod recent;
 pub mod session;
 pub mod validate;
+pub mod workspace;

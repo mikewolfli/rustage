@@ -70,6 +70,12 @@ cargo run -- --validate target/new-project/project.json      # what it needs, an
 cargo run -- --validate target/new-project/project.json --diagnose --trust   # include the toolchain (runs two programs)
 cargo run -- --validate target/new-project/project.json --record target/scan.json   # keep a scan to compare against
 cargo run -- --validate target/new-project/project.json --rescan target/scan.json   # what changed since that scan
+cargo run -- --new-workspace target/area --name "Area"   # one document, no members yet
+cargo run -- --workspace target/area/workspace.json      # the members, what each holds, and the files qualified by member
+cargo run -- --workspace target/area/workspace.json --add app=app --apply --trust   # names a root that is already there
+cargo run -- --workspace target/area/workspace.json --remove lib --apply --trust    # the directory stays where it is
+cargo run -- --workspace target/area/workspace.json --file lib:pages/main.json      # which of two same-named files this is
+cargo run -- --workspace target/area/workspace.json --activate lib                  # which member is active, on this machine
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -273,6 +279,34 @@ document this build does not interpret) exits 4 while still printing that the fi
 "nothing was written" describes the file, and reporting it as the command's own success is how a
 refusal comes out looking like one. Reusing the SDK/kit identities T02.10 defines, and the designer's
 own validation panel, belong to those tasks.
+
+`--workspace <file>` is where this milestone's sixth acceptance line lives: "same-named files are
+told apart by root/package, removing a member deletes no directory and leaks no trust, no undo and no
+target". A workspace is a directory with a `workspace.json` that names its members, each of which is a
+root of its own with its own project document — deliberately **not** a second project document, because
+pages, targets and services belong to a member and a copy of them here would be the second writable
+model the project forbids. The identity rule is the whole point of the type: a file is
+`member:path`, never a path, because two members that both name `pages/main.json` name two different
+files; the file list is one row per (member, path) even though a page document is named by `pages`,
+`startup` and a generated file's `from`. A path that leaves its member and stays in the workspace is
+not refused but *qualified* — the member's own reader refuses it (it may not leave its root) and the
+workspace answers the second question: this one lands in member `shared`, that one leaves the
+workspace, and the third is inside the workspace with no member owning it, which is exactly what
+adding a member answers. Members may not nest, because a path would then belong to two of them.
+Adding and removing are edits to that one document: adding names a root that is *already there* (a
+member that points at nothing has no answer to any question about it, and making directories belongs
+to the creation path), removing never touches the directory — a test compares the directory's files
+byte for byte afterwards — and removing is blocked while another member's document references a file
+in it, with the references listed rather than silently fixed. The write is the only write: the
+document on disk must still be the one the plan was made from, and then one atomic write goes in.
+Which member is *active* is this machine's state, not the document's, for the same reason the active
+target is: it is what somebody is working on now, so the shared document does not change when they
+switch, and a recorded choice that names a member which is no longer there is reported rather than
+moved to another member. Trust and targets are per member because they are keyed by the member's own
+root and the member's own identity — there is no second notion of either here. A member whose
+directory somebody moved is still the member that owns its paths, and it says so. The tree panel, the
+member explorer and the drag-and-drop that would drive this belong to the shell (T04/T09); reading
+`Cargo.toml` to discover members, features and the dependency tree belongs to T02.11.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

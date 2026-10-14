@@ -19,7 +19,12 @@ use std::{
 };
 
 use crate::host::log::Level;
-use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
+use crate::project::{
+    configuration::SettingValue,
+    create::Template,
+    files::FileOperation,
+    workspace::{WorkspaceFile, name_is_addressable},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -54,6 +59,10 @@ pub enum Command {
     Import(ImportOptions),
     /// Checks what a project needs, re-scans it, and changes nothing (task T02.08).
     Validate(ValidateOptions),
+    /// Shows a workspace, and plans or carries out one change to its members (task T02.09).
+    Workspace(WorkspaceOptions),
+    /// Creates an empty workspace document in a directory (task T02.09).
+    NewWorkspace(NewWorkspaceOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -156,6 +165,84 @@ impl ImportOptions {
             apply: false,
             check_backup: false,
             trust: false,
+        }
+    }
+}
+
+/// What to do with a workspace.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WorkspaceAction {
+    /// Show it: its members, what each holds, and its files qualified by member.
+    Report,
+    /// Name a root that is already there as a member.
+    Add {
+        /// The name the member is addressed by.
+        name: String,
+        /// The root, relative to the workspace root.
+        root: String,
+    },
+    /// Take a member out of the document, and touch no directory.
+    Remove {
+        /// The member's name.
+        name: String,
+    },
+    /// Record which member is active, on this machine.
+    Activate {
+        /// The member's name.
+        name: String,
+    },
+    /// Show one file, addressed as `member:path`.
+    File {
+        /// The `member:path` name.
+        name: String,
+    },
+}
+
+/// How a workspace should be looked at, and how far to go (task T02.09).
+///
+/// Showing a workspace writes nothing; a change is planned first and only carried out with `apply`,
+/// which is what asks the directory's question and takes the write permission. What a change writes
+/// is the workspace document and nothing else: a member is a line in it, so adding names a root that
+/// is already there and removing leaves the directory exactly as it is.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WorkspaceOptions {
+    /// The workspace document.
+    pub path: PathBuf,
+    /// What to do.
+    pub action: WorkspaceAction,
+    /// Whether a planned change should be carried out.
+    pub apply: bool,
+    /// Whether the person answering the directory's question said yes.
+    pub trust: bool,
+}
+
+impl WorkspaceOptions {
+    /// Options that show a workspace and change nothing.
+    pub fn new(path: impl Into<PathBuf>, action: WorkspaceAction) -> Self {
+        Self {
+            path: path.into(),
+            action,
+            apply: false,
+            trust: false,
+        }
+    }
+}
+
+/// What to create a workspace from.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NewWorkspaceOptions {
+    /// The directory the workspace document goes in, which has to be there.
+    pub directory: PathBuf,
+    /// The name a person sees; the directory's own name when nothing is given.
+    pub name: Option<String>,
+}
+
+impl NewWorkspaceOptions {
+    /// Options for a directory.
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+            name: None,
         }
     }
 }
@@ -537,6 +624,96 @@ where
             options.trust = trust;
             return Ok(Command::FileOp(options));
         }
+        "--new-workspace" => {
+            let Some(directory) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = NewWorkspaceOptions::new(PathBuf::from(directory));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--name" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.name = Some(name.to_owned());
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::NewWorkspace(options));
+        }
+        "--workspace" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = WorkspaceOptions::new(PathBuf::from(path), WorkspaceAction::Report);
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--add" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(pair) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        let Some((name, root)) = pair.split_once('=') else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if !name_is_addressable(name) || root.trim().is_empty() {
+                            return Err(ParseError { argument: value });
+                        }
+                        options.action = WorkspaceAction::Add {
+                            name: name.to_owned(),
+                            root: root.to_owned(),
+                        };
+                    }
+                    "--remove" | "--activate" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if !name_is_addressable(name) {
+                            return Err(ParseError { argument: value });
+                        }
+                        options.action = if flag == "--remove" {
+                            WorkspaceAction::Remove {
+                                name: name.to_owned(),
+                            }
+                        } else {
+                            WorkspaceAction::Activate {
+                                name: name.to_owned(),
+                            }
+                        };
+                    }
+                    "--file" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if WorkspaceFile::parse(name).is_err() {
+                            return Err(ParseError { argument: value });
+                        }
+                        options.action = WorkspaceAction::File {
+                            name: name.to_owned(),
+                        };
+                    }
+                    "--apply" => options.apply = true,
+                    "--trust" => options.trust = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Workspace(options));
+        }
         "--validate" => {
             let Some(path) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -676,7 +853,11 @@ pub fn help_text() -> &'static str {
                                   [--remember | --forget]\n\n\
             rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n\
             rustage --validate <file> [--diagnose] [--trust]\n\
-                                 [--record <file> | --rescan <file>]\n\n\
+                                 [--record <file> | --rescan <file>]\n\
+            rustage --new-workspace <directory> [--name <name>]\n\
+            rustage --workspace <file> [--add <name>=<root> | --remove <name> |\n\
+                                       --activate <name> | --file <member>:<path>]\n\
+                                      [--apply] [--trust]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -724,6 +905,18 @@ pub fn help_text() -> &'static str {
                                      later --rescan has something to compare against\n\
        --rescan <file>               With --validate, compare the project with the scan recorded in\n\
                                      <file> and name what appeared, vanished or changed\n\
+       --new-workspace <directory>   Create a workspace document in a directory, with no members\n\
+                                     yet; --name <name> (default: the directory)\n\
+       --workspace <file>            Show a workspace: its members, what each holds, and its files\n\
+                                     qualified by the member that names them\n\
+       --add <name>=<root>           With --workspace, name a root that is already there as a\n\
+                                     member; without --apply this only plans it\n\
+       --remove <name>               With --workspace, take a member out of the document; its\n\
+                                     directory and everything in it stay where they are\n\
+       --activate <name>             With --workspace, record which member is active on this\n\
+                                     machine, which the document does not say\n\
+       --file <member>:<path>        With --workspace, show that one file: two members can each\n\
+                                     hold a path of the same name\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -734,7 +927,8 @@ mod tests {
 
     use super::{
         Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions,
-        LaunchOptions, NewProjectOptions, OpenProjectOptions, ValidateOptions, log_level_of, parse,
+        LaunchOptions, NewProjectOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
+        WorkspaceAction, WorkspaceOptions, log_level_of, parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -931,6 +1125,128 @@ mod tests {
         assert!(parse(["\u{2d}\u{2d}import"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_workspace_options() {
+        assert_eq!(
+            parse(["--workspace", "area/workspace.json"]),
+            Ok(Command::Workspace(WorkspaceOptions::new(
+                PathBuf::from("area/workspace.json"),
+                WorkspaceAction::Report
+            )))
+        );
+        assert_eq!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--add",
+                "app=members/app",
+                "--apply",
+                "--trust"
+            ]),
+            Ok(Command::Workspace(WorkspaceOptions {
+                path: PathBuf::from("area/workspace.json"),
+                action: WorkspaceAction::Add {
+                    name: "app".to_owned(),
+                    root: "members/app".to_owned(),
+                },
+                apply: true,
+                trust: true,
+            }))
+        );
+        assert_eq!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--remove",
+                "lib"
+            ]),
+            Ok(Command::Workspace(WorkspaceOptions::new(
+                PathBuf::from("area/workspace.json"),
+                WorkspaceAction::Remove {
+                    name: "lib".to_owned(),
+                }
+            )))
+        );
+        assert_eq!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--activate",
+                "lib"
+            ]),
+            Ok(Command::Workspace(WorkspaceOptions::new(
+                PathBuf::from("area/workspace.json"),
+                WorkspaceAction::Activate {
+                    name: "lib".to_owned(),
+                }
+            )))
+        );
+        assert_eq!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--file",
+                "lib:pages/main.json"
+            ]),
+            Ok(Command::Workspace(WorkspaceOptions::new(
+                PathBuf::from("area/workspace.json"),
+                WorkspaceAction::File {
+                    name: "lib:pages/main.json".to_owned(),
+                }
+            )))
+        );
+        assert_eq!(
+            parse(["\u{2d}\u{2d}new-workspace", "area", "--name", "Area"]),
+            Ok(Command::NewWorkspace(NewWorkspaceOptions {
+                directory: PathBuf::from("area"),
+                name: Some("Area".to_owned()),
+            }))
+        );
+
+        // A name that cannot be addressed, a pair with no `=`, a path with no member, and a missing
+        // value are all usage errors: none of them can be read as "do nothing", which looks like
+        // success.
+        assert!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--add",
+                "app"
+            ])
+            .is_err()
+        );
+        assert!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--add",
+                "=members/app"
+            ])
+            .is_err()
+        );
+        assert!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--add",
+                "two members=x"
+            ])
+            .is_err()
+        );
+        assert!(parse(["\u{2d}\u{2d}workspace", "area/workspace.json", "--remove"]).is_err());
+        assert!(
+            parse([
+                "\u{2d}\u{2d}workspace",
+                "area/workspace.json",
+                "--file",
+                "pages/main.json"
+            ])
+            .is_err()
+        );
+        assert!(parse(["\u{2d}\u{2d}workspace"]).is_err());
+        assert!(parse(["\u{2d}\u{2d}new-workspace"]).is_err());
     }
 
     #[test]

@@ -129,6 +129,9 @@ cargo run -- --configuration target/new-project/project.json   # which target bu
 cargo run -- --import target/new-project/project.json   # what it is, and what an import would change
 cargo run -- --validate target/new-project/project.json   # what it needs and whether it is there; writes nothing
 cargo run -- --validate target/new-project/project.json --rescan target/scan.json   # what changed since a recorded scan
+cargo run -- --new-workspace target/area            # one workspace document, no members yet
+cargo run -- --workspace target/area/workspace.json --add app=app --apply --trust   # a member; the directory is already there
+cargo run -- --workspace target/area/workspace.json --file app:pages/main.json      # one file, told apart by its member
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

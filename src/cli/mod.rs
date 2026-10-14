@@ -9,7 +9,8 @@ mod command;
 
 pub use command::{
     Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions,
-    OpenProjectOptions, ValidateOptions, help_text, log_level_of, parse,
+    NewWorkspaceOptions, OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions,
+    help_text, log_level_of, parse,
 };
 
 /// The process exit codes, defined once in the host and re-exported so a command-line caller and a

@@ -30,11 +30,14 @@
 //! on purpose — the registered contract says only the store's apply path calls them, so a file reader
 //! must not try.
 //!
-//! **What this module deliberately does not do yet** is turn a file into a model. The store accepts
-//! a node only if its identity was issued by the document (`DocumentStore` adopts exactly one id,
-//! the root's, and refuses an invented one), so the file → model path needs a store-side seam that
-//! adopts a file's identities. That seam belongs with opening a project (T02.03), where the trust
-//! and scope decisions live too; a bridge written before it would be a function nothing can run.
+//! **What this module deliberately does not do** is turn a whole file into an editable model. The
+//! store accepts a node only if its identity was issued to the document, so the file → model path
+//! needs a seam that adopts a file's identities; that seam is
+//! [`Buffer::store`](crate::project::document::Buffer::store), which hands the page and its root to
+//! a [`DocumentStore`](crate::contracts::store::DocumentStore) with the identities the text declared.
+//! The remaining nodes arrive through change sets, which is where a node is *changed* — and that is
+//! T03.02's subject, because changing a node means changing it through an inverse-carrying change
+//! set rather than by re-reading a file.
 //!
 //! ## Unknown members
 //!

@@ -68,6 +68,9 @@ pub enum Command {
     /// Resolves a workspace's dependencies: what it is made of, and what changed since a record
     /// (task T02.11).
     Dependencies(DependenciesOptions),
+    /// Shows what a buffer over a page document is holding after some text is typed into it
+    /// (task T03.01).
+    Document(DocumentOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -201,6 +204,46 @@ impl KitOptions {
             diagnose: false,
             triple: None,
             trust: false,
+        }
+    }
+}
+
+/// One edit to type into a buffer (task T03.01).
+///
+/// Text is replaced whole rather than inserted a character at a time: that is what a paste or an
+/// import does, and per-keystroke editing is the undo domain's subject (T03.03). The order the edits
+/// are given in is the order they happen in, so a sequence of them is a story about one buffer.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DocumentEdit {
+    /// The text itself.
+    Text(String),
+    /// A file whose text is read and used.
+    File(PathBuf),
+}
+
+/// What to do with a page document's buffer (task T03.01).
+///
+/// Showing a buffer runs nothing and writes nothing: it reads the file and reports what the text is,
+/// what the last model was, and what happened to identity. Whether the newest text reads is a state
+/// rather than a failure, so a text that does not read is still reported in full — with the refusal
+/// and with the model that is still previewable.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DocumentOptions {
+    /// The page document.
+    pub file: PathBuf,
+    /// The project root, when the caller names it; otherwise the nearest project above the file.
+    pub root: Option<PathBuf>,
+    /// The edits to type, in order.
+    pub edits: Vec<DocumentEdit>,
+}
+
+impl DocumentOptions {
+    /// Options that show a document and type nothing into it.
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        Self {
+            file: file.into(),
+            root: None,
+            edits: Vec::new(),
         }
     }
 }
@@ -754,6 +797,41 @@ where
             }
             return Ok(Command::Dependencies(options));
         }
+        "--document" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = DocumentOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(path));
+                    }
+                    "--set-text" | "--set-text-file" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(text) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if argument.to_str().unwrap_or_default() == "--set-text" {
+                            options.edits.push(DocumentEdit::Text(text.to_owned()));
+                        } else {
+                            options.edits.push(DocumentEdit::File(PathBuf::from(text)));
+                        }
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Document(options));
+        }
         "--new-workspace" => {
             let Some(directory) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -985,6 +1063,8 @@ pub fn help_text() -> &'static str {
             rustage --validate <file> [--diagnose] [--trust]\n\
                                  [--record <file> | --rescan <file>]\n\
             rustage --kit <file> [--diagnose] [--trust] [--triple <triple>]\n\
+            rustage --document <page-document> [--root <directory>]\n\
+                                       [--set-text <text> | --set-text-file <file>]...\n\
             rustage --dependencies <directory> [--review <record> | --record <record>]\n\
                                                [--allow-lockfile-change] [--allow-network]\n\
                                                [--trust]\n\
@@ -1044,6 +1124,13 @@ pub fn help_text() -> &'static str {
                                      programs the kit names), --triple says which output to ask about\n\
        --triple <triple>             With --kit, the output triple to ask about: a kit never\n\
                                      carries which profile is being built\n\
+       --document <page-document>    Show what a buffer over a page document is holding: the text,\n\
+                                     the last model that read it, and what happened to identity\n\
+       --root <directory>            With --document, the project root the file is read against\n\
+                                     (default: the nearest project above the file)\n\
+       --set-text <text>             With --document, replace the text with this text; repeatable,\n\
+                                     and the edits happen in the order they are given\n\
+       --set-text-file <file>        With --document, read this file's text and use it as an edit\n\
        --dependencies <directory>    Resolve a Cargo workspace's dependencies and report the tree;\n\
                                      nothing runs until the directory is trusted and each effect of\n\
                                      the resolution has been authorized\n\
@@ -1074,10 +1161,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, ConfigurationOptions, DependenciesOptions, DropEntryOptions, FileOpOptions,
-        ImportOptions, KitOptions, LaunchOptions, NewProjectOptions, NewWorkspaceOptions,
-        OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions, log_level_of,
-        parse,
+        Command, ConfigurationOptions, DependenciesOptions, DocumentEdit, DocumentOptions,
+        DropEntryOptions, FileOpOptions, ImportOptions, KitOptions, LaunchOptions,
+        NewProjectOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
+        WorkspaceAction, WorkspaceOptions, log_level_of, parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -1274,6 +1361,44 @@ mod tests {
         assert!(parse(["\u{2d}\u{2d}import"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_document_options() {
+        assert_eq!(
+            parse(["--document", "pages/main.json"]),
+            Ok(Command::Document(DocumentOptions::new(PathBuf::from(
+                "pages/main.json"
+            ))))
+        );
+        assert_eq!(
+            parse([
+                "--document",
+                "pages/main.json",
+                "--root",
+                "area",
+                "--set-text",
+                "{}",
+                "--set-text-file",
+                "typed.json",
+                "--set-text",
+                "{ nope",
+            ]),
+            Ok(Command::Document(DocumentOptions {
+                file: PathBuf::from("pages/main.json"),
+                root: Some(PathBuf::from("area")),
+                edits: vec![
+                    DocumentEdit::Text("{}".to_owned()),
+                    DocumentEdit::File(PathBuf::from("typed.json")),
+                    DocumentEdit::Text("{ nope".to_owned()),
+                ],
+            }))
+        );
+        assert!(parse(["--document"]).is_err());
+        assert!(parse(["--document", "pages/main.json", "--wat"]).is_err());
+        assert!(parse(["--document", "pages/main.json", "--root"]).is_err());
+        assert!(parse(["--document", "pages/main.json", "--set-text"]).is_err());
+        assert!(parse(["--document", "pages/main.json", "--set-text-file"]).is_err());
     }
 
     #[test]

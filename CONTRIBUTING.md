@@ -81,6 +81,8 @@ cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unkno
 cargo run -- --dependencies target/area        # the dependency tree, resolved read-only: --locked --offline
 cargo run -- --dependencies target/area --allow-lockfile-change --trust --record target/deps.json   # the only effect allowed to change something
 cargo run -- --dependencies target/area --review target/deps.json   # what changed since that record
+cargo run -- --document target/area/pages/main.json   # what the buffer holds: the text, the model, identity
+cargo run -- --document target/area/pages/main.json --set-text '{"format": 1,'   # invalid text is kept; the last model still previews
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -360,6 +362,34 @@ where cargo keeps it (at the workspace root the report names, not beside a membe
 records may not be written over the manifest or the lockfile. The dependency panel and the "accept
 this change" dialog belong to the shell (T18), and the resolve-versus-build distinction belongs to
 T22.
+
+`--document <file>` is where this milestone's acceptance line lives: "invalid text is kept, and the
+last valid model can still be previewed". A buffer holds two things that are not the same thing — the
+text, and the last model that read it — and it holds them so that neither can be mistaken for the
+other. The text is stored exactly as it was given: not trimmed, not repaired, and never replaced by the
+model re-rendered (which is what would silently eat the formatting, the unknown members and the
+comments a person typed). It is replaced whole, because that is what a paste or an import does;
+per-keystroke editing is T03.03's subject. The state has exactly two shapes: either the newest text
+reads and the model *is* that text's model, or the newest text does not read and the model carried in
+the same value is the last one that did — older than the text, and saying so. There is deliberately no
+third value meaning "the model, but the text may be broken": that value is how a stale preview gets
+read as a current one. Two versions keep the two apart, and they are two on purpose: the text version
+moves on every edit, the model version only on reads that succeeded, so "the preview is behind the
+text" is a pair of numbers rather than a flag somebody has to remember to set. The model's version is
+not the store's `Revision` — that belongs to the editable model (`T00.05`), and a buffer borrowing it
+would be a second writer of it; what the buffer shares with the store is identity, and
+`Buffer::store` hands the page and its root to a `DocumentStore` with the ids the text declared (the
+remaining nodes arrive through change sets, which is T03.02). A text that does not read is *not* an
+error at the door: the refusal travels with the reason (a syntax error keeps the reader's own
+`line 1, column 71: …`), the model that is still previewable is printed, and the command's exit code
+says whether the newest text reads. Identity is reported rather than policed — an id that departs, one
+that comes *back* (which is not the same finding as one that appears), and one that comes back
+carrying a different `type` are all named, because every reference in the project still points at that
+id — while one id on two nodes is refused by the page reader, since a model cannot hold one identity
+twice. Bytes that are not text are refused at the door instead of half-read, and a file is read
+against the nearest project above it rather than against its own directory, which would resolve every
+reference in the wrong place. The editing surfaces themselves (the text view, the canvas, the undo
+domain) belong to T03.03 and the shell (`T04`), and writing the text back belongs to T03.04.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

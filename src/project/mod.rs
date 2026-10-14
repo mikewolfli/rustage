@@ -25,6 +25,7 @@
 pub mod configuration;
 pub mod create;
 pub mod dependencies;
+pub mod document;
 pub mod entries;
 pub mod files;
 pub mod format;

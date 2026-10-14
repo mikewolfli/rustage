@@ -539,6 +539,33 @@
       "test": "the_lockfile_is_read_where_cargo_keeps_it",
       "evidence": "结构 + 测试",
       "note": "lockfile_beside 就是这条规则：报告里的根是本机的一个目录就用它，否则才退回所指名的目录；用例覆盖成员目录（锁文件读的是工作区根那一份）与「报告的根在这台机器上不存在」（退回所指名目录，没有锁文件就如实说没有）；命令行在这种情况下报告锁文件位于工作区根及其状态，不与解析前在所指名目录读到的值比较，因为那个值不是工作区的状态"
+    },
+    {
+      "id": "INV-TEXT-IS-KEPT-VERBATIM",
+      "statement": "缓冲里的文本就是给出的文本：不裁剪、不修补、也不用模型重渲染的文本替换它；读不懂的文本仍然是最新的文本（文本版本仍然前进），失败的那次读不会把文本回滚到上一次能读的内容",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/document.rs",
+      "test": "the_buffer_never_rewrites_the_text_it_holds",
+      "evidence": "结构 + 测试",
+      "note": "Buffer::set_text 先记下新的文本版本再尝试读，因此读不通的文本也不会被回滚（读不通是状态而不是撤销）；文本只以 String 保存，模型只在另一处（Model::document）且它的渲染结果从不写回文本——用例断言模型重渲染与文本不等，且文本仍带着自己的换行与空格；非 UTF-8 的字节在读入时就被拒绝（没有可保留的文本），文件本身一个字节都不动"
+    },
+    {
+      "id": "INV-LAST-VALID-MODEL-SURVIVES-A-BAD-EDIT",
+      "statement": "有效模型是「最后一次读通的模型」：读不懂的文本不会清掉它，状态只有两种形状（读通 / 文本读不通且带着那个模型与拒绝原因），问到模型的地方同时拿到它来自哪个文本版本，所以旧模型不可能被当作当前结果",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/document.rs",
+      "test": "an_invalid_text_is_kept_and_the_last_model_still_previews",
+      "evidence": "结构 + 测试",
+      "note": "State 只有 Reads{model} 与 TextDoesNotRead{refusal, model, text} 两种形状，没有「模型 + 可能坏掉的文本」这种第三值，所以不存在把过期模型当作当前结果读出来的路径；读失败时 model 字段原样保留上一次成功的 Model（用例断言两个值相等），Model 自带 version 与 text，State::render 明说「它落后于文本」；模型版本不是 store 的 Revision：那是唯一可写模型自己的序号，缓冲区借用它等于成为第二写者"
+    },
+    {
+      "id": "INV-IDENTITY-EVENTS-ARE-REPORTED-NOT-SILENT",
+      "statement": "身份变化是如实报告的事实而不是静默：同一个 id 在没被触碰的编辑后保持同一身份；离开文本的 id 记为 departed、回来的记为 returned（不是 appeared）、同一 id 换了 type 记为 relabelled；同一个 id 出现在两个节点上则不成为一个模型（读入时拒绝）",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/document.rs",
+      "test": "identity_that_comes_and_goes_is_reported_rather_than_policed",
+      "evidence": "结构 + 测试",
+      "note": "缓冲区从不分配 id（id 是文本的），所以它记的是「哪些 id 见过」这一件事实（seen/known_ids 同一来源），returned 与 appeared 的差别正是这个记录；relabelled 把同一 id 的旧/新 type 都写出来，因为工程里所有引用仍指向那个 id；两条同 id 的节点由页面读入器拒绝（ProjectError::Duplicate），拒绝理由随状态一起给出，缓冲区不会自己发明一条「按找到哪个算哪个」的规则"
     }
   ]
 }

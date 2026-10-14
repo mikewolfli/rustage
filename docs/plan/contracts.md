@@ -136,6 +136,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-RESOLUTION-EFFECTS-AUTHORIZED | 一次解析就是一个值：命令与它会产生哪些副作用一起给出，每个副作用按权限表的类别命名，默认解析靠 `--locked --offline` 在结构上是只读的，任何副作用未获授权就不启动任何程序，也绝不会默认升级依赖或访问网络 | `C-PROJECT` | [`src/project/dependencies.rs`](../../src/project/dependencies.rs) | `the_command_a_resolution_would_run_says_what_it_would_do` | 结构 + 测试 |
 | INV-DEPENDENCY-RECORD-BELONGS-TO-ONE-WORKSPACE | 依赖记录属于一个工作区：记录按 cargo 报告的工作区根键控，拿别的工作区的记录作基线一律拒绝比较而不是照比，记录也不许写到清单或锁文件上，一次版本变化配对成一条变化而不是「删一个加一个」 | `C-PROJECT` | [`src/project/dependencies.rs`](../../src/project/dependencies.rs) | `a_review_names_what_changed_and_what_did_not` | 结构 + 测试 |
 | INV-DEPENDENCY-FACTS-ARE-READ-WHERE-THEY-LIVE | 依赖事实只在它所在的地方读：锁文件按 cargo 报告的工作区根读取（成员目录的锁文件属于工作区），报告的工作区根与所指名的目录不同时如实说出锁文件在那里，而不是把「这个目录没有锁文件」当成工作区的状态 | `C-PROJECT` | [`src/project/dependencies.rs`](../../src/project/dependencies.rs) | `the_lockfile_is_read_where_cargo_keeps_it` | 结构 + 测试 |
+| INV-TEXT-IS-KEPT-VERBATIM | 缓冲里的文本就是给出的文本：不裁剪、不修补、也不用模型重渲染的文本替换它；读不懂的文本仍然是最新的文本（文本版本仍然前进），失败的那次读不会把文本回滚到上一次能读的内容 | `C-PROJECT` | [`src/project/document.rs`](../../src/project/document.rs) | `the_buffer_never_rewrites_the_text_it_holds` | 结构 + 测试 |
+| INV-LAST-VALID-MODEL-SURVIVES-A-BAD-EDIT | 有效模型是「最后一次读通的模型」：读不懂的文本不会清掉它，状态只有两种形状（读通 / 文本读不通且带着那个模型与拒绝原因），问到模型的地方同时拿到它来自哪个文本版本，所以旧模型不可能被当作当前结果 | `C-PROJECT` | [`src/project/document.rs`](../../src/project/document.rs) | `an_invalid_text_is_kept_and_the_last_model_still_previews` | 结构 + 测试 |
+| INV-IDENTITY-EVENTS-ARE-REPORTED-NOT-SILENT | 身份变化是如实报告的事实而不是静默：同一个 id 在没被触碰的编辑后保持同一身份；离开文本的 id 记为 departed、回来的记为 returned（不是 appeared）、同一 id 换了 type 记为 relabelled；同一个 id 出现在两个节点上则不成为一个模型（读入时拒绝） | `C-PROJECT` | [`src/project/document.rs`](../../src/project/document.rs) | `identity_that_comes_and_goes_is_reported_rather_than_policed` | 结构 + 测试 |
 
 ## 不变量的补充说明
 
@@ -181,6 +184,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-RESOLUTION-EFFECTS-AUTHORIZED | Effect 三态与权限表类别一一对应（RunsAProgram/Command、MayWriteTheLockfile/FileWrite、MayReachTheRegistry/Network），用例断言只授权 Command 时 unauthorized 正好列出另外两个；参数与副作用由 with_effects 的两个布尔同时决定（默认两个都 false），因此「不隐式升级」不是约定而是构造里没有这条路径：只有准许改锁文件才丢 `--locked`，只有准许访问网络才丢 `--offline`；命令行对每个类别各取一次 permit 之后才 spawn，未获授权时打印「nothing was run」并以 4 退出；解析总是带 --manifest-path，运行的那条命令就是报告里那一行 |
 | INV-DEPENDENCY-RECORD-BELONGS-TO-ONE-WORKSPACE | ReviewRefusal::AnotherWorkspace 把双方路径都写出来，拒绝时不产生任何比较结果；写记录前用 may_record_at 拒绝清单与锁文件（把 `sub/../Cargo.lock` 这类同一文件的另一种写法也算出来，用 canonicalize 判定），因此「记录自己描述的东西」不会被记录覆盖掉；配对按（包名, 来源）进行，cargo 的标识符带版本，所以 1.0.200→1.0.210 是一条 Version 变化；同标识符不同版本这种 cargo 不会产生的形状仍报为版本变化而不是「没变」 |
 | INV-DEPENDENCY-FACTS-ARE-READ-WHERE-THEY-LIVE | lockfile_beside 就是这条规则：报告里的根是本机的一个目录就用它，否则才退回所指名的目录；用例覆盖成员目录（锁文件读的是工作区根那一份）与「报告的根在这台机器上不存在」（退回所指名目录，没有锁文件就如实说没有）；命令行在这种情况下报告锁文件位于工作区根及其状态，不与解析前在所指名目录读到的值比较，因为那个值不是工作区的状态 |
+| INV-TEXT-IS-KEPT-VERBATIM | Buffer::set_text 先记下新的文本版本再尝试读，因此读不通的文本也不会被回滚（读不通是状态而不是撤销）；文本只以 String 保存，模型只在另一处（Model::document）且它的渲染结果从不写回文本——用例断言模型重渲染与文本不等，且文本仍带着自己的换行与空格；非 UTF-8 的字节在读入时就被拒绝（没有可保留的文本），文件本身一个字节都不动 |
+| INV-LAST-VALID-MODEL-SURVIVES-A-BAD-EDIT | State 只有 Reads{model} 与 TextDoesNotRead{refusal, model, text} 两种形状，没有「模型 + 可能坏掉的文本」这种第三值，所以不存在把过期模型当作当前结果读出来的路径；读失败时 model 字段原样保留上一次成功的 Model（用例断言两个值相等），Model 自带 version 与 text，State::render 明说「它落后于文本」；模型版本不是 store 的 Revision：那是唯一可写模型自己的序号，缓冲区借用它等于成为第二写者 |
+| INV-IDENTITY-EVENTS-ARE-REPORTED-NOT-SILENT | 缓冲区从不分配 id（id 是文本的），所以它记的是「哪些 id 见过」这一件事实（seen/known_ids 同一来源），returned 与 appeared 的差别正是这个记录；relabelled 把同一 id 的旧/新 type 都写出来，因为工程里所有引用仍指向那个 id；两条同 id 的节点由页面读入器拒绝（ProjectError::Duplicate），拒绝理由随状态一起给出，缓冲区不会自己发明一条「按找到哪个算哪个」的规则 |
 
 ## 为什么权限表要交叉校验
 

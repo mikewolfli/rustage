@@ -123,6 +123,7 @@ cargo run -- --workspace target/area/workspace.json --file app:pages/main.json  
 cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # 工具组合里缺什么
 cargo run -- --dependencies target/area             # cargo 解析出的依赖树，不做任何会改变它的动作
 cargo run -- --dependencies target/area --review target/deps.json   # 与那份记录相比改了什么
+cargo run -- --document target/area/pages/main.json   # 文本、最后一次读通的模型与身份变化
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

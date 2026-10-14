@@ -147,6 +147,12 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Document(options) => {
+            if !document(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Dependencies(options) => {
             if !dependencies(&options) {
                 crate::host::log::flush();
@@ -549,6 +555,84 @@ fn stop_without_writing(session: &ProjectSession, before: &[u8]) -> bool {
 /// whether anything was *decided* to be wrong: "nobody looked" leaves the kit incomplete and is not
 /// reported as a failure, because a script that treats it as one would be told to fix what may be
 /// fine.
+/// Shows what a buffer over a page document is holding (task T03.01).
+///
+/// Nothing is written and nothing is run, so there is no question to ask and no permission to take:
+/// the command reads the file, types the edits in the order they were given, and reports. What it
+/// reports is the whole point of the task — the text as it was typed (an invalid text is kept), the
+/// last model that read (still previewable, and saying which text it came from), and what happened
+/// to identity. The exit code says whether the newest text reads; a text that does not read is a
+/// finding, not a crash, and the whole report is still printed.
+fn document(options: &crate::cli::DocumentOptions) -> bool {
+    use crate::project::document::{Buffer, root_of};
+
+    let root = match options.root.as_ref() {
+        Some(directory) => match crate::host::paths::ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        None => match root_of(&options.file) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+    };
+    let relative = match options.file.strip_prefix(root.as_path()) {
+        Ok(relative) => relative.to_path_buf(),
+        Err(_) => match options.file.canonicalize() {
+            Ok(absolute) => match absolute.strip_prefix(root.as_path()) {
+                Ok(relative) => relative.to_path_buf(),
+                Err(_) => {
+                    println!(
+                        "rustage: {} is not inside {}",
+                        options.file.display(),
+                        root.as_path().display()
+                    );
+                    return false;
+                }
+            },
+            Err(error) => {
+                println!(
+                    "rustage: {} could not be resolved: {error}",
+                    options.file.display()
+                );
+                return false;
+            }
+        },
+    };
+
+    let mut buffer = match Buffer::open(&root, &relative) {
+        Ok(buffer) => buffer,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    println!("document: read only; nothing is written and no question is asked");
+    for edit in &options.edits {
+        let text = match edit {
+            crate::cli::DocumentEdit::Text(text) => text.clone(),
+            crate::cli::DocumentEdit::File(path) => match std::fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(error) => {
+                    println!("rustage: {} could not be read: {error}", path.display());
+                    return false;
+                }
+            },
+        };
+        buffer.set_text(&root, text);
+    }
+    for line in buffer.render() {
+        println!("{line}");
+    }
+    buffer.state().is_current()
+}
+
 /// Resolves a workspace's dependencies, and says exactly what it did (task T02.11).
 ///
 /// The order here *is* the guarantee: the resolution is decided (a command and its effects), it is

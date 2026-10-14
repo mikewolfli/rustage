@@ -135,6 +135,7 @@ cargo run -- --workspace target/area/workspace.json --file app:pages/main.json  
 cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # which tools, and what is missing
 cargo run -- --dependencies target/area             # the dependency tree cargo resolves, and nothing that changes it
 cargo run -- --dependencies target/area --review target/deps.json   # what changed since that record
+cargo run -- --document target/area/pages/main.json   # the text, the last model that read it, and identity
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

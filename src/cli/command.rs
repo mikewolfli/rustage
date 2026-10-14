@@ -19,7 +19,7 @@ use std::{
 };
 
 use crate::host::log::Level;
-use crate::project::create::Template;
+use crate::project::{create::Template, files::FileOperation};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -45,6 +45,8 @@ pub enum Command {
     ProjectTree(PathBuf),
     /// Removes an entry, fixing what points at it or refusing to remove it (task T02.04).
     DropEntry(DropEntryOptions),
+    /// Previews or performs one file operation on a project (task T02.05).
+    FileOp(FileOpOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -121,6 +123,35 @@ impl DropEntryOptions {
             path: path.into(),
             document: document.into(),
             fix: false,
+            trust: false,
+        }
+    }
+}
+
+/// Which file operation to plan, and whether to do it.
+///
+/// Without `apply` this only reads the project and prints what the operation would do, which is
+/// what the design surface shows before anyone agrees to it. With `apply` the plan is carried out:
+/// the files move first, then the document is written, and a failed write puts the moves back.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FileOpOptions {
+    /// The project document.
+    pub path: PathBuf,
+    /// The operation, as given on the command line.
+    pub operation: FileOperation,
+    /// Whether the plan should be carried out instead of only printed.
+    pub apply: bool,
+    /// Whether the person answering the project's question said yes.
+    pub trust: bool,
+}
+
+impl FileOpOptions {
+    /// Options that preview an operation on a project.
+    pub fn new(path: impl Into<PathBuf>, operation: FileOperation) -> Self {
+        Self {
+            path: path.into(),
+            operation,
+            apply: false,
             trust: false,
         }
     }
@@ -348,6 +379,63 @@ where
             }
             return Ok(Command::DropEntry(options));
         }
+        "--file-op" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut rest = arguments;
+            let mut operation = None;
+            let mut apply = false;
+            let mut trust = false;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--add" | "--exclude" | "--delete" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        operation = Some(match argument.to_str().unwrap_or_default() {
+                            "--add" => FileOperation::Add {
+                                path: path.to_owned(),
+                            },
+                            "--exclude" => FileOperation::Exclude {
+                                path: path.to_owned(),
+                            },
+                            _ => FileOperation::Delete {
+                                path: path.to_owned(),
+                            },
+                        });
+                    }
+                    "--move" | "--rename" => {
+                        let Some(from) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(to) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let (Some(from), Some(to)) = (from.to_str(), to.to_str()) else {
+                            return Err(ParseError { argument });
+                        };
+                        operation = Some(FileOperation::Move {
+                            from: from.to_owned(),
+                            to: to.to_owned(),
+                        });
+                    }
+                    "--apply" => apply = true,
+                    "--trust" => trust = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            let Some(operation) = operation else {
+                return Err(ParseError { argument });
+            };
+            let mut options = FileOpOptions::new(PathBuf::from(path), operation);
+            options.apply = apply;
+            options.trust = trust;
+            return Ok(Command::FileOp(options));
+        }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
             let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -382,7 +470,9 @@ pub fn help_text() -> &'static str {
             rustage --new-project <directory> [--template <name>] [--name <name>]\n\
             rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n\
             rustage [--project-tree <file>]\n\
-            rustage --drop-entry <file> --document <path> [--fix] [--trust]\n\n\
+            rustage --drop-entry <file> --document <path> [--fix] [--trust]\n\
+            rustage --file-op <file> [--add <path> | --exclude <path> | --delete <path>]\n\
+                                 [--move <from> <to>] [--apply] [--trust]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -404,7 +494,12 @@ pub fn help_text() -> &'static str {
        --drop-entry <file>           Remove the entry in --document; refuses while anything points\n\
                                      at it unless --fix is given, which fixes those references\n\
        --document <path>             With --drop-entry, the page document of the entry\n\
-       --fix                         With --drop-entry, fix the references instead of refusing\n\n\
+       --fix                         With --drop-entry, fix the references instead of refusing\n\
+       --file-op <file>              Plan one file operation on the project; --add, --exclude,\n\
+                                     --delete <path> or --move <from> <to> says which. Prints\n\
+                                     what it would do unless --apply is given, which does it\n\
+       --apply                       With --file-op, do it: move the files, then write the\n\
+                                     document, putting the moves back if the write fails\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -414,11 +509,11 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, DropEntryOptions, LaunchOptions, NewProjectOptions, OpenProjectOptions,
-        log_level_of, parse,
+        Command, DropEntryOptions, FileOpOptions, LaunchOptions, NewProjectOptions,
+        OpenProjectOptions, log_level_of, parse,
     };
     use crate::host::log::Level;
-    use crate::project::create::Template;
+    use crate::project::{create::Template, files::FileOperation};
     use std::time::Duration;
 
     #[test]
@@ -578,6 +673,66 @@ mod tests {
         assert!(log_level_of(["--log-level"]).is_err());
         assert!(log_level_of(["--log-level", "shout"]).is_err());
         assert!(parse(["--log-level", "shout", "--help"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_file_operation_options() {
+        assert_eq!(
+            parse(["--file-op", "demo/project.json", "--add", "assets/logo.svg"]),
+            Ok(Command::FileOp(FileOpOptions::new(
+                PathBuf::from("demo/project.json"),
+                FileOperation::Add {
+                    path: "assets/logo.svg".to_owned()
+                }
+            )))
+        );
+        assert_eq!(
+            parse(["\u{2d}\u{2d}file-op", "p.json", "--x"]),
+            Err(super::ParseError {
+                argument: std::ffi::OsString::from("--x")
+            })
+        );
+
+        // `--move` takes two paths; `--rename` is the same operation under the name a person uses
+        // when the file does not change places.
+        for spelling in ["--move", "--rename"] {
+            assert_eq!(
+                parse(["--file-op", "p.json", spelling, "a.svg", "b.svg"]),
+                Ok(Command::FileOp(FileOpOptions::new(
+                    PathBuf::from("p.json"),
+                    FileOperation::Move {
+                        from: "a.svg".to_owned(),
+                        to: "b.svg".to_owned()
+                    }
+                )))
+            );
+        }
+        assert_eq!(
+            parse([
+                "--file-op",
+                "p.json",
+                "--delete",
+                "a.svg",
+                "--apply",
+                "--trust"
+            ]),
+            Ok(Command::FileOp(FileOpOptions {
+                path: PathBuf::from("p.json"),
+                operation: FileOperation::Delete {
+                    path: "a.svg".to_owned()
+                },
+                apply: true,
+                trust: true,
+            }))
+        );
+
+        // A missing path, a missing operation, a half-given move and an unknown flag are usage
+        // errors: none of them can be read as "do nothing", which would look like success.
+        assert!(parse(["--file-op"]).is_err());
+        assert!(parse(["--file-op", "p.json"]).is_err());
+        assert!(parse(["--file-op", "p.json", "--add"]).is_err());
+        assert!(parse(["--file-op", "p.json", "--move", "a.svg"]).is_err());
+        assert!(parse(["--file-op", "p.json", "--move", "a.svg", "b.svg", "--wat"]).is_err());
     }
 
     #[test]

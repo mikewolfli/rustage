@@ -130,6 +130,79 @@ impl ProjectRoot {
         Ok(Self { root })
     }
 
+    /// Resolves a project-relative path that is going to be created.
+    ///
+    /// The same rule as [`Self::resolve`] about what stays inside the root, with one difference: the
+    /// path's own directory does not have to exist yet. Creating a file in a new directory is
+    /// ordinary, and a caller that has to make the directory anyway must not be told that the path
+    /// "climbs above the root".
+    ///
+    /// The link check walks up to the nearest directory that does exist and canonicalises that one,
+    /// so a link inside the project still cannot be used to write outside it.
+    pub fn resolve_for_creation(&self, relative: impl AsRef<Path>) -> Result<PathBuf, PathError> {
+        let relative = relative.as_ref();
+        if relative.as_os_str().is_empty() {
+            return Err(PathError::Empty);
+        }
+        if relative.is_absolute() {
+            return Err(PathError::Absolute {
+                path: relative.to_path_buf(),
+            });
+        }
+
+        let mut resolved = self.root.clone();
+        let mut depth = 0usize;
+        for component in relative.components() {
+            match component {
+                Component::Normal(part) => {
+                    resolved.push(part);
+                    depth += 1;
+                }
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if depth == 0 {
+                        return Err(PathError::EscapesRoot {
+                            path: relative.to_path_buf(),
+                        });
+                    }
+                    resolved.pop();
+                    depth -= 1;
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(PathError::Absolute {
+                        path: relative.to_path_buf(),
+                    });
+                }
+            }
+        }
+        if depth == 0 {
+            return Err(PathError::Empty);
+        }
+
+        // Walk up to the nearest directory that exists, and check that one: a link inside the project
+        // that points out of it is caught here, and a directory nobody has made yet is not.
+        let mut existing = resolved.as_path();
+        while let Some(parent) = existing.parent() {
+            existing = parent;
+            if existing.exists() || existing == self.root {
+                break;
+            }
+        }
+        if existing.exists() {
+            let canonical = std::fs::canonicalize(existing).map_err(|_| PathError::Unresolved {
+                path: existing.to_path_buf(),
+                reason: "it could not be resolved to the filesystem's own spelling".to_owned(),
+            })?;
+            if !canonical.starts_with(&self.root) && !self.root.starts_with(&canonical) {
+                return Err(PathError::LeavesRootThroughLink {
+                    path: relative.to_path_buf(),
+                    resolved: canonical,
+                });
+            }
+        }
+        Ok(resolved)
+    }
+
     /// The resolved root.
     pub fn as_path(&self) -> &Path {
         &self.root
@@ -602,6 +675,63 @@ mod tests {
             !sandbox.root.join("assets").exists(),
             "nothing may be created implicitly"
         );
+    }
+
+    #[test]
+    fn a_path_that_is_going_to_be_created_may_be_in_a_new_directory() {
+        let sandbox = sandbox();
+        let root = ProjectRoot::new(&sandbox.root).unwrap();
+
+        // The same path `resolve` refuses, because it is about to be created: the caller has to make
+        // the directory anyway, and being told the path "climbs above the root" would be a lie.
+        let target = root
+            .resolve_for_creation("assets/new/logo.svg")
+            .expect("a path in a directory that does not exist yet resolves");
+        assert_eq!(target, sandbox.root.join("assets/new/logo.svg"));
+        assert!(root.resolve("assets/new/logo.svg").is_err());
+        assert!(
+            !sandbox.root.join("assets").exists(),
+            "resolving a path may not create anything"
+        );
+
+        // Everything else is the same rule: nothing empty, nothing absolute, nothing above the root.
+        assert!(matches!(
+            root.resolve_for_creation("../outside.svg"),
+            Err(PathError::EscapesRoot { .. })
+        ));
+        assert!(matches!(
+            root.resolve_for_creation("/tmp/outside.svg"),
+            Err(PathError::Absolute { .. })
+        ));
+        assert!(matches!(
+            root.resolve_for_creation(""),
+            Err(PathError::Empty)
+        ));
+        assert!(matches!(
+            root.resolve_for_creation("assets/.."),
+            Err(PathError::Empty)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_directory_reached_through_a_link_out_of_the_root_is_still_refused() {
+        let sandbox = sandbox();
+        let outside = std::env::temp_dir().join(format!("rustage-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, sandbox.root.join("escape")).unwrap();
+        let root = ProjectRoot::new(&sandbox.root).unwrap();
+
+        // The link itself exists, so the check stops there and sees where it leads; the part of the
+        // path that does not exist yet cannot be used to hide that.
+        let error = root
+            .resolve_for_creation("escape/new/secret.txt")
+            .unwrap_err();
+        assert!(
+            matches!(error, PathError::LeavesRootThroughLink { .. }),
+            "expected a link escape, got {error:?}",
+        );
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[cfg(unix)]

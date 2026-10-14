@@ -60,7 +60,9 @@ order they are being closed in. It is a work list, not a statement of implemente
   rename, and opening a project T02.03 asks for, with the trust question, the machine-local recent
   list and the toolchain check that runs only under a permit, and the project format version 2
   T02.04 asks for, with its versioned migration step, the entry a target starts with, the classified
-  project tree, and the rule that removing an entry fixes the references to it or blocks; the
+  project tree, the rule that removing an entry fixes the references to it or blocks, and the file
+  operations T02.05 asks for, whose plan reads the project without writing and whose failure puts
+  the moves it already made back; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

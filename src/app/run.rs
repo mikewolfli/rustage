@@ -19,6 +19,7 @@ use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
 use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
 use crate::project::entries::{ProjectEntries, ProjectTree};
+use crate::project::files::FilePlan;
 use crate::project::format::{ProjectContent, ProjectFile};
 use crate::project::recent::RecentProjects;
 use crate::project::session::{ProjectSession, SessionState, TrustDecision};
@@ -125,6 +126,12 @@ pub fn run(command: Command) {
         }
         Command::DropEntry(options) => {
             if !drop_entry(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::FileOp(options) => {
+            if !file_op(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
@@ -373,6 +380,102 @@ fn drop_entry(options: &crate::cli::DropEntryOptions) -> bool {
         }
         Err(error) => {
             println!("rustage: {}", error.message());
+            false
+        }
+    }
+}
+
+/// Plans one file operation, and carries it out when it was asked for.
+///
+/// The preview reads the project and decides nothing, so it needs no permission: it is what the
+/// design surface shows before anyone agrees to anything. Carrying it out moves files and writes
+/// the document, so it asks the project's question first and then takes the write permission.
+fn file_op(options: &crate::cli::FileOpOptions) -> bool {
+    let permissions = PermissionService::new();
+    let session = match ProjectSession::open(&options.path) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+
+    if !options.apply {
+        let Some(document) = session.file().document() else {
+            println!("rustage: the document cannot be interpreted, so no operation can be planned");
+            return false;
+        };
+        let plan = FilePlan::plan(document, session.root(), options.operation.clone());
+        println!("{}", session.question().ask());
+        println!("answer: not asked; this is a preview and nothing is written");
+        for line in plan.render() {
+            println!("{line}");
+        }
+        if !plan.is_executable() {
+            println!("rustage: the operation is refused while those blockers hold");
+            return false;
+        }
+        return true;
+    }
+
+    println!("{}", session.question().ask());
+    let outcome = session.decide(
+        &permissions,
+        if options.trust {
+            TrustDecision::Trust
+        } else {
+            TrustDecision::DoNotTrust
+        },
+    );
+    println!("answer: {}", outcome.message());
+    if !outcome.trusted() {
+        return false;
+    }
+    if let Err(refusal) = permissions.permit(
+        crate::contracts::permission::EffectClass::FileWrite,
+        crate::host::permission::Scope::Project(session.root()),
+        crate::contracts::permission::Principal::Human,
+    ) {
+        println!("rustage: {}", refusal.message());
+        return false;
+    }
+
+    let Some(document) = session.file().document() else {
+        println!("rustage: the document cannot be interpreted, so nothing was done");
+        return false;
+    };
+    let plan = FilePlan::plan(document, session.root(), options.operation.clone());
+    // The plan is printed either way: a refusal has to say what it refused, and a success has to
+    // say what it did.
+    for line in plan.render() {
+        println!("{line}");
+    }
+    match plan.execute(session.file()) {
+        Ok(executed) => {
+            for line in executed.render() {
+                println!("{line}");
+            }
+            match ProjectFile::open(session.path()) {
+                Ok(again) => {
+                    println!("read back: {}", again.verdict().message());
+                    true
+                }
+                Err(error) => {
+                    println!(
+                        "rustage: what was written cannot be read back: {}",
+                        error.message()
+                    );
+                    false
+                }
+            }
+        }
+        Err(failure) => {
+            // Every line of the failure is printed, including what could not be put back: a
+            // half-done operation that says so is recoverable, one that does not is not.
+            println!("rustage: {}", failure.message());
+            println!("recovered: {}", failure.is_recovered());
+            // The operation did not happen, so this is not a success even when everything was put
+            // back; the recovery is reported because it decides whether anyone has to look.
             false
         }
     }

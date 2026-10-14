@@ -24,6 +24,7 @@
 
 pub mod create;
 pub mod entries;
+pub mod files;
 pub mod format;
 pub mod json;
 pub mod page;

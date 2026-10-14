@@ -60,6 +60,8 @@ cargo run -- --open-project target/new-project/project.json   # opens it read-on
 cargo run -- --recent                                        # projects opened before, and where they are now
 cargo run -- --project-tree target/new-project/project.json  # what the project has, classified
 cargo run -- --drop-entry target/new-project/project.json --document pages/main.json --trust
+cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json   # preview; writes nothing
+cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json --apply --trust
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -182,6 +184,25 @@ result is checked with the reader's own rules, and the document is put in place 
 path a save uses (conflict check, migration backup, atomic write) after the project is trusted and the
 `write-file` permission is granted. `--project-tree` and this removal are the model and the command
 line; the tree panel, its icons and its drag-and-drop belong to the shell (T04/T09).
+
+`--file-op <file>` is where this milestone's second acceptance line lives: adding, excluding, moving,
+renaming and deleting a file. The operation is planned first — `FilePlan::plan` reads the project and
+writes nothing, and its plan says what would move, which references would be rewritten and, when the
+operation cannot be done, why: a file a page's design still names, a page's own document, or a member
+that a delete would leave naming a file that is gone, is **blocked** with the references listed, never
+quietly dropped. Without `--apply` that is all that happens: the preview asks no question and writes
+nothing, which is what the design surface shows before anyone agrees. With `--apply` the project is
+trusted and the `write-file` permission is taken, the files move first and the document is written
+last, so a failure lands on the write: the moves are then undone in reverse order and the command
+reports what was put back and what was not, and a failed operation exits 4 even when everything was
+recovered — a failure is never reported as a success. Excluding and deleting are kept apart, which is
+what the roadmap asks for: excluding takes a declaration away and leaves the file, while deleting
+takes the file off the disk as well, and it does so by holding the file inside the project
+(`.rustage-deleted/<its own path>`) until the document that named it has been written — a failed write
+puts it back, and if the held copy cannot be removed afterwards the command says where it is instead
+of reporting a clean delete. A file's path, the references to it and the operation's own failures
+therefore all have a stated outcome; rewriting the *design* files a resource is used in, undo of a
+successful operation, and the file operations' own window belong to later tasks (T03/T05).
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

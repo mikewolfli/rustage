@@ -112,6 +112,7 @@ cargo run -- --project-check examples/demo-project/project.json   # 读工程文
 cargo run -- --new-project target/new-project       # 创建工程：先计划、写暂存目录，再一次改名提交
 cargo run -- --open-project target/new-project/project.json   # 只读打开工程并打印信任提问
 cargo run -- --project-tree target/new-project/project.json   # 分类列出工程包含的东西
+cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json   # 预览移动并改写引用它的地方；加 --apply 才真正执行
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

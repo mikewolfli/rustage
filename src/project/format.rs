@@ -1108,6 +1108,102 @@ impl ProjectDocument {
         Ok((document, fixed))
     }
 
+    /// Declares a file inside the project as one of its resources.
+    pub fn with_resource(&self, root: &ProjectRoot, written: &str) -> Result<Self, ProjectError> {
+        if self
+            .resources
+            .iter()
+            .any(|resource| resource.path().written() == written)
+        {
+            return Err(ProjectError::Duplicate {
+                path: "resources".to_owned(),
+                claim: format!("the resource `{written}`"),
+            });
+        }
+        let mut document = self.clone();
+        document.resources.push(ResourceEntry {
+            path: reference(root, ReferenceKind::Resource, written.to_owned()),
+            preserved: Preserved::default(),
+        });
+        check_unique(&document.resources)?;
+        Ok(document)
+    }
+
+    /// Stops declaring a resource, and says whether one was declared at all.
+    ///
+    /// The file itself is not touched: excluding a file from a project is a statement about the
+    /// project, not about the disk.
+    pub fn without_resource(&self, written: &str) -> (Self, bool) {
+        let mut document = self.clone();
+        let before = document.resources.len();
+        document
+            .resources
+            .retain(|resource| resource.path().written() != written);
+        let removed = document.resources.len() != before;
+        (document, removed)
+    }
+
+    /// Rewrites every reference that names one path so that it names another.
+    ///
+    /// This is the reference half of moving a file: the document is edited where it pointed at the
+    /// old path and nowhere else, and every rewrite is reported by name, so nothing changes silently.
+    /// The result is checked with the reader's own rules before it is returned.
+    pub fn rewire(
+        &self,
+        root: &ProjectRoot,
+        from: &str,
+        to: &str,
+    ) -> Result<(Self, Vec<String>), ProjectError> {
+        let replace = |named: &Reference, what: &str, rewrites: &mut Vec<String>| {
+            if named.written() != from {
+                return named.clone();
+            }
+            rewrites.push(format!("{what} now names `{to}`"));
+            reference(root, named.kind(), to.to_owned())
+        };
+        let mut rewrites = Vec::new();
+        let mut document = self.clone();
+        document.pages = document
+            .pages
+            .iter()
+            .map(|page| PageEntry {
+                title: page.title().map(str::to_owned),
+                document: replace(page.document(), "the page document", &mut rewrites),
+                stylesheet: page
+                    .stylesheet()
+                    .map(|sheet| replace(sheet, "a page stylesheet", &mut rewrites)),
+                preserved: page.preserved().clone(),
+            })
+            .collect();
+        document.resources = document
+            .resources
+            .iter()
+            .map(|resource| ResourceEntry {
+                path: replace(resource.path(), "a resource", &mut rewrites),
+                preserved: resource.preserved().clone(),
+            })
+            .collect();
+        document.generated = document
+            .generated
+            .iter()
+            .map(|generated| GeneratedTarget {
+                output: replace(generated.output(), "a generated file", &mut rewrites),
+                from: replace(generated.from(), "a generated file's source", &mut rewrites),
+                preserved: generated.preserved().clone(),
+            })
+            .collect();
+        document.startup = document
+            .startup
+            .as_ref()
+            .map(|startup| replace(startup, "the startup entry", &mut rewrites));
+        check_unique(&document.pages)?;
+        check_unique(&document.resources)?;
+        check_unique(&document.targets)?;
+        check_generated_sources(&document.pages, &document.generated)?;
+        check_startup(&document.pages, document.startup.as_ref())?;
+        Ok((document, rewrites))
+    }
+
     /// The document as JSON, with the members this build did not know put back where they were.
     ///
     /// Writing is a separate decision from rendering: [`ProjectFile::writer`] is what refuses a
@@ -2223,7 +2319,10 @@ impl<'a> ProjectDraft<'a> {
         self
     }
 
-    /// Adds a resource.
+    /// Adds a resource to a project that is being created.
+    ///
+    /// A project that already exists is edited with [`ProjectDocument::with_resource`] instead,
+    /// which can refuse: a draft cannot be wrong about a file it is the first to declare.
     pub fn with_resource(mut self, path: &str) -> Self {
         self.resources.push(ResourceEntry {
             path: reference(self.root, ReferenceKind::Resource, path.to_owned()),

@@ -116,6 +116,8 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-RECENT-IS-A-PLACE | 最近项只记“哪里”：用它打开等同于手打路径，同样不信任、不授权、不运行 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `a_recent_entry_opens_the_project_without_trusting_or_running_anything` | 结构 + 测试 |
 | INV-PROMPT-IS-CURRENT | 信任提问在回答前被重新读取；目录在提问之后变了，答案不生效并撤销信任 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `a_directory_that_changed_while_the_question_was_on_screen_is_not_trusted` | 测试 |
 | INV-MIGRATION-IS-VERSIONED | 格式变更附带带版本的迁移步骤；能到达本构建版本的旧文档被读取并在写回时先保留原文件，到不了的版本明确拒绝 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `an_older_version_is_migrated_by_versioned_steps` | 测试 |
+| INV-FILE-OP-PREVIEWS | 文件操作先出计划：计划只读工程、写出要做的每一步，不写盘；有设计引用指向该文件时阻断并列出引用，而不是静默丢弃引用 | `C-PROJECT` | [`src/project/files.rs`](../../src/project/files.rs) | `a_plan_is_a_preview_that_touches_nothing` | 测试 |
+| INV-FILE-OP-FAILURE-RECOVERS | 文件操作失败时已做的移动按逆序回滚，并如实报告回滚了哪些、没能回滚什么；写文档失败不会留下半个工程 | `C-PROJECT` | [`src/project/files.rs`](../../src/project/files.rs) | `a_failure_after_the_moves_puts_them_back` | 测试 |
 
 ## 不变量的补充说明
 
@@ -141,6 +143,8 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-RECENT-IS-A-PLACE | recent 模块只持有路径/名字/身份/时间，没有权限服务也没有启动程序的能力；修整（repair）按身份判定，不同工程拒绝，路径仍在则不修 |
 | INV-PROMPT-IS-CURRENT | 提问的 findings 由目录本身读出（build.rs / .cargo/config / rust-toolchain*），因此“提问后新增 build.rs”会被发现；拒绝与撤销两次都记录在授权记录里 |
 | INV-MIGRATION-IS-VERSIONED | 决策 Q6：迁移前不原地覆盖原文件（save 对旧版本拒绝，save_migrating 先写 .v1.bak）；决策 U1：只向前、按步；文档声明 v1 却带 v2 才有的成员会被拒绝，而不是被相信 |
+| INV-FILE-OP-PREVIEWS | 阻断项（blockers）与计划同一次读出，因此“能不能做”先于“做了什么”；删除一个页面文档被阻断，指向它的设计引用逐条列出（页面成员与属性），并给出替代做法：删条目而不是删文件 |
+| INV-FILE-OP-FAILURE-RECOVERS | 移动先做、文档最后写，因此失败只可能落在文档写入上；FileFailure::is_recovered 说“是否还需要人看一眼”，命令的退出码不因此变成成功（原则 22：不把失败藏在成功里） |
 
 ## 为什么权限表要交叉校验
 

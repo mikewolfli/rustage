@@ -52,6 +52,7 @@ cargo fmt --check
 cargo test
 cargo run -- --help
 cargo run -- --probe-apis target/probe
+cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -92,7 +93,12 @@ query, signal dispatch order, connection teardown, and the text editor's edit pr
 highlighter, each tied to the pinned revision by a lockfile drift test. The command writes
 `api-probes.json` under the directory you name and **exits non-zero while any probe reports a
 gap** — a gap is a recorded finding, not a pass, and the open ones are listed in
-[`docs/rw-feedback/`](docs/rw-feedback/feedback-20261013.md). These probes do not establish that a
+[`docs/rw-feedback/`](docs/rw-feedback/feedback-20261013.md).
+`--probe-host` checks the host's own platform services — the operating system's file chooser, the
+painted chooser frame, the clipboard, the host directories, the URL handler and directory watching —
+and writes `host-readiness.json` with the evidence for each, ending **not ready when a capability is
+missing or when the environment cannot produce the evidence**. It exits 4 in that case, which is
+`ExitCode::Reported` — "a real finding was reported" rather than a defect in the host. These probes do not establish that a
 window has displayed anything, that interaction states draw correctly, that a generated file
 compiles for a given profile, or that a GUI designer or any output target is
 implemented. Documentation checks

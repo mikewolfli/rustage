@@ -29,6 +29,8 @@ pub enum Command {
     RenderIcons(PathBuf),
     /// Runs the dependency contract probes and writes the report into the given directory.
     ProbeApis(PathBuf),
+    /// Runs the host capability checks and writes the report into the given directory.
+    ProbeHost(PathBuf),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -165,7 +167,7 @@ where
             }
             return Ok(Command::Launch(options));
         }
-        "--render-icons" | "--probe-apis" => {
+        "--render-icons" | "--probe-apis" | "--probe-host" => {
             let Some(directory) = arguments.next() else {
                 return Err(ParseError { argument });
             };
@@ -174,10 +176,11 @@ where
                 return Err(ParseError { argument });
             }
             let path = PathBuf::from(directory);
-            if text == "--render-icons" {
-                return Ok(Command::RenderIcons(path));
-            }
-            return Ok(Command::ProbeApis(path));
+            return Ok(match text {
+                "--render-icons" => Command::RenderIcons(path),
+                "--probe-apis" => Command::ProbeApis(path),
+                _ => Command::ProbeHost(path),
+            });
         }
         _ => return Err(ParseError { argument }),
     };
@@ -192,7 +195,8 @@ where
 pub fn help_text() -> &'static str {
     "rustage - Rust desktop UI designer\n\n\
      Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n\
-            rustage [--render-icons <directory> | --probe-apis <directory>]\n\n\
+            rustage [--render-icons <directory> | --probe-apis <directory>]\n\
+            rustage [--probe-host <directory>]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -200,7 +204,8 @@ pub fn help_text() -> &'static str {
        --launch                      Start the baseline desktop session, then leave it again\n\
        --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n\
        --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n\
-       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n\n\
+       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n\
+       --probe-host <directory>      Check the host platform services and write host-readiness.json\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -239,6 +244,10 @@ mod tests {
         assert_eq!(
             parse(["--probe-apis", "out/probe"]),
             Ok(Command::ProbeApis(PathBuf::from("out/probe")))
+        );
+        assert_eq!(
+            parse(["--probe-host", "out/host"]),
+            Ok(Command::ProbeHost(PathBuf::from("out/host")))
         );
     }
 
@@ -301,5 +310,7 @@ mod tests {
         assert!(parse(["--render-icons", "a", "b"]).is_err());
         assert!(parse(["--probe-apis"]).is_err());
         assert!(parse(["--probe-apis", "a", "b"]).is_err());
+        assert!(parse(["--probe-host"]).is_err());
+        assert!(parse(["--probe-host", "a", "b"]).is_err());
     }
 }

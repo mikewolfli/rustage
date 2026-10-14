@@ -43,6 +43,17 @@ pub enum PathError {
     MissingParent { path: PathBuf },
     /// A system path the OS did not name.
     SystemPathUnavailable { name: &'static str, reason: String },
+    /// A path exists on paper but could not be resolved to the filesystem's own spelling.
+    ///
+    /// This keeps the OS's reason instead of reporting every resolution failure as "the parent is
+    /// missing", which was wrong for a permission refusal and for a path whose links loop.
+    Unresolved { path: PathBuf, reason: String },
+    /// A directory that had to be a directory is something else.
+    NotADirectory { path: PathBuf },
+    /// A directory could not be created.
+    NotCreated { path: PathBuf, reason: String },
+    /// A directory exists but could not be listed.
+    Unreadable { path: PathBuf, reason: String },
 }
 
 impl PathError {
@@ -62,12 +73,23 @@ impl PathError {
                 path.display(),
                 resolved.display(),
             ),
-            Self::MissingParent { path } => format!(
-                "the parent directory of {} does not exist",
-                path.display(),
-            ),
+            Self::MissingParent { path } => {
+                format!("the parent directory of {} does not exist", path.display(),)
+            }
             Self::SystemPathUnavailable { name, reason } => {
                 format!("the {name} directory is unknown: {reason}")
+            }
+            Self::Unresolved { path, reason } => {
+                format!("{} could not be resolved: {reason}", path.display())
+            }
+            Self::NotADirectory { path } => {
+                format!("{} is not a directory", path.display())
+            }
+            Self::NotCreated { path, reason } => {
+                format!("{} could not be created: {reason}", path.display())
+            }
+            Self::Unreadable { path, reason } => {
+                format!("{} could not be read: {reason}", path.display())
             }
         }
     }
@@ -98,11 +120,12 @@ impl ProjectRoot {
         if path.as_os_str().is_empty() {
             return Err(PathError::Empty);
         }
-        let root = std::fs::canonicalize(path).map_err(|error| PathError::MissingParent {
+        let root = std::fs::canonicalize(path).map_err(|error| PathError::Unresolved {
             path: path.to_path_buf(),
+            reason: error.to_string(),
         })?;
         if !root.is_dir() {
-            return Err(PathError::MissingParent { path: root });
+            return Err(PathError::NotADirectory { path: root });
         }
         Ok(Self { root })
     }
@@ -119,7 +142,9 @@ impl ProjectRoot {
             return Err(PathError::Empty);
         }
         if relative.is_absolute() {
-            return Err(PathError::Absolute { path: relative.to_path_buf() });
+            return Err(PathError::Absolute {
+                path: relative.to_path_buf(),
+            });
         }
 
         let mut resolved = self.root.clone();
@@ -133,13 +158,17 @@ impl ProjectRoot {
                 Component::CurDir => {}
                 Component::ParentDir => {
                     if depth == 0 {
-                        return Err(PathError::EscapesRoot { path: relative.to_path_buf() });
+                        return Err(PathError::EscapesRoot {
+                            path: relative.to_path_buf(),
+                        });
                     }
                     resolved.pop();
                     depth -= 1;
                 }
                 Component::RootDir | Component::Prefix(_) => {
-                    return Err(PathError::Absolute { path: relative.to_path_buf() });
+                    return Err(PathError::Absolute {
+                        path: relative.to_path_buf(),
+                    });
                 }
             }
         }
@@ -161,9 +190,9 @@ impl ProjectRoot {
                     resolved: canonical_parent,
                 });
             }
-            return Ok(canonical_parent.join(
-                resolved.file_name().unwrap_or_else(|| OsStr::new("")),
-            ));
+            return Ok(
+                canonical_parent.join(resolved.file_name().unwrap_or_else(|| OsStr::new("")))
+            );
         }
 
         Err(PathError::MissingParent { path: resolved })
@@ -182,8 +211,10 @@ impl SystemPaths {
         // `HOME` on macOS and Linux, `USERPROFILE` on Windows; both are checked so a shell that sets
         // only one of them still works, and neither being set is an error rather than a guess.
         for name in ["HOME", "USERPROFILE"] {
-            if let Some(value) = std::env::var_os(name) {
-                if !value.is_empty() {
+            if let Some(value) = std::env::var_os(name)
+                && !value.is_empty()
+            {
+                {
                     let home = PathBuf::from(value);
                     if home.is_absolute() {
                         return Ok(Self { home });
@@ -210,7 +241,9 @@ impl SystemPaths {
                 reason: format!("{} is not an absolute directory", home.display()),
             });
         }
-        Ok(Self { home: home.to_path_buf() })
+        Ok(Self {
+            home: home.to_path_buf(),
+        })
     }
 
     /// The home directory.
@@ -220,28 +253,32 @@ impl SystemPaths {
 
     /// Where configuration belongs.
     pub fn config_dir(&self) -> PathBuf {
-        if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
-            if !dir.is_empty() {
-                return PathBuf::from(dir);
-            }
+        if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir);
         }
-        if cfg!(target_os = "windows") {
-            if let Some(appdata) = std::env::var_os("APPDATA") {
-                return PathBuf::from(appdata).join("rustage");
-            }
+        if cfg!(target_os = "windows")
+            && let Some(appdata) = std::env::var_os("APPDATA")
+        {
+            return PathBuf::from(appdata).join("rustage");
         }
         if cfg!(target_os = "macos") {
-            return self.home.join("Library").join("Application Support").join("rustage");
+            return self
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("rustage");
         }
         self.home.join(".config").join("rustage")
     }
 
     /// Where caches belong.
     pub fn cache_dir(&self) -> PathBuf {
-        if let Some(dir) = std::env::var_os("XDG_CACHE_HOME") {
-            if !dir.is_empty() {
-                return PathBuf::from(dir).join("rustage");
-            }
+        if let Some(dir) = std::env::var_os("XDG_CACHE_HOME")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("rustage");
         }
         if cfg!(target_os = "macos") {
             return self.home.join("Library").join("Caches").join("rustage");
@@ -251,13 +288,17 @@ impl SystemPaths {
 
     /// Where durable application data belongs.
     pub fn data_dir(&self) -> PathBuf {
-        if let Some(dir) = std::env::var_os("XDG_DATA_HOME") {
-            if !dir.is_empty() {
-                return PathBuf::from(dir).join("rustage");
-            }
+        if let Some(dir) = std::env::var_os("XDG_DATA_HOME")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("rustage");
         }
         if cfg!(target_os = "macos") {
-            return self.home.join("Library").join("Application Support").join("rustage");
+            return self
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("rustage");
         }
         self.home.join(".local").join("share").join("rustage")
     }
@@ -275,9 +316,199 @@ impl SystemPaths {
     }
 }
 
+/// One of the four places the host keeps its own files.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HostDirectory {
+    /// Public configuration: settings, the decision-visible options.
+    Config,
+    /// Caches that may be deleted at any time.
+    Cache,
+    /// Durable data the host must not lose.
+    Data,
+    /// Scratch space for in-flight work.
+    Temp,
+}
+
+impl HostDirectory {
+    /// The four directories, in the order a report should list them.
+    pub const ALL: [Self; 4] = [Self::Config, Self::Cache, Self::Data, Self::Temp];
+
+    /// The name this directory is known by in messages.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Cache => "cache",
+            Self::Data => "data",
+            Self::Temp => "temp",
+        }
+    }
+}
+
+/// What the host found at a host directory, without changing it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DirectoryState {
+    /// The directory is there and can be listed.
+    Usable { path: PathBuf },
+    /// The directory is not there yet. Not a failure: [`HostDirectories::ensure`] creates it.
+    Absent { path: PathBuf },
+    /// Something else is in the way.
+    NotADirectory { path: PathBuf },
+    /// The directory is not there and cannot be created, or cannot be listed. The reason is the
+    /// OS's own, because "the cache directory failed" is not a diagnosis.
+    Unusable { path: PathBuf, reason: String },
+}
+
+impl DirectoryState {
+    /// The path this state is about.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Usable { path } | Self::Absent { path } | Self::NotADirectory { path } => path,
+            Self::Unusable { path, .. } => path,
+        }
+    }
+
+    /// Whether the directory is there and readable.
+    pub fn is_usable(&self) -> bool {
+        matches!(self, Self::Usable { .. })
+    }
+
+    /// A sentence naming what was found.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Usable { path } => format!("{} is available", path.display()),
+            Self::Absent { path } => format!("{} does not exist yet", path.display()),
+            Self::NotADirectory { path } => format!("{} is not a directory", path.display()),
+            Self::Unusable { path, reason } => {
+                format!("{} cannot be used: {reason}", path.display())
+            }
+        }
+    }
+}
+
+/// The host directories the process will actually use, resolved once.
+///
+/// Resolved eagerly rather than re-read from the environment at each call, because a host that asks
+/// twice can get two answers: an environment edited between the read and the write would put half
+/// the host's files in one place and half in another. One instance, one answer (principle #6).
+#[derive(Clone, Debug)]
+pub struct HostDirectories {
+    config: PathBuf,
+    cache: PathBuf,
+    data: PathBuf,
+    temp: PathBuf,
+}
+
+impl HostDirectories {
+    /// Resolves the four directories from the operating system's conventions.
+    pub fn from_environment() -> Result<Self, PathError> {
+        let paths = SystemPaths::from_environment()?;
+        Ok(Self {
+            config: paths.config_dir(),
+            cache: paths.cache_dir(),
+            data: paths.data_dir(),
+            temp: paths.temp_dir()?,
+        })
+    }
+
+    /// Resolves the four directories from explicitly named paths.
+    ///
+    /// Used by the host's own checks and by tests: a check that wrote into the developer's real
+    /// cache directory to prove the cache directory works would be a side effect nobody asked for.
+    pub fn with_roots(
+        config: impl Into<PathBuf>,
+        cache: impl Into<PathBuf>,
+        data: impl Into<PathBuf>,
+        temp: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            config: config.into(),
+            cache: cache.into(),
+            data: data.into(),
+            temp: temp.into(),
+        }
+    }
+
+    /// The path of one host directory.
+    pub fn path(&self, directory: HostDirectory) -> &Path {
+        match directory {
+            HostDirectory::Config => &self.config,
+            HostDirectory::Cache => &self.cache,
+            HostDirectory::Data => &self.data,
+            HostDirectory::Temp => &self.temp,
+        }
+    }
+
+    /// Reports what is at one host directory without creating anything.
+    pub fn inspect(&self, directory: HostDirectory) -> DirectoryState {
+        let path = self.path(directory).to_path_buf();
+        match std::fs::metadata(&path) {
+            Ok(metadata) if !metadata.is_dir() => DirectoryState::NotADirectory { path },
+            Ok(_) => match std::fs::read_dir(&path) {
+                Ok(_) => DirectoryState::Usable { path },
+                Err(error) => DirectoryState::Unusable {
+                    path,
+                    reason: error.to_string(),
+                },
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                DirectoryState::Absent { path }
+            }
+            Err(error) => DirectoryState::Unusable {
+                path,
+                reason: error.to_string(),
+            },
+        }
+    }
+
+    /// Makes one host directory usable, creating it when it is missing, and returns its path.
+    ///
+    /// Creation is followed by a read-back, because `create_dir_all` succeeding is a claim about
+    /// the call and not about the directory: a permission bit changed in between, or a filesystem
+    /// that accepts the call and refuses the listing, would otherwise be reported as ready.
+    pub fn ensure(&self, directory: HostDirectory) -> Result<&Path, PathError> {
+        let path = self.path(directory);
+        match self.inspect(directory) {
+            DirectoryState::Usable { .. } => return Ok(path),
+            DirectoryState::NotADirectory { path } => {
+                return Err(PathError::NotADirectory { path });
+            }
+            DirectoryState::Absent { .. } | DirectoryState::Unusable { .. } => {}
+        }
+
+        if let Err(error) = std::fs::create_dir_all(path) {
+            // An `Absent` that becomes `Unusable` between the two calls is why it is read again
+            // rather than reported from the create error alone.
+            return match self.inspect(directory) {
+                DirectoryState::Usable { .. } => Ok(path),
+                DirectoryState::NotADirectory { path } => Err(PathError::NotADirectory { path }),
+                DirectoryState::Absent { path } | DirectoryState::Unusable { path, .. } => {
+                    Err(PathError::NotCreated {
+                        path,
+                        reason: error.to_string(),
+                    })
+                }
+            };
+        }
+
+        match self.inspect(directory) {
+            DirectoryState::Usable { .. } => Ok(path),
+            DirectoryState::NotADirectory { path } => Err(PathError::NotADirectory { path }),
+            DirectoryState::Absent { path } => Err(PathError::NotCreated {
+                path,
+                reason: "the directory was created but is not there afterwards".to_owned(),
+            }),
+            DirectoryState::Unusable { path, reason } => {
+                Err(PathError::Unreadable { path, reason })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PathError, ProjectRoot, SystemPaths};
+    use super::{
+        DirectoryState, HostDirectories, HostDirectory, PathError, ProjectRoot, SystemPaths,
+    };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -305,7 +536,10 @@ mod tests {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("rustage-paths-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&root).expect("a temporary directory is creatable");
-        Sandbox { root: root.clone(), _guard: TempDirectory(root) }
+        Sandbox {
+            root: root.clone(),
+            _guard: TempDirectory(root),
+        }
     }
 
     #[test]
@@ -317,7 +551,10 @@ mod tests {
 
         let resolved = root.resolve("ui/main.json").unwrap();
 
-        assert_eq!(resolved, std::fs::canonicalize(sandbox.root.join("ui/main.json")).unwrap());
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(sandbox.root.join("ui/main.json")).unwrap()
+        );
         assert!(root.resolve("./ui/./main.json").is_ok());
     }
 
@@ -326,7 +563,10 @@ mod tests {
         let sandbox = sandbox();
         let root = ProjectRoot::new(&sandbox.root).unwrap();
 
-        assert!(matches!(root.resolve("/etc/passwd"), Err(PathError::Absolute { .. })));
+        assert!(matches!(
+            root.resolve("/etc/passwd"),
+            Err(PathError::Absolute { .. })
+        ));
     }
 
     #[test]
@@ -358,7 +598,10 @@ mod tests {
         let error = root.resolve("assets/missing/logo.svg").unwrap_err();
 
         assert!(matches!(error, PathError::MissingParent { .. }));
-        assert!(!sandbox.root.join("assets").exists(), "nothing may be created implicitly");
+        assert!(
+            !sandbox.root.join("assets").exists(),
+            "nothing may be created implicitly"
+        );
     }
 
     #[cfg(unix)]
@@ -388,7 +631,11 @@ mod tests {
 
         let resolved = root.resolve("资源/图标.svg").unwrap();
 
-        assert!(resolved.ends_with("资源/图标.svg"), "{}", resolved.display());
+        assert!(
+            resolved.ends_with("资源/图标.svg"),
+            "{}",
+            resolved.display()
+        );
     }
 
     #[test]
@@ -419,5 +666,133 @@ mod tests {
 
         assert!(matches!(error, PathError::SystemPathUnavailable { .. }));
         assert!(error.message().contains("not an absolute directory"));
+    }
+
+    #[test]
+    fn a_root_that_cannot_be_resolved_names_the_reason_it_could_not() {
+        let missing = std::env::temp_dir().join("rustage-no-such-root-4f2a");
+
+        let error = ProjectRoot::new(&missing).unwrap_err();
+
+        // The old answer was "the parent directory does not exist" for every resolution failure,
+        // which is a guess. The reason now comes from the OS.
+        match error {
+            PathError::Unresolved { path, reason } => {
+                assert_eq!(path, missing);
+                assert!(!reason.is_empty());
+            }
+            other => panic!("expected Unresolved, got {other:?}"),
+        }
+        assert!(!missing.exists(), "resolving a root must not create it");
+    }
+
+    #[test]
+    fn a_root_that_is_a_file_is_refused_as_not_a_directory() {
+        let sandbox = sandbox();
+        let file = sandbox.root.join("not-a-root");
+        std::fs::write(&file, "x").unwrap();
+
+        assert!(matches!(
+            ProjectRoot::new(&file),
+            Err(PathError::NotADirectory { .. })
+        ));
+    }
+
+    /// The four host directories, all inside one sandbox.
+    fn sandbox_directories(sandbox: &Sandbox) -> HostDirectories {
+        HostDirectories::with_roots(
+            sandbox.root.join("config"),
+            sandbox.root.join("cache"),
+            sandbox.root.join("data"),
+            sandbox.root.join("temp"),
+        )
+    }
+
+    #[test]
+    fn a_host_directory_that_is_absent_is_reported_as_absent_and_then_created() {
+        let sandbox = sandbox();
+        let directories = sandbox_directories(&sandbox);
+
+        for directory in HostDirectory::ALL {
+            let state = directories.inspect(directory);
+            assert!(
+                matches!(state, DirectoryState::Absent { .. }),
+                "{} should be absent first, got {state:?}",
+                directory.name(),
+            );
+            assert!(!state.is_usable());
+
+            let ensured = directories
+                .ensure(directory)
+                .expect("creatable inside the sandbox");
+            assert!(ensured.is_dir(), "{} was not created", directory.name());
+            assert!(directories.inspect(directory).is_usable());
+            assert!(
+                directories.path(directory).ends_with(directory.name()),
+                "{} resolved to {}",
+                directory.name(),
+                directories.path(directory).display(),
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_where_a_directory_belongs_is_reported_rather_than_overwritten() {
+        let sandbox = sandbox();
+        let directories = sandbox_directories(&sandbox);
+        std::fs::write(directories.path(HostDirectory::Cache), "not a directory").unwrap();
+
+        let state = directories.inspect(HostDirectory::Cache);
+
+        assert_eq!(
+            state,
+            DirectoryState::NotADirectory {
+                path: directories.path(HostDirectory::Cache).to_path_buf()
+            }
+        );
+        let error = directories.ensure(HostDirectory::Cache).unwrap_err();
+        assert!(matches!(error, PathError::NotADirectory { .. }));
+        assert!(
+            std::fs::read_to_string(directories.path(HostDirectory::Cache))
+                .is_ok_and(|text| text == "not a directory"),
+            "the file in the way must be left exactly as it was",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_created_names_permission_as_the_reason() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sandbox = sandbox();
+        let locked = sandbox.root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let mut permissions = std::fs::metadata(&locked).unwrap().permissions();
+        permissions.set_mode(0o500);
+        std::fs::set_permissions(&locked, permissions).unwrap();
+
+        let directories =
+            HostDirectories::with_roots(locked.join("config"), &locked, &locked, &locked);
+        let result = directories.ensure(HostDirectory::Config);
+
+        // A process running as root can write into a 0500 directory, so the assertion is about
+        // what the host *reports*, not about which way the OS decided.
+        match result {
+            Err(PathError::NotCreated { path, reason }) => {
+                assert!(path.starts_with(&locked));
+                assert!(!reason.is_empty(), "a refusal must carry the OS's reason");
+            }
+            Err(other) => panic!("expected NotCreated, got {other:?}"),
+            Ok(path) => {
+                assert!(
+                    path.is_dir(),
+                    "if the OS allowed the creation, the host must report the real path"
+                );
+            }
+        }
+
+        let mut permissions = std::fs::metadata(&locked).unwrap().permissions();
+        permissions.set_mode(0o700);
+        let _ = std::fs::set_permissions(&locked, permissions);
     }
 }

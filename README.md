@@ -119,6 +119,7 @@ cd rustage
 cargo run
 cargo run -- --help
 cargo run -- --probe-apis target/probe   # writes target/probe/api-probes.json; exits non-zero while a probe reports a gap
+cargo run -- --probe-host target/host    # writes target/host/host-readiness.json; exits 4 while a host check is not ready
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -129,8 +130,9 @@ pinned `rust-widgets` revision, which Cargo fetches over the network on a cold
 build, and its Rust toolchain is pinned by `rust-toolchain.toml`. Documentation
 checks require **Node.js 22 or newer** and Git, with no npm dependencies. The
 executable currently reports its status, supports help and version options, renders
-the icon strip, and runs the dependency contract probes; it does not launch a
-designer window.
+the icon strip, runs the dependency contract probes, checks the host's own platform
+services, and opens the bounded baseline desktop session. It does not implement the
+designer: no document model, canvas, property panel, preview or generator exists yet.
 
 ## Contributing and support
 

@@ -7,7 +7,8 @@
 //! strip in [`toolbar`](super::toolbar) — which exists because the host's icons need a real
 //! consumer before anything downstream can claim to be verified: the resource tooling proves a
 //! glyph is a glyph, and only a control can prove the glyph reaches a screen — and the dependency
-//! contract probes under `crate::probe`.
+//! contract probes under `crate::probe`, and the host's own platform services under
+//! `crate::host::readiness`.
 
 use std::path::{Path, PathBuf};
 
@@ -87,6 +88,23 @@ pub fn run(command: Command) {
                 std::process::exit(1);
             }
         },
+        Command::ProbeHost(directory) => match write_host_report(&directory) {
+            Ok((path, report)) => {
+                print!("{}", report.render_text());
+                println!("{}", path.display());
+                if !report.is_ready() {
+                    // A missing capability and a check this environment cannot run are both "not a
+                    // pass". `Reported` says exactly that: the command found a real finding and
+                    // reported it, which is a different number from a defect in the host.
+                    crate::host::log::flush();
+                    std::process::exit(crate::host::error::ExitCode::Reported.code());
+                }
+            }
+            Err(error) => {
+                eprintln!("rustage: could not write the host readiness report: {error}");
+                std::process::exit(1);
+            }
+        },
     }
 }
 
@@ -101,6 +119,22 @@ fn render_icons(directory: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Er
         written.push(path);
     }
     Ok(written)
+}
+
+/// Runs the host capability checks and writes the report, returning where it went.
+///
+/// Separate from [`write_probe_report`] because the two answer different questions: that one is
+/// about the pinned dependency's API contracts, this one about the host's own services in the
+/// environment the host is running in. The artifact is written even when a check is not ready, for
+/// the same reason: the finding is the output.
+fn write_host_report(
+    directory: &Path,
+) -> Result<(PathBuf, crate::host::readiness::ReadinessReport), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(directory)?;
+    let report = crate::host::readiness::ReadinessReport::run();
+    let path = directory.join("host-readiness.json");
+    std::fs::write(&path, report.render_json())?;
+    Ok((path, report))
 }
 
 /// Runs the dependency contract probes and writes the report, returning where it went.

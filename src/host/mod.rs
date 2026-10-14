@@ -5,8 +5,9 @@
 //! design document. Contract **HOST**.
 //!
 //! Roadmap T01.01 asks for the host Cargo project, platform startup, module boundaries and the
-//! error/logging foundation. The crate already exists; what this module adds is the boundary that
-//! keeps host concerns from spreading into the contracts and the design model:
+//! error/logging foundation; T01.02 adds the platform services a host needs before it can open a
+//! project. What this module owns is the boundary that keeps host concerns from spreading into the
+//! contracts and the design model:
 //!
 //! | Concern | Module | What it owns |
 //! |---|---|---|
@@ -14,7 +15,17 @@
 //! | Startup orchestration | [`startup`] | the ordered steps, the outcome, and what "started" means |
 //! | Errors | [`error`] | one error type and one exit-code mapping for the process |
 //! | Logging | [`log`] | levelled records, an injectable clock, and a sink that can be captured |
-//! | Paths | [`paths`] | system directories, and the project-root rule from decision F1 |
+//! | Paths | [`paths`] | system directories, the project-root rule from decision F1, and the four host directories |
+//! | File dialogs | [`dialog`] | the chooser request, its typed answer, the modal handoff, and what makes a chosen path usable |
+//! | Clipboard | [`clipboard`] | plain-text round trips that keep "empty", "not text" and "refused" apart |
+//! | URL opening | [`open_url`] | handing a URL or a path to the operating system's handler, and refusing what must not be handed over |
+//! | File events | [`watch`] | the adapter T03.05's external-modification detection reads |
+//! | Readiness | [`readiness`] | what those services can actually do in this environment, with the evidence |
+//!
+//! Each service is its own module rather than another `platform` file, and each is behind a small
+//! trait so its failure paths are reachable in a test without a display: the dependency's own entry
+//! points cannot report every failure, and a service whose only testable path needs a GUI session
+//! is a service whose failures are never seen.
 //!
 //! **What "started" is allowed to mean.** The dependency publishes `RuntimeGuiMode`, and documents
 //! why: a stub backend runs an event loop, prints progress, and creates no window, so a log alone
@@ -22,9 +33,10 @@
 //! claiming anything, and reports a refusal — not a success — when the backend is not interactive.
 //! That is the point of T01.01's acceptance line "no placeholder success".
 //!
-//! Nothing here is a service registry yet: file dialogs, the clipboard, background tasks and
-//! subprocesses arrive in T01.02–T01.04, and each of them gets its own module rather than a
-//! growing `platform` file.
+//! Nothing here is a service registry yet, and this module deliberately has no `Service` trait:
+//! background tasks and their ownership arrive in T01.03, subprocess trees in T01.04, and the
+//! registry that gives them a project scope in T01.07. Inventing that shape now would fix a
+//! boundary before the tasks that need it exist.
 
 // Parts of this surface have no runtime producer yet, and the reason is worth writing down rather
 // than hiding: the error variants for a failed init or loop are produced by platform adapters that
@@ -35,8 +47,13 @@
 // in for behaviour, and not deleting them keeps the failure paths that the next adapter must fill.
 #![allow(dead_code)]
 
+pub mod clipboard;
+pub mod dialog;
 pub mod error;
 pub mod log;
+pub mod open_url;
 pub mod paths;
 pub mod platform;
+pub mod readiness;
 pub mod startup;
+pub mod watch;

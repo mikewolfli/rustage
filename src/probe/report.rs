@@ -208,7 +208,12 @@ impl ProbeReport {
 /// Escapes the two mandatory characters (`"` and `\`), the three short control escapes, and every
 /// other C0 control character as `\u00XX`, which is the smallest set that keeps the output valid
 /// JSON for any Rust `&str`.
-fn json_string(value: &str) -> String {
+/// Escapes a string as a JSON literal.
+///
+/// `pub(crate)` because the host readiness report renders its own artifact and must not grow a
+/// second escaper: two implementations would eventually disagree about which characters are legal
+/// inside a literal, and one of the two artifacts would be the one that is wrong (principle #35).
+pub(crate) fn json_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for ch in value.chars() {

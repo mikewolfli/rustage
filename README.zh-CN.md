@@ -107,6 +107,7 @@ cd rustage
 cargo run
 cargo run -- --help
 cargo run -- --probe-apis target/probe   # 写出 target/probe/api-probes.json；有缺口时退出码非零
+cargo run -- --probe-host target/host    # 写出 target/host/host-readiness.json；有检查未就绪时退出码 4
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -115,7 +116,8 @@ node tools/check-docs.mjs
 Rust 骨架使用 2024 edition，唯一的第三方依赖是固定修订的 `rust-widgets`（冷构建时由 Cargo
 联网拉取），Rust 工具链由 `rust-toolchain.toml` 固定。文档检查需要
 **Node.js 22 或更新版本**及 Git，无 npm 依赖。当前可执行程序报告项目状态、支持帮助与版本
-选项、渲染图标条带并运行依赖契约探针；尚不会启动设计器窗口。
+选项、渲染图标条带、运行依赖契约探针、检查宿主自身的平台服务，并启动有界的基线桌面会话。
+尚未实现设计器本身：文档模型、画布、属性面板、预览与生成器都还不存在。
 
 ## 贡献与支持
 

@@ -30,6 +30,7 @@ pub mod document;
 pub mod entries;
 pub mod files;
 pub mod format;
+pub mod history;
 pub mod import;
 pub mod json;
 pub mod kit;

@@ -70,6 +70,12 @@ impl TextVersion {
     }
 }
 
+impl std::fmt::Display for TextVersion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "#{}", self.0)
+    }
+}
+
 /// The version of the model a buffer holds.
 ///
 /// It counts reads that succeeded, so two edits that read produce two models while one edit that

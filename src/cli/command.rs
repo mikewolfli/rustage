@@ -73,6 +73,8 @@ pub enum Command {
     Document(DocumentOptions),
     /// Plans and applies a batch of edits to a page document's model (task T03.02).
     Edit(EditOptions),
+    /// Replays a session of edits against a page document, then undoes or redoes them (task T03.03).
+    History(HistoryOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -280,6 +282,98 @@ impl EditOptions {
             root: None,
             apply: false,
             undo: false,
+        }
+    }
+}
+
+/// One thing that happens to a document during a session (task T03.03).
+///
+/// The order they are given in is the order they happen in, so a run is a story about one document:
+/// text typed, a batch applied, then an undo, then more text. That is the whole point of a history —
+/// what happens after an undo is a new branch, and a caller has to be able to say so.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HistoryEdit {
+    /// The text of the document, replaced whole.
+    Text(String),
+    /// A file whose text is read and used as the document's text.
+    File(PathBuf),
+    /// A batch of model edits, planned against the model and applied to it.
+    Batch(PathBuf),
+    /// Take back this many steps.
+    Undo(usize),
+    /// Put back this many steps.
+    Redo(usize),
+}
+
+impl HistoryEdit {
+    /// Whether this is a move rather than an edit.
+    pub const fn is_a_move(&self) -> bool {
+        matches!(self, Self::Undo(_) | Self::Redo(_))
+    }
+}
+
+/// Which undo domain a move is asked for (task T03.03).
+///
+/// Asking for a domain is not the same as asking for the newest step: a request for the model while
+/// somebody's typing is the newest step is refused rather than answered, because undoing the model
+/// change *behind* the typing would leave the text as nobody typed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryDomain {
+    /// The text.
+    Text,
+    /// The model.
+    Model,
+}
+
+impl HistoryDomain {
+    /// The name this domain is asked about on the command line.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Model => "model",
+        }
+    }
+
+    /// The domain a name asks for, when it is one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "text" => Some(Self::Text),
+            "model" => Some(Self::Model),
+            _ => None,
+        }
+    }
+}
+
+/// What to do with a page document's history (task T03.03).
+///
+/// One document, one history: the entries are in the order things happened, whatever proposed them,
+/// and every entry belongs to one of two domains. What happens is a script: `--text`, `--text-file`,
+/// `--batch`, `--undo` and `--redo` are all steps of it, in the order they are given. `--only` says
+/// which domain the moves in the script have to be, and `--merge` makes every batch in it one step —
+/// the way one drag is one thing to take back.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryOptions {
+    /// The page document.
+    pub file: PathBuf,
+    /// The project root, when the caller names it; otherwise the nearest project above the file.
+    pub root: Option<PathBuf>,
+    /// What happens, in order.
+    pub edits: Vec<HistoryEdit>,
+    /// Whether the batches in this run are one step rather than one step each.
+    pub merge: bool,
+    /// The domain the moves have to be in, when the caller names one.
+    pub only: Option<HistoryDomain>,
+}
+
+impl HistoryOptions {
+    /// Options that show a document's history and change nothing.
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        Self {
+            file: file.into(),
+            root: None,
+            edits: Vec::new(),
+            merge: false,
+            only: None,
         }
     }
 }
@@ -869,6 +963,70 @@ where
             }
             return Ok(Command::Edit(options));
         }
+        "--history" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = HistoryOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--merge" => options.merge = true,
+                    "--text" | "--text-file" | "--batch" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.edits.push(match flag {
+                            "--text" => HistoryEdit::Text(value.to_owned()),
+                            "--text-file" => HistoryEdit::File(PathBuf::from(value)),
+                            _ => HistoryEdit::Batch(PathBuf::from(value)),
+                        });
+                    }
+                    "--undo" | "--redo" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(count) =
+                            value.to_str().and_then(|value| value.parse::<usize>().ok())
+                        else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.edits.push(if flag == "--undo" {
+                            HistoryEdit::Undo(count)
+                        } else {
+                            HistoryEdit::Redo(count)
+                        });
+                    }
+                    "--only" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(domain) = value.to_str().and_then(HistoryDomain::from_name) else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.only = Some(domain);
+                    }
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(value));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            if options.only.is_some() && !options.edits.iter().any(HistoryEdit::is_a_move) {
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::History(options));
+        }
         "--document" => {
             let Some(path) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -1139,6 +1297,10 @@ pub fn help_text() -> &'static str {
                                        [--apply] [--undo]\n\
             rustage --document <page-document> [--root <directory>]\n\
                                        [--set-text <text> | --set-text-file <file>]...\n\
+            rustage --history <page-document> [--root <directory>]\n\
+                                      [--text <text> | --text-file <file> |\n\
+                                       --batch <file> | --undo <n> | --redo <n>]...\n\
+                                      [--merge] [--only <text|model>]\n\
             rustage --dependencies <directory> [--review <record> | --record <record>]\n\
                                                [--allow-lockfile-change] [--allow-network]\n\
                                                [--trust]\n\
@@ -1211,6 +1373,17 @@ pub fn help_text() -> &'static str {
        --set-text <text>             With --document, replace the text with this text; repeatable,\n\
                                      and the edits happen in the order they are given\n\
        --set-text-file <file>        With --document, read this file's text and use it as an edit\n\
+       --history <page-document>     Replay a script of edits and moves against a page document:\n\
+                                     text and model edits are one history in two domains, so one\n\
+                                     drag is one thing to take back\n\
+       --text <text>                 With --history, replace the document's text with this text\n\
+       --text-file <file>            With --history, read this file's text and use it as the text\n\
+       --merge                       With --history, make every batch in the run one step (one\n\
+                                     drag is one thing to take back)\n\
+       --undo <n>                    With --history, take back n steps, here in the script\n\
+       --redo <n>                    With --history, put back n steps, here in the script\n\
+       --only <text|model>           With --history, require the moves to be in this domain; a\n\
+                                     step in the other domain is refused, not skipped over\n\
        --dependencies <directory>    Resolve a Cargo workspace's dependencies and report the tree;\n\
                                      nothing runs until the directory is trusted and each effect of\n\
                                      the resolution has been authorized\n\
@@ -1242,9 +1415,10 @@ mod tests {
 
     use super::{
         Command, ConfigurationOptions, DependenciesOptions, DocumentEdit, DocumentOptions,
-        DropEntryOptions, EditOptions, FileOpOptions, ImportOptions, KitOptions, LaunchOptions,
-        NewProjectOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
-        WorkspaceAction, WorkspaceOptions, log_level_of, parse,
+        DropEntryOptions, EditOptions, FileOpOptions, HistoryDomain, HistoryEdit, HistoryOptions,
+        ImportOptions, KitOptions, LaunchOptions, NewProjectOptions, NewWorkspaceOptions,
+        OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions, log_level_of,
+        parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -1512,6 +1686,72 @@ mod tests {
         assert!(parse(["--document", "pages/main.json", "--root"]).is_err());
         assert!(parse(["--document", "pages/main.json", "--set-text"]).is_err());
         assert!(parse(["--document", "pages/main.json", "--set-text-file"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_history_options() {
+        assert_eq!(
+            parse(["--history", "pages/main.json"]),
+            Ok(Command::History(HistoryOptions::new(PathBuf::from(
+                "pages/main.json"
+            ))))
+        );
+        // The script's order is the order of the flags: edits and moves are one sequence, because
+        // what happens after an undo is a new branch.
+        assert_eq!(
+            parse([
+                "--history",
+                "pages/main.json",
+                "--root",
+                "area",
+                "--text",
+                "{}",
+                "--text-file",
+                "typed.json",
+                "--batch",
+                "batch.json",
+                "--merge",
+                "--undo",
+                "1",
+                "--redo",
+                "2",
+                "--only",
+                "model",
+            ]),
+            Ok(Command::History(HistoryOptions {
+                file: PathBuf::from("pages/main.json"),
+                root: Some(PathBuf::from("area")),
+                edits: vec![
+                    HistoryEdit::Text("{}".to_owned()),
+                    HistoryEdit::File(PathBuf::from("typed.json")),
+                    HistoryEdit::Batch(PathBuf::from("batch.json")),
+                    HistoryEdit::Undo(1),
+                    HistoryEdit::Redo(2),
+                ],
+                merge: true,
+                only: Some(HistoryDomain::Model),
+            }))
+        );
+        assert!(parse(["--history"]).is_err());
+        assert!(parse(["--history", "pages/main.json", "--wat"]).is_err());
+        assert!(parse(["--history", "pages/main.json", "--text"]).is_err());
+        assert!(parse(["--history", "pages/main.json", "--batch"]).is_err());
+        assert!(parse(["--history", "pages/main.json", "--undo"]).is_err());
+        assert!(parse(["--history", "pages/main.json", "--undo", "many"]).is_err());
+        assert!(parse(["--history", "pages/main.json", "--only", "both"]).is_err());
+        // A domain with nothing to move in it is a usage error rather than a run that ignores it.
+        assert!(parse(["--history", "pages/main.json", "--only", "text"]).is_err());
+        assert!(
+            parse([
+                "--history",
+                "pages/main.json",
+                "--only",
+                "text",
+                "--undo",
+                "0"
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

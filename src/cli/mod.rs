@@ -9,9 +9,9 @@ mod command;
 
 pub use command::{
     Command, ConfigurationOptions, DependenciesOptions, DocumentEdit, DocumentOptions,
-    DropEntryOptions, EditOptions, FileOpOptions, ImportOptions, KitOptions, NewWorkspaceOptions,
-    OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions, help_text,
-    log_level_of, parse,
+    DropEntryOptions, EditOptions, FileOpOptions, HistoryDomain, HistoryEdit, HistoryOptions,
+    ImportOptions, KitOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
+    WorkspaceAction, WorkspaceOptions, help_text, log_level_of, parse,
 };
 
 /// The process exit codes, defined once in the host and re-exported so a command-line caller and a

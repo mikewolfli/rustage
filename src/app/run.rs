@@ -159,6 +159,12 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::History(options) => {
+            if !history(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Dependencies(options) => {
             if !dependencies(&options) {
                 crate::host::log::flush();
@@ -787,6 +793,306 @@ fn document(options: &crate::cli::DocumentOptions) -> bool {
         println!("{line}");
     }
     buffer.state().is_current()
+}
+
+/// Replays a session of edits against a page document, then undoes or redoes them (task T03.03).
+///
+/// Nothing is written to any file and nothing is run, so there is no question to ask and no
+/// permission to take: the document is read once, the edits happen to the buffer and to the model
+/// **in memory**, and the history records what happened. The point is the undo rule, which is a rule
+/// about domains rather than about time:
+///
+/// * One document has one history, and every entry in it is in one of two domains — the text or the
+///   model. The entries are in the order things happened whatever proposed them, so a panel edit, a
+///   canvas edit and a paste are one sequence. A view is an attribute of an entry, never a separate
+///   history, because undoing "the canvas's last edit" could then skip the edit that happened after
+///   it.
+/// * A step is undone in its own domain, and the two never convert: text is restored to the text
+///   that was there, and the model is moved by a change set. So an undo cannot turn into the other
+///   kind of edit and cannot loop.
+/// * `--only` asks for a domain explicitly, and a step in the other domain is **refused** with the
+///   newest step named rather than skipped, because quietly undoing the change *behind* somebody's
+///   typing would leave the text as nobody typed it.
+/// * `--merge` makes every batch in the run one step: that is what a drag is — several change sets
+///   applied as one gesture, undone as one step and redone as the whole gesture again.
+///
+/// Writing the model back to the file is T03.04's subject, which is why the model and the text are
+/// reported separately here: the batch landed on the model and the text of the buffer was not
+/// rewritten, and saying so is better than pretending the two are one thing before the writing path
+/// exists.
+fn history(options: &crate::cli::HistoryOptions) -> bool {
+    use crate::cli::HistoryEdit;
+    use crate::contracts::permission::PermissionGate;
+    use crate::project::batch::{Batch, Fingerprint, Plan, apply, store_of};
+    use crate::project::document::Buffer;
+    use crate::project::history::{Domain, History, View, batch_edit_of, text_edit_of};
+
+    let root = match options.root.as_ref() {
+        Some(directory) => match crate::host::paths::ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        None => match crate::project::document::root_of(&options.file) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+    };
+    let relative = relative_to(&root, &options.file);
+
+    let mut buffer = match Buffer::open(&root, &relative) {
+        Ok(buffer) => buffer,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    // The model the text read, as the editable store: the same seam `--edit` uses, taken from the
+    // read the buffer already did rather than from a second read of the file, so the model being
+    // edited is the one this text produced.
+    let Some(model) = buffer.model() else {
+        println!(
+            "rustage: the text of {} does not read, so there is no model to edit",
+            options.file.display()
+        );
+        return false;
+    };
+    let mut store = match store_of(model.document(), PermissionGate::new()) {
+        Ok(store) => store,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    let mut history = History::for_document(&store);
+    println!("history: in memory; nothing is written to any file, and no question is asked");
+    println!(
+        "document {}: page {}, revision {}, {} node(s)",
+        relative.display(),
+        history.page().get(),
+        store.revision(),
+        store.nodes().count()
+    );
+
+    let mut moved = true;
+    let mut edits = 0_usize;
+    let mut text_edits = 0_usize;
+    let mut batches = 0_usize;
+    let mut stopped = None;
+    for edit in &options.edits {
+        edits += 1;
+        match edit {
+            HistoryEdit::Text(_) | HistoryEdit::File(_) => {
+                let text = match edit {
+                    HistoryEdit::Text(text) => text.clone(),
+                    HistoryEdit::File(path) => match std::fs::read_to_string(path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            println!("rustage: {} could not be read: {error}", path.display());
+                            return false;
+                        }
+                    },
+                    _ => unreachable!("the arm above matched"),
+                };
+                text_edits += 1;
+                let intent = format!("text edit {text_edits}");
+                let before = buffer.text().to_owned();
+                let was = buffer.typed();
+                buffer.set_text(&root, text);
+                let Some(entry) = text_edit_of(View::Text, &intent, &before, &buffer, was) else {
+                    // The version only stays put when nothing was typed at all, which cannot happen
+                    // here: `set_text` always moves it. Refusing is better than recording an edit
+                    // that did not happen.
+                    println!("rustage: `{intent}` changed nothing, so nothing was recorded");
+                    continue;
+                };
+                let state = buffer.state().render();
+                println!(
+                    "edit {edits}: {} — {}",
+                    entry.describe(),
+                    state.first().map(String::as_str).unwrap_or("read")
+                );
+                report_recording(&history.record(entry));
+            }
+            HistoryEdit::Batch(path) => {
+                if options.merge && batches == 0 {
+                    history.begin_merge(View::Canvas, Domain::Model, "one drag, applied at once");
+                    println!(
+                        "a merge window is open: every batch in this run is one step, and an edit in \
+                         the other domain ends it"
+                    );
+                }
+                batches += 1;
+                let batch = match Batch::read(path) {
+                    Ok(batch) => batch,
+                    Err(refusal) => {
+                        println!("rustage: {}", refusal.message());
+                        return false;
+                    }
+                };
+                let plan = match Plan::of(&batch, &store, &root) {
+                    Ok(plan) => plan,
+                    Err(refusal) => {
+                        println!("rustage: {}", refusal.message());
+                        return false;
+                    }
+                };
+                if plan.is_blocked() {
+                    // A blocked batch is a finding, not a crash: the plan says what cannot land, and
+                    // the session stops here rather than going on to undo something else.
+                    for line in plan.render() {
+                        println!("{line}");
+                    }
+                    println!("rustage: the batch cannot land, so the session stopped");
+                    return false;
+                }
+                let outcome = apply(&plan, &mut store);
+                let Some(edit) = batch_edit_of(View::Canvas, batch.intent(), &plan, &outcome)
+                else {
+                    for line in outcome.render() {
+                        println!("{line}");
+                    }
+                    println!("rustage: the batch was not applied, so nothing was recorded");
+                    return false;
+                };
+                let entry = edit.entry();
+                let applied = outcome
+                    .render()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "applied".to_owned());
+                println!("edit {edits}: {} — {applied}", entry.describe());
+                report_recording(&history.record(entry));
+            }
+            HistoryEdit::Undo(count) | HistoryEdit::Redo(count) => {
+                let redo = matches!(edit, HistoryEdit::Redo(_));
+                let times = *count;
+                let many = if times == 1 { "step" } else { "steps" };
+                println!(
+                    "move {edits}: {} {times} {many}{}",
+                    if redo { "redo" } else { "undo" },
+                    match options.only {
+                        None => String::new(),
+                        Some(domain) => format!(", in the {} domain only", domain.name()),
+                    }
+                );
+                moved = move_steps(
+                    &mut history,
+                    &mut store,
+                    &mut buffer,
+                    &root,
+                    redo,
+                    times,
+                    options.only,
+                ) && moved;
+            }
+        }
+        if history.merge().is_none() && options.merge && batches > 0 {
+            stopped = Some("the merge window ended: an edit in the other domain was recorded");
+        }
+    }
+    if let Some(reason) = stopped {
+        println!("{reason}");
+    }
+    if options.merge && history.merge().is_some() {
+        println!(
+            "the merge window closes: {}",
+            close_merge(history.end_merge())
+        );
+    }
+
+    for line in history.render() {
+        println!("{line}");
+    }
+    println!("the model, after every move:");
+    for line in Fingerprint::of(&store).as_str().lines() {
+        println!("  {line}");
+    }
+    println!("the buffer, after every move:");
+    for line in buffer.render() {
+        println!("    {line}");
+    }
+    println!("nothing was written: the file is unchanged (writing it is T03.04)");
+    if !moved {
+        println!("rustage: a step that was asked for did not happen; the report above says why");
+    }
+    moved && buffer.state().is_current()
+}
+
+/// Says what recording an entry did beyond recording it.
+///
+/// Both things it can do are worth saying out loud: an entry absorbed into a merge window is not a
+/// step of its own, and an entry recorded after an undo *drops* the steps that were undone, which is
+/// the one part of a history a person cannot see from the document itself.
+fn report_recording(recording: &crate::project::history::Recording) {
+    if recording.merged {
+        println!("  absorbed into the step the merge window opened");
+    }
+    if recording.dropped > 0 {
+        println!(
+            "  {} undone step(s) were dropped: an edit after an undo is a new branch",
+            recording.dropped
+        );
+    }
+}
+
+/// Takes back or puts back up to `times` steps, and says whether every one of them happened.
+///
+/// The move is asked for in the domain the caller named, and the history's own answer is printed
+/// either way: a refusal names the step in the other domain that would have been skipped, and a
+/// refusal is why the answer is false — a caller that asked for three steps and got two has not been
+/// obeyed, and saying "two" while exiting zero would be reporting the wrong thing.
+fn move_steps(
+    history: &mut crate::project::history::History,
+    store: &mut crate::contracts::store::DocumentStore,
+    buffer: &mut crate::project::document::Buffer,
+    root: &crate::host::paths::ProjectRoot,
+    redo: bool,
+    times: usize,
+    only: Option<crate::cli::HistoryDomain>,
+) -> bool {
+    use crate::cli::HistoryDomain;
+    let mut all = true;
+    for _ in 0..times {
+        let step = match (redo, only) {
+            (false, None) => history.undo(store, buffer, root),
+            (true, None) => history.redo(store, buffer, root),
+            (false, Some(HistoryDomain::Model)) => history.undo_model(store),
+            (true, Some(HistoryDomain::Model)) => history.redo_model(store),
+            (false, Some(HistoryDomain::Text)) => history.undo_text(buffer, root),
+            (true, Some(HistoryDomain::Text)) => history.redo_text(buffer, root),
+        };
+        for line in step.render() {
+            println!("{line}");
+        }
+        if !step.did_move() {
+            all = false;
+            break;
+        }
+    }
+    all
+}
+
+/// The merge window's closing, in one sentence.
+fn close_merge(state: crate::project::history::MergeState) -> String {
+    use crate::project::history::MergeState;
+
+    match state {
+        MergeState::NothingOpen => "there was no window open".to_owned(),
+        MergeState::Open(merge) => format!(
+            "the window is still open after {} recording(s)",
+            merge.recorded()
+        ),
+        MergeState::Closed { entries, domain } => format!(
+            "the {entries} {} recording(s) in it are one step, so one undo takes them all back",
+            domain.name()
+        ),
+    }
 }
 
 /// Resolves a workspace's dependencies, and says exactly what it did (task T02.11).

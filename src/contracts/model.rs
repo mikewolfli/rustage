@@ -122,6 +122,28 @@ impl Node {
         }
     }
 
+    /// A record of a node as a document holds it: identity, kind and properties, with no parent and
+    /// no children.
+    ///
+    /// What a change operation carries so that undoing it can put the *same* node back: a removal
+    /// records the node it took out, and the inverse is an addition of that record. The store is
+    /// still what attaches a node to a document — this only makes the record.
+    pub fn record(
+        page: PageId,
+        id: NodeId,
+        kind: NodeKind,
+        properties: BTreeMap<PropertyName, PropertyValue>,
+    ) -> Self {
+        Self {
+            id,
+            page,
+            kind,
+            properties,
+            children: Vec::new(),
+            parent: None,
+        }
+    }
+
     /// The node's identity.
     pub fn id(&self) -> NodeId {
         self.id

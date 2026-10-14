@@ -22,6 +22,7 @@
 
 #![allow(dead_code)]
 
+pub mod batch;
 pub mod configuration;
 pub mod create;
 pub mod dependencies;

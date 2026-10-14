@@ -124,6 +124,7 @@ cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unkno
 cargo run -- --dependencies target/area             # cargo 解析出的依赖树，不做任何会改变它的动作
 cargo run -- --dependencies target/area --review target/deps.json   # 与那份记录相比改了什么
 cargo run -- --document target/area/pages/main.json   # 文本、最后一次读通的模型与身份变化
+cargo run -- --edit target/area/pages/main.json --batch target/area/batch.json --apply --undo   # 一批编辑，全落地或全拒绝
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

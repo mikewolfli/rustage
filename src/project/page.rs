@@ -528,7 +528,41 @@ fn decode_page(reader: &mut Reader<'_>) -> Result<(Page, Preserved), ProjectErro
 
 fn decode_nodes(reader: &mut Reader<'_>) -> Result<Vec<PageNode>, ProjectError> {
     let mut nodes = Vec::new();
-    for mut entry in sub_objects(reader, "nodes")? {
+    for entry in sub_objects(reader, "nodes")? {
+        nodes.push(decode_node(entry)?);
+    }
+    Ok(nodes)
+}
+
+/// One node entry: the page reader's single place that says what a node is.
+///
+/// Public because a batch of edits (T03.02) writes the same node shape a page document writes, and
+/// a second decoder for it would be a second answer to "what is a node".
+pub fn node_from_json(at: &str, value: &Json) -> Result<PageNode, ProjectError> {
+    decode_node(Reader::object(at.to_owned(), value)?)
+}
+
+/// The same node, written the way a page document writes it.
+pub fn node_to_json(node: &PageNode) -> Result<Json, ProjectError> {
+    encode_node(node)
+}
+
+/// One property value, read the way a page document reads it.
+///
+/// The value families are the model's (`contracts::model::PropertyValue`), and this is the only
+/// place that says how one is spelled in a file: a batch of edits (T03.02) sets properties, and a
+/// second decoder would be a second answer to what `{"text": "Save"}` means.
+pub fn property_from_json(at: &str, value: &Json) -> Result<PropertyValue, ProjectError> {
+    decode_property_value(at, value)
+}
+
+/// One property value, written the way a page document writes it.
+pub fn property_to_json(at: &str, value: &PropertyValue) -> Result<Json, ProjectError> {
+    encode_property_value(at, value)
+}
+
+fn decode_node(mut entry: Reader<'_>) -> Result<PageNode, ProjectError> {
+    {
         let id = entry.required_u64("id")?;
         let kind = entry.required_string("type")?;
         let kind = NodeKind::new(&kind)
@@ -590,15 +624,14 @@ fn decode_nodes(reader: &mut Reader<'_>) -> Result<Vec<PageNode>, ProjectError> 
                 }
             }
         }
-        nodes.push(PageNode {
+        Ok(PageNode {
             id: NodeId::from_raw(id),
             kind,
             properties,
             children,
             preserved: entry.finish(),
-        });
+        })
     }
-    Ok(nodes)
 }
 
 /// The file describes one tree rooted at `page.root`, and nothing else.

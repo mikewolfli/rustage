@@ -116,6 +116,20 @@ impl DocumentStore {
         self.allocator.allocate()
     }
 
+    /// Adopts an id that came from outside the store — a page document read from a file.
+    ///
+    /// The store refuses a change set that adds a node whose id it never issued
+    /// (`ChangeRejection::UnknownNode`), which is what keeps one document from being written with
+    /// another's identities. A file is the third place ids come from besides the allocator and the
+    /// root the store is built around, so it has to be able to say "this one is mine now": adopting
+    /// changes no node and no property and does not move the revision, exactly like
+    /// [`Self::allocate_id`] — ids are identity, not content. Adopting an id the store already knows
+    /// is a no-op, and adopting a retired one does not make it live again: a retired identity stays
+    /// refused for the lifetime of the document.
+    pub fn adopt_id(&mut self, id: NodeId) {
+        self.allocator.adopt(id);
+    }
+
     /// Read-only access to the document.
     pub fn view(&self) -> DocumentView<'_> {
         DocumentView { store: self }
@@ -168,12 +182,15 @@ impl DocumentStore {
         }
     }
 
-    /// Whether the id was issued by this document. Used to refuse change sets that invent ids.
-    fn knows_id(&self, id: NodeId) -> bool {
+    /// Whether this document ever issued the id. Used to refuse change sets that invent ids, and
+    /// readable by a caller that is preparing a change set and would rather find out first.
+    pub fn knows_id(&self, id: NodeId) -> bool {
         self.allocator.is_known(id)
     }
 
-    fn is_retired(&self, id: NodeId) -> bool {
+    /// Whether the id was issued and then removed. A retired identity is never live again, so a
+    /// change set that adds it is refused; a caller preparing one can ask here.
+    pub fn is_retired(&self, id: NodeId) -> bool {
         self.allocator.is_retired(id)
     }
 }

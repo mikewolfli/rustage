@@ -71,6 +71,8 @@ pub enum Command {
     /// Shows what a buffer over a page document is holding after some text is typed into it
     /// (task T03.01).
     Document(DocumentOptions),
+    /// Plans and applies a batch of edits to a page document's model (task T03.02).
+    Edit(EditOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -244,6 +246,40 @@ impl DocumentOptions {
             file: file.into(),
             root: None,
             edits: Vec::new(),
+        }
+    }
+}
+
+/// What to do with a page document's model (task T03.02).
+///
+/// A batch is planned before it is applied: the plan says what each operation would do, what cannot
+/// land and why, and which capability the store will ask about — and a blocked batch is refused as a
+/// whole. `--apply` applies it to the model *in memory* (writing the file is T03.04's subject), and
+/// `--undo` additionally applies the inverse the plan reports, which is how "all committed or all
+/// refused" and "an edit says what would undo it" are both visible in one run.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EditOptions {
+    /// The page document.
+    pub file: PathBuf,
+    /// The batch to run, when there is one.
+    pub batch: Option<PathBuf>,
+    /// The project root, when the caller names it; otherwise the nearest project above the file.
+    pub root: Option<PathBuf>,
+    /// Whether to apply the batch to the model.
+    pub apply: bool,
+    /// Whether to apply the batch's inverse afterwards.
+    pub undo: bool,
+}
+
+impl EditOptions {
+    /// Options that show a document's model and run no batch.
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        Self {
+            file: file.into(),
+            batch: None,
+            root: None,
+            apply: false,
+            undo: false,
         }
     }
 }
@@ -797,6 +833,42 @@ where
             }
             return Ok(Command::Dependencies(options));
         }
+        "--edit" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = EditOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--apply" => options.apply = true,
+                    "--undo" => options.undo = true,
+                    "--batch" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.batch = Some(PathBuf::from(path));
+                    }
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(path));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            if options.undo && !options.apply {
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::Edit(options));
+        }
         "--document" => {
             let Some(path) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -1063,6 +1135,8 @@ pub fn help_text() -> &'static str {
             rustage --validate <file> [--diagnose] [--trust]\n\
                                  [--record <file> | --rescan <file>]\n\
             rustage --kit <file> [--diagnose] [--trust] [--triple <triple>]\n\
+            rustage --edit <page-document> [--batch <file>] [--root <directory>]\n\
+                                       [--apply] [--undo]\n\
             rustage --document <page-document> [--root <directory>]\n\
                                        [--set-text <text> | --set-text-file <file>]...\n\
             rustage --dependencies <directory> [--review <record> | --record <record>]\n\
@@ -1124,6 +1198,12 @@ pub fn help_text() -> &'static str {
                                      programs the kit names), --triple says which output to ask about\n\
        --triple <triple>             With --kit, the output triple to ask about: a kit never\n\
                                      carries which profile is being built\n\
+       --edit <page-document>        Plan a batch of edits to a page document's model: what each\n\
+                                     operation would do, what cannot land, and what would undo it\n\
+       --batch <file>                With --edit, the batch document to run\n\
+       --apply                       With --edit, apply the batch to the model in memory (writing\n\
+                                     the file is T03.04's job)\n\
+       --undo                        With --edit --apply, apply the batch's inverse afterwards\n\
        --document <page-document>    Show what a buffer over a page document is holding: the text,\n\
                                      the last model that read it, and what happened to identity\n\
        --root <directory>            With --document, the project root the file is read against\n\
@@ -1162,7 +1242,7 @@ mod tests {
 
     use super::{
         Command, ConfigurationOptions, DependenciesOptions, DocumentEdit, DocumentOptions,
-        DropEntryOptions, FileOpOptions, ImportOptions, KitOptions, LaunchOptions,
+        DropEntryOptions, EditOptions, FileOpOptions, ImportOptions, KitOptions, LaunchOptions,
         NewProjectOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
         WorkspaceAction, WorkspaceOptions, log_level_of, parse,
     };
@@ -1361,6 +1441,39 @@ mod tests {
         assert!(parse(["\u{2d}\u{2d}import"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_edit_options() {
+        assert_eq!(
+            parse(["--edit", "pages/main.json"]),
+            Ok(Command::Edit(EditOptions::new(PathBuf::from(
+                "pages/main.json"
+            ))))
+        );
+        assert_eq!(
+            parse([
+                "--edit",
+                "pages/main.json",
+                "--batch",
+                "batch.json",
+                "--root",
+                "area",
+                "--apply",
+                "--undo",
+            ]),
+            Ok(Command::Edit(EditOptions {
+                file: PathBuf::from("pages/main.json"),
+                batch: Some(PathBuf::from("batch.json")),
+                root: Some(PathBuf::from("area")),
+                apply: true,
+                undo: true,
+            }))
+        );
+        assert!(parse(["--edit"]).is_err());
+        assert!(parse(["--edit", "pages/main.json", "--wat"]).is_err());
+        assert!(parse(["--edit", "pages/main.json", "--batch"]).is_err());
+        assert!(parse(["--edit", "pages/main.json", "--undo"]).is_err());
     }
 
     #[test]

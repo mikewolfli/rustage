@@ -161,11 +161,12 @@
       "file": "src/contracts/store.rs",
       "kind": "public",
       "names": [
+        "adopt_id",
         "allocate_id",
         "apply",
         "gate_mut"
       ],
-      "reason": "apply 是唯一改动节点的入口；gate_mut 改的是权限状态；allocate_id 只推进 id 序列，不改文档（见 C-STORE 的说明）"
+      "reason": "apply 是唯一改动节点的入口；gate_mut 改的是权限状态；allocate_id 与 adopt_id 只动 id 序列（发一个新 id / 收下一个文件带来的 id），不改文档（见 C-STORE 的说明）"
     },
     {
       "file": "src/contracts/model.rs",
@@ -566,6 +567,33 @@
       "test": "identity_that_comes_and_goes_is_reported_rather_than_policed",
       "evidence": "结构 + 测试",
       "note": "缓冲区从不分配 id（id 是文本的），所以它记的是「哪些 id 见过」这一件事实（seen/known_ids 同一来源），returned 与 appeared 的差别正是这个记录；relabelled 把同一 id 的旧/新 type 都写出来，因为工程里所有引用仍指向那个 id；两条同 id 的节点由页面读入器拒绝（ProjectError::Duplicate），拒绝理由随状态一起给出，缓冲区不会自己发明一条「按找到哪个算哪个」的规则"
+    },
+    {
+      "id": "INV-A-BATCH-LANDS-WHOLE-OR-NOT-AT-ALL",
+      "statement": "一批操作是一个变更集：全落地或全拒绝；被计划判定的批次一步都不执行；基线过期由 store 拒绝且文档停在原处；计划按「批次自己已经做过的事」量位置，而不是只看文档",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/batch.rs",
+      "test": "one_operation_that_cannot_land_refuses_the_whole_batch_and_changes_nothing",
+      "evidence": "结构 + 测试",
+      "note": "全落地由 store 的 apply 保证（暂存后一次提交），本项不重新实现：apply 只在计划未被阻断时调用它，并把答案如实转述；「计划里没有一条能落地」本身也算被阻断（set 为 None），所以一个全被挡下的批次不会变成「空批次」这种第三种结局；Structure 覆盖层只用来量位置（与 store 的暂存同一套规则），它不改文档，且一切最终仍由 store 判定：用例专门构造「计划看着没问题但基线已过期」的情形，断言 store 以 stale-base 拒绝且文档停在 r2"
+    },
+    {
+      "id": "INV-AN-EDIT-SAYS-WHAT-UNDOES-IT",
+      "statement": "落地的批次一定给得出它的逆：逆由操作自身携带的记录推出（移除带节点、set 带旧值），作为批次文档可读可存可回放；但移除会退休身份，因此「把同一个 id 放回去」由计划明确指出会被拒绝，而不是让它在 apply 时才失败",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/batch.rs",
+      "test": "a_batch_of_moves_and_sets_lands_and_its_inverse_puts_the_document_back",
+      "evidence": "结构 + 测试",
+      "note": "逆不是重新计算一遍：ChangeOp::inverse 造逆、ChangeSet::inverse(应用后的修订) 定基线，Batch::of_change_set 只把操作携带的事实翻译回批次文档；用例断言「两次写（move+set）→ 逆 → 指纹与开始完全一致」，并按 store 的语义断言「移除的逆会被拒绝（RetiredNode）」——那是设计而不是故障；新增的 store 只读访问器 knows_id/is_retired 让计划能在 apply 之前说出这件事"
+    },
+    {
+      "id": "INV-A-FILE-BECOMES-A-MODEL-THROUGH-CHANGE-SETS",
+      "statement": "文件里的节点经变更集进入模型：页面与根节点由 store 的构造接住、其余节点按深度优先各以一次 add 加属性操作到达、文件的 id 先被 adopt 再使用；因此模型不可能出现编辑路径到不了的状态，且同一个文件读两次得到同一棵树",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/batch.rs",
+      "test": "a_file_becomes_a_model_through_change_sets_and_keeps_the_files_identities",
+      "evidence": "结构 + 测试",
+      "note": "桥接不需要新的写入口：节点用 Node::new 造、属性用 SetProperty 设、adopt_id 只把文件带来的 id 收进 id 序列（不改文档，见 C-STORE）；用例断言父链由 store 建立、子节点顺序与文件一致、根节点自己的属性也在、整个文件是一个修订；Node::record 只造记录（不挂到任何文档），移除携带它、逆就是把它加回来"
     }
   ]
 }

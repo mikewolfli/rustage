@@ -136,6 +136,7 @@ cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unkno
 cargo run -- --dependencies target/area             # the dependency tree cargo resolves, and nothing that changes it
 cargo run -- --dependencies target/area --review target/deps.json   # what changed since that record
 cargo run -- --document target/area/pages/main.json   # the text, the last model that read it, and identity
+cargo run -- --edit target/area/pages/main.json --batch target/area/batch.json --apply --undo   # a batch of edits, all or nothing
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

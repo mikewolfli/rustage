@@ -147,6 +147,12 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Edit(options) => {
+            if !edit(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Document(options) => {
             if !document(&options) {
                 crate::host::log::flush();
@@ -555,6 +561,178 @@ fn stop_without_writing(session: &ProjectSession, before: &[u8]) -> bool {
 /// whether anything was *decided* to be wrong: "nobody looked" leaves the kit incomplete and is not
 /// reported as a failure, because a script that treats it as one would be told to fix what may be
 /// fine.
+/// Plans and applies a batch of edits to a page document's model (task T03.02).
+///
+/// Nothing is written to disk and nothing is run, so there is no question to ask and no permission to
+/// take — the batch is planned against the model the file describes, and applied to it in memory. The
+/// report is the point: what each operation would do, what cannot land and why (a blocked batch is
+/// refused as a whole), which capability the store will ask about, and — when it lands — the batch
+/// that would undo it. `--undo` then applies that inverse, so "all committed or all refused" and "the
+/// document is back where it was" can both be seen in one run. Writing the model back to the file is
+/// T03.04's subject, and the report says so.
+fn edit(options: &crate::cli::EditOptions) -> bool {
+    use crate::contracts::permission::PermissionGate;
+    use crate::project::batch::{Batch, Fingerprint, Plan, apply, store_of};
+    use crate::project::document::root_of;
+    use crate::project::page::PageDocument;
+
+    let root = match options.root.as_ref() {
+        Some(directory) => match crate::host::paths::ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        None => match root_of(&options.file) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+    };
+    let page = match PageDocument::read(&root, relative_to(&root, &options.file)) {
+        Ok(page) => page,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    let mut store = match store_of(&page, PermissionGate::new()) {
+        Ok(store) => store,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    println!("edit: in memory; nothing is written to any file, and no question is asked");
+    println!(
+        "model of {}: {} node(s), revision {}",
+        page.path().display(),
+        store.nodes().count(),
+        store.revision()
+    );
+
+    let Some(path) = options.batch.as_ref() else {
+        for line in Fingerprint::of(&store).as_str().lines() {
+            println!("  {line}");
+        }
+        println!("no batch was named, so nothing was planned or applied");
+        return true;
+    };
+    let batch = match Batch::read(path) {
+        Ok(batch) => batch,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    for line in batch.describe() {
+        println!("{line}");
+    }
+    let plan = match Plan::of(&batch, &store, &root) {
+        Ok(plan) => plan,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    for line in plan.render() {
+        println!("{line}");
+    }
+    if !options.apply {
+        println!("planned and not applied: --apply commits it to the model in memory");
+        println!("either way the file is not written: that is T03.04's subject");
+        return !plan.is_blocked();
+    }
+    let before = Fingerprint::of(&store);
+    let outcome = apply(&plan, &mut store);
+    for line in outcome.render() {
+        println!("{line}");
+    }
+    if !outcome.is_applied() {
+        // A refused batch is a finding, not a crash: the reason was printed above, and the document
+        // is where it was.
+        return false;
+    }
+    for line in Fingerprint::of(&store).as_str().lines() {
+        println!("  {line}");
+    }
+    if let Some(inverse) = outcome.inverse() {
+        match inverse.batch.render() {
+            Ok(text) => println!("inverse: {text}"),
+            Err(error) => {
+                println!(
+                    "rustage: the inverse could not be written: {}",
+                    error.message()
+                );
+                return false;
+            }
+        }
+    }
+    if !options.undo {
+        println!("nothing was written: the file is unchanged (writing it is T03.04)");
+        return true;
+    }
+    let inverse = match outcome.inverse() {
+        Some(inverse) => inverse,
+        None => {
+            println!("rustage: there is nothing to undo");
+            return false;
+        }
+    };
+    let undo_plan = match Plan::of(&inverse.batch, &store, &root) {
+        Ok(plan) => plan,
+        Err(refusal) => {
+            println!(
+                "rustage: the inverse cannot be planned: {}",
+                refusal.message()
+            );
+            return false;
+        }
+    };
+    for line in undo_plan.render() {
+        println!("{line}");
+    }
+    let undone = apply(&undo_plan, &mut store);
+    for line in undone.render() {
+        println!("{line}");
+    }
+    if !undone.is_applied() {
+        return false;
+    }
+    let after = Fingerprint::of(&store);
+    println!(
+        "the model is {} after undoing the batch",
+        if after == before {
+            "back where it started"
+        } else {
+            "not where it started"
+        }
+    );
+    after == before
+}
+
+/// The path of a file inside a project root, as the root's own relative path rules want it.
+fn relative_to(
+    root: &crate::host::paths::ProjectRoot,
+    file: &std::path::Path,
+) -> std::path::PathBuf {
+    if let Ok(relative) = file.strip_prefix(root.as_path()) {
+        return relative.to_path_buf();
+    }
+    file.canonicalize()
+        .ok()
+        .and_then(|absolute| {
+            absolute
+                .strip_prefix(root.as_path())
+                .ok()
+                .map(std::path::Path::to_path_buf)
+        })
+        .unwrap_or_else(|| file.to_path_buf())
+}
+
 /// Shows what a buffer over a page document is holding (task T03.01).
 ///
 /// Nothing is written and nothing is run, so there is no question to ask and no permission to take:
@@ -582,29 +760,7 @@ fn document(options: &crate::cli::DocumentOptions) -> bool {
             }
         },
     };
-    let relative = match options.file.strip_prefix(root.as_path()) {
-        Ok(relative) => relative.to_path_buf(),
-        Err(_) => match options.file.canonicalize() {
-            Ok(absolute) => match absolute.strip_prefix(root.as_path()) {
-                Ok(relative) => relative.to_path_buf(),
-                Err(_) => {
-                    println!(
-                        "rustage: {} is not inside {}",
-                        options.file.display(),
-                        root.as_path().display()
-                    );
-                    return false;
-                }
-            },
-            Err(error) => {
-                println!(
-                    "rustage: {} could not be resolved: {error}",
-                    options.file.display()
-                );
-                return false;
-            }
-        },
-    };
+    let relative = relative_to(&root, &options.file);
 
     let mut buffer = match Buffer::open(&root, &relative) {
         Ok(buffer) => buffer,

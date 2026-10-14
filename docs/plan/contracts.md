@@ -89,7 +89,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 
 | 文件 | 种类 | 写入方法 | 理由 |
 | --- | --- | --- | --- |
-| [`src/contracts/store.rs`](../../src/contracts/store.rs) | public | `allocate_id`, `apply`, `gate_mut` | apply 是唯一改动节点的入口；gate_mut 改的是权限状态；allocate_id 只推进 id 序列，不改文档（见 C-STORE 的说明） |
+| [`src/contracts/store.rs`](../../src/contracts/store.rs) | public | `adopt_id`, `allocate_id`, `apply`, `gate_mut` | apply 是唯一改动节点的入口；gate_mut 改的是权限状态；allocate_id 与 adopt_id 只动 id 序列（发一个新 id / 收下一个文件带来的 id），不改文档（见 C-STORE 的说明） |
 | [`src/contracts/model.rs`](../../src/contracts/model.rs) | crate-internal | `remove_property`, `set_children`, `set_parent`, `set_property` | Node 的写入方法是 pub(crate)，只有 contracts::store 的 apply 路径可以调；视图与快照拿不到 &mut |
 
 ## 不变量与强制位置
@@ -139,6 +139,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-TEXT-IS-KEPT-VERBATIM | 缓冲里的文本就是给出的文本：不裁剪、不修补、也不用模型重渲染的文本替换它；读不懂的文本仍然是最新的文本（文本版本仍然前进），失败的那次读不会把文本回滚到上一次能读的内容 | `C-PROJECT` | [`src/project/document.rs`](../../src/project/document.rs) | `the_buffer_never_rewrites_the_text_it_holds` | 结构 + 测试 |
 | INV-LAST-VALID-MODEL-SURVIVES-A-BAD-EDIT | 有效模型是「最后一次读通的模型」：读不懂的文本不会清掉它，状态只有两种形状（读通 / 文本读不通且带着那个模型与拒绝原因），问到模型的地方同时拿到它来自哪个文本版本，所以旧模型不可能被当作当前结果 | `C-PROJECT` | [`src/project/document.rs`](../../src/project/document.rs) | `an_invalid_text_is_kept_and_the_last_model_still_previews` | 结构 + 测试 |
 | INV-IDENTITY-EVENTS-ARE-REPORTED-NOT-SILENT | 身份变化是如实报告的事实而不是静默：同一个 id 在没被触碰的编辑后保持同一身份；离开文本的 id 记为 departed、回来的记为 returned（不是 appeared）、同一 id 换了 type 记为 relabelled；同一个 id 出现在两个节点上则不成为一个模型（读入时拒绝） | `C-PROJECT` | [`src/project/document.rs`](../../src/project/document.rs) | `identity_that_comes_and_goes_is_reported_rather_than_policed` | 结构 + 测试 |
+| INV-A-BATCH-LANDS-WHOLE-OR-NOT-AT-ALL | 一批操作是一个变更集：全落地或全拒绝；被计划判定的批次一步都不执行；基线过期由 store 拒绝且文档停在原处；计划按「批次自己已经做过的事」量位置，而不是只看文档 | `C-PROJECT` | [`src/project/batch.rs`](../../src/project/batch.rs) | `one_operation_that_cannot_land_refuses_the_whole_batch_and_changes_nothing` | 结构 + 测试 |
+| INV-AN-EDIT-SAYS-WHAT-UNDOES-IT | 落地的批次一定给得出它的逆：逆由操作自身携带的记录推出（移除带节点、set 带旧值），作为批次文档可读可存可回放；但移除会退休身份，因此「把同一个 id 放回去」由计划明确指出会被拒绝，而不是让它在 apply 时才失败 | `C-PROJECT` | [`src/project/batch.rs`](../../src/project/batch.rs) | `a_batch_of_moves_and_sets_lands_and_its_inverse_puts_the_document_back` | 结构 + 测试 |
+| INV-A-FILE-BECOMES-A-MODEL-THROUGH-CHANGE-SETS | 文件里的节点经变更集进入模型：页面与根节点由 store 的构造接住、其余节点按深度优先各以一次 add 加属性操作到达、文件的 id 先被 adopt 再使用；因此模型不可能出现编辑路径到不了的状态，且同一个文件读两次得到同一棵树 | `C-PROJECT` | [`src/project/batch.rs`](../../src/project/batch.rs) | `a_file_becomes_a_model_through_change_sets_and_keeps_the_files_identities` | 结构 + 测试 |
 
 ## 不变量的补充说明
 
@@ -187,6 +190,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-TEXT-IS-KEPT-VERBATIM | Buffer::set_text 先记下新的文本版本再尝试读，因此读不通的文本也不会被回滚（读不通是状态而不是撤销）；文本只以 String 保存，模型只在另一处（Model::document）且它的渲染结果从不写回文本——用例断言模型重渲染与文本不等，且文本仍带着自己的换行与空格；非 UTF-8 的字节在读入时就被拒绝（没有可保留的文本），文件本身一个字节都不动 |
 | INV-LAST-VALID-MODEL-SURVIVES-A-BAD-EDIT | State 只有 Reads{model} 与 TextDoesNotRead{refusal, model, text} 两种形状，没有「模型 + 可能坏掉的文本」这种第三值，所以不存在把过期模型当作当前结果读出来的路径；读失败时 model 字段原样保留上一次成功的 Model（用例断言两个值相等），Model 自带 version 与 text，State::render 明说「它落后于文本」；模型版本不是 store 的 Revision：那是唯一可写模型自己的序号，缓冲区借用它等于成为第二写者 |
 | INV-IDENTITY-EVENTS-ARE-REPORTED-NOT-SILENT | 缓冲区从不分配 id（id 是文本的），所以它记的是「哪些 id 见过」这一件事实（seen/known_ids 同一来源），returned 与 appeared 的差别正是这个记录；relabelled 把同一 id 的旧/新 type 都写出来，因为工程里所有引用仍指向那个 id；两条同 id 的节点由页面读入器拒绝（ProjectError::Duplicate），拒绝理由随状态一起给出，缓冲区不会自己发明一条「按找到哪个算哪个」的规则 |
+| INV-A-BATCH-LANDS-WHOLE-OR-NOT-AT-ALL | 全落地由 store 的 apply 保证（暂存后一次提交），本项不重新实现：apply 只在计划未被阻断时调用它，并把答案如实转述；「计划里没有一条能落地」本身也算被阻断（set 为 None），所以一个全被挡下的批次不会变成「空批次」这种第三种结局；Structure 覆盖层只用来量位置（与 store 的暂存同一套规则），它不改文档，且一切最终仍由 store 判定：用例专门构造「计划看着没问题但基线已过期」的情形，断言 store 以 stale-base 拒绝且文档停在 r2 |
+| INV-AN-EDIT-SAYS-WHAT-UNDOES-IT | 逆不是重新计算一遍：ChangeOp::inverse 造逆、ChangeSet::inverse(应用后的修订) 定基线，Batch::of_change_set 只把操作携带的事实翻译回批次文档；用例断言「两次写（move+set）→ 逆 → 指纹与开始完全一致」，并按 store 的语义断言「移除的逆会被拒绝（RetiredNode）」——那是设计而不是故障；新增的 store 只读访问器 knows_id/is_retired 让计划能在 apply 之前说出这件事 |
+| INV-A-FILE-BECOMES-A-MODEL-THROUGH-CHANGE-SETS | 桥接不需要新的写入口：节点用 Node::new 造、属性用 SetProperty 设、adopt_id 只把文件带来的 id 收进 id 序列（不改文档，见 C-STORE）；用例断言父链由 store 建立、子节点顺序与文件一致、根节点自己的属性也在、整个文件是一个修订；Node::record 只造记录（不挂到任何文档），移除携带它、逆就是把它加回来 |
 
 ## 为什么权限表要交叉校验
 

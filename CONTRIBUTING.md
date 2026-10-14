@@ -83,6 +83,8 @@ cargo run -- --dependencies target/area --allow-lockfile-change --trust --record
 cargo run -- --dependencies target/area --review target/deps.json   # what changed since that record
 cargo run -- --document target/area/pages/main.json   # what the buffer holds: the text, the model, identity
 cargo run -- --document target/area/pages/main.json --set-text '{"format": 1,'   # invalid text is kept; the last model still previews
+cargo run -- --edit target/area/pages/main.json --batch target/area/batch.json   # plans a batch; nothing is applied
+cargo run -- --edit target/area/pages/main.json --batch target/area/batch.json --apply --undo   # lands it, then its inverse
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -390,6 +392,30 @@ twice. Bytes that are not text are refused at the door instead of half-read, and
 against the nearest project above it rather than against its own directory, which would resolve every
 reference in the wrong place. The editing surfaces themselves (the text view, the canvas, the undo
 domain) belong to T03.03 and the shell (`T04`), and writing the text back belongs to T03.04.
+
+`--edit <file> --batch <file>` is where this milestone's acceptance line lives: "a batch of
+operations is all committed or all refused". A batch is a **document** — an intent and the operations
+in order, read from JSON — because an edit nobody can review, store or replay is an edit nobody can
+take back; its operations use the model's own vocabulary (a node entry is read and written by the page
+reader's own codec, so a batch cannot come to mean something a page document does not). A batch is
+**planned before it runs**, and the plan is not advice: it reads the document and reports, in the
+batch's own words, which operations cannot land and why — an id the document does not have, an id it
+retired, the page root, a cyclic move, a placement past the end, a property that is not set — plus the
+things worth knowing that do not stop it (an asset that is not there yet, the same property written
+twice, and the subtree a removal takes with it). A blocked plan applies nothing at all: the good
+operations in the batch do not land either, and the report says so in those words. The positions are
+measured against what the batch itself has already done, so removing a node and then its parent is one
+batch a person can write. All of that is *staging*; the guarantee is still the store's, which stages
+every operation and commits once — a plan that looked fine against a stale base is refused by the
+store and the document stays where it was. A batch that lands reports the batch that would undo it,
+derived from what its operations carry (a removal carries the node it took out, a set carries what was
+there), so an edit always comes with its inverse; and a state the store deliberately keeps — a removed
+identity is **never** reused — is named in the plan rather than left to fail at apply time. This is
+also the file → model seam's other half: `store_of` turns a page document into a `DocumentStore` by
+adopting the file's identities and adding every node through one change set, so a file can only reach
+the model through the path an edit takes. The command writes nothing to any file (`--apply` commits to
+the model in memory) — saving is T03.04's subject — and the undo domain, typing and cross-view history
+belong to T03.03.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

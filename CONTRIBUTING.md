@@ -56,6 +56,8 @@ cargo run -- --probe-apis target/probe
 cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready
 cargo run -- --project-check examples/demo-project/project.json   # project format; exits 4 when it refuses to write
 cargo run -- --new-project target/new-project --template application   # creates a project; exits 4 when refused
+cargo run -- --open-project target/new-project/project.json   # opens it read-only and prints what would be asked
+cargo run -- --recent                                        # projects opened before, and where they are now
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -150,6 +152,22 @@ one this build can open, not one it hopes it can. `--template empty|basic-page|a
 what the project starts from and `--name` sets the name a person sees. This does not establish that a
 window opened, that the templates are what a person wants, or that the designer's own menus create
 projects — the wizard's UI arrives with the shell (T04/T26).
+
+`--open-project <file>` reads a project and decides nothing: it prints the format verdict, the
+identity, whether this build may write it, and the question a person would be asked about the
+directory (what is in it that could run code during a build, what answering yes allows, what
+answering no costs). Trust is one decision away and never implied: `--trust` answers the question,
+`--diagnose` reads the toolchain — and reading a toolchain *runs two programs*, so it goes through the
+permission gate and an untrusted project gets "not checked: reading a toolchain runs programs"
+instead of a version nobody authorized. The question is re-read when it is answered, so a directory
+that gained a `build.rs` while the prompt was on screen is refused and trust is withdrawn rather than
+applied to a state the person never saw. Opening also records the project in a recent list under the
+host's configuration directory — a place, never a permission: the list holds paths, names, identities
+and times, it has no permission service and no way to start a program, and `--recent` prints it,
+notices which entries are gone and remembers that. Repairing a moved entry is by identity: a path
+that now holds a different project is refused with both identities named. This does not establish
+that a window, a toolbar or a dialog exists, that a toolchain can build this project, or that the
+wizard's steps have buttons — those are the shell's and the build tasks'.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

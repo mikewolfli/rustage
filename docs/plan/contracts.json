@@ -323,6 +323,33 @@
       "test": "a_project_that_is_created_is_a_project_this_build_reads_back",
       "evidence": "测试",
       "note": "暂存目录里的 project.json 与每个页面文档都由设计器使用的读者读一遍（verify_staged），因此写出器与读码器不一致会让创建失败，而不是交付一个打不开的工程"
+    },
+    {
+      "id": "INV-OPEN-DECIDES-NOTHING",
+      "statement": "打开工程只读入文档并给出将被提出的问题：不记录决定、不授权、不运行任何程序",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/session.rs",
+      "test": "opening_reads_the_project_and_decides_nothing",
+      "evidence": "测试",
+      "note": "授权记录在打开后为空；未信任时 may_write 为假；工具链状态是 NotAsked。路径不是权限：只有 ProjectSession::decide 会记录信任"
+    },
+    {
+      "id": "INV-RECENT-IS-A-PLACE",
+      "statement": "最近项只记“哪里”：用它打开等同于手打路径，同样不信任、不授权、不运行",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/session.rs",
+      "test": "a_recent_entry_opens_the_project_without_trusting_or_running_anything",
+      "evidence": "结构 + 测试",
+      "note": "recent 模块只持有路径/名字/身份/时间，没有权限服务也没有启动程序的能力；修整（repair）按身份判定，不同工程拒绝，路径仍在则不修"
+    },
+    {
+      "id": "INV-PROMPT-IS-CURRENT",
+      "statement": "信任提问在回答前被重新读取；目录在提问之后变了，答案不生效并撤销信任",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/session.rs",
+      "test": "a_directory_that_changed_while_the_question_was_on_screen_is_not_trusted",
+      "evidence": "测试",
+      "note": "提问的 findings 由目录本身读出（build.rs / .cargo/config / rust-toolchain*），因此“提问后新增 build.rs”会被发现；拒绝与撤销两次都记录在授权记录里"
     }
   ]
 }

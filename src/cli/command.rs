@@ -37,6 +37,10 @@ pub enum Command {
     ProjectCheck(PathBuf),
     /// Creates a project: the new-project wizard's work, without a window (task T02.02).
     NewProject(NewProjectOptions),
+    /// Opens a project: what it is, what would be asked about it, and nothing else (task T02.03).
+    OpenProject(OpenProjectOptions),
+    /// Lists the projects that were opened before, and where they are now.
+    Recent,
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -63,6 +67,32 @@ impl NewProjectOptions {
             directory: directory.into(),
             name: None,
             template,
+        }
+    }
+}
+
+/// How a project should be opened.
+///
+/// `trust` is the answer to the question the open prints, and `diagnose` asks for the toolchain
+/// check, which is only possible once the project is trusted. Neither is implied by the other: a
+/// person can open a project and read it without deciding anything.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OpenProjectOptions {
+    /// The project document to open.
+    pub path: PathBuf,
+    /// Whether the person answering the question said yes.
+    pub trust: bool,
+    /// Whether to read the toolchain, which runs two programs.
+    pub diagnose: bool,
+}
+
+impl OpenProjectOptions {
+    /// Options that read a project and decide nothing.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            trust: false,
+            diagnose: false,
         }
     }
 }
@@ -231,6 +261,27 @@ where
             }
             return Ok(Command::NewProject(options));
         }
+        "--open-project" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = OpenProjectOptions::new(PathBuf::from(path));
+            for argument in arguments {
+                match argument.to_str().unwrap_or_default() {
+                    "--trust" => options.trust = true,
+                    "--diagnose" => options.diagnose = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::OpenProject(options));
+        }
+        "--recent" => {
+            let mut rest = arguments;
+            if let Some(argument) = rest.next() {
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::Recent);
+        }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
             let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -262,7 +313,8 @@ pub fn help_text() -> &'static str {
      Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n\
             rustage [--render-icons <directory> | --probe-apis <directory>]\n\
             rustage [--probe-host <directory> | --project-check <file>]\n\
-            rustage --new-project <directory> [--template <name>] [--name <name>]\n\n\
+            rustage --new-project <directory> [--template <name>] [--name <name>]\n\
+            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -275,7 +327,11 @@ pub fn help_text() -> &'static str {
        --project-check <file>        Read a project file, report what is understood and what is\n\
                                      kept, and write <file>.roundtrip.json as evidence\n\
        --new-project <directory>     Create a project; --template empty|basic-page|application\n\
-                                     (default: basic-page), --name <name> (default: the directory)\n\n\
+                                     (default: basic-page), --name <name> (default: the directory)\n\
+       --open-project <file>         Open a project read-only, and print what would be asked\n\
+       --trust                       With --open-project, answer the question with yes\n\
+       --diagnose                    With --open-project, read the toolchain (runs two programs)\n\
+       --recent                      List the projects opened before, and where they are now\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -284,7 +340,9 @@ pub fn help_text() -> &'static str {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Command, LaunchOptions, NewProjectOptions, log_level_of, parse};
+    use super::{
+        Command, LaunchOptions, NewProjectOptions, OpenProjectOptions, log_level_of, parse,
+    };
     use crate::host::log::Level;
     use crate::project::create::Template;
     use std::time::Duration;
@@ -356,6 +414,33 @@ mod tests {
         assert!(parse(["--new-project"]).is_err());
         assert!(parse(["--new-project", "demo", "--template"]).is_err());
         assert!(parse(["--new-project", "demo", "--wat"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_open_project_options() {
+        assert_eq!(
+            parse(["--open-project", "demo/project.json"]),
+            Ok(Command::OpenProject(OpenProjectOptions::new(
+                PathBuf::from("demo/project.json")
+            )))
+        );
+        assert_eq!(
+            parse([
+                "--open-project",
+                "demo/project.json",
+                "--trust",
+                "--diagnose"
+            ]),
+            Ok(Command::OpenProject(OpenProjectOptions {
+                path: PathBuf::from("demo/project.json"),
+                trust: true,
+                diagnose: true,
+            }))
+        );
+        assert_eq!(parse(["--recent"]), Ok(Command::Recent));
+        assert!(parse(["--open-project"]).is_err());
+        assert!(parse(["--open-project", "demo/project.json", "--wat"]).is_err());
+        assert!(parse(["--recent", "extra"]).is_err());
     }
 
     #[test]

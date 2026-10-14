@@ -112,6 +112,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-NO-HALF-PROJECT | 创建只在暂存目录里发生，最后一步用一次改名提交；失败或取消移除暂存目录，原目录不被触碰 | `C-PROJECT` | [`src/project/create.rs`](../../src/project/create.rs) | `a_failure_or_a_cancel_leaves_the_directory_as_it_was` | 结构 + 测试 |
 | INV-NO-OVERWRITE | 已存在且含内容的目录在任何写入发生之前就被拒绝，本构建绝不覆盖已有的工程目录 | `C-PROJECT` | [`src/project/create.rs`](../../src/project/create.rs) | `a_failure_does_not_overwrite_a_directory_that_has_something_in_it` | 测试 |
 | INV-CREATED-IS-READABLE | 创建出来的工程在提交前先被本构建自己的读码器读回：写出与能读回是同一件事 | `C-PROJECT` | [`src/project/create.rs`](../../src/project/create.rs) | `a_project_that_is_created_is_a_project_this_build_reads_back` | 测试 |
+| INV-OPEN-DECIDES-NOTHING | 打开工程只读入文档并给出将被提出的问题：不记录决定、不授权、不运行任何程序 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `opening_reads_the_project_and_decides_nothing` | 测试 |
+| INV-RECENT-IS-A-PLACE | 最近项只记“哪里”：用它打开等同于手打路径，同样不信任、不授权、不运行 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `a_recent_entry_opens_the_project_without_trusting_or_running_anything` | 结构 + 测试 |
+| INV-PROMPT-IS-CURRENT | 信任提问在回答前被重新读取；目录在提问之后变了，答案不生效并撤销信任 | `C-PROJECT` | [`src/project/session.rs`](../../src/project/session.rs) | `a_directory_that_changed_while_the_question_was_on_screen_is_not_trusted` | 测试 |
 
 ## 不变量的补充说明
 
@@ -133,6 +136,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-NO-HALF-PROJECT | 暂存目录在目标同级（同一文件系统），因此提交是一次 rename：要么工程存在，要么原目录与之前完全一样；取消后再次取消会如实报告“没有暂存副本” |
 | INV-NO-OVERWRITE | 空目录可以承接新工程（rename 允许替换空目录），但非空目录、文件与缺失的父目录都各自给出准确拒绝；“向导打开期间别人写进目标目录”这一冲突由提交失败覆盖 |
 | INV-CREATED-IS-READABLE | 暂存目录里的 project.json 与每个页面文档都由设计器使用的读者读一遍（verify_staged），因此写出器与读码器不一致会让创建失败，而不是交付一个打不开的工程 |
+| INV-OPEN-DECIDES-NOTHING | 授权记录在打开后为空；未信任时 may_write 为假；工具链状态是 NotAsked。路径不是权限：只有 ProjectSession::decide 会记录信任 |
+| INV-RECENT-IS-A-PLACE | recent 模块只持有路径/名字/身份/时间，没有权限服务也没有启动程序的能力；修整（repair）按身份判定，不同工程拒绝，路径仍在则不修 |
+| INV-PROMPT-IS-CURRENT | 提问的 findings 由目录本身读出（build.rs / .cargo/config / rust-toolchain*），因此“提问后新增 build.rs”会被发现；拒绝与撤销两次都记录在授权记录里 |
 
 ## 为什么权限表要交叉校验
 

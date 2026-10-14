@@ -13,10 +13,14 @@
 use std::path::{Path, PathBuf};
 
 use crate::cli::{self, Command};
+use crate::host::paths::{HostDirectories, HostDirectory};
+use crate::host::permission::PermissionService;
 use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
 use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
 use crate::project::format::{ProjectContent, ProjectFile};
+use crate::project::recent::RecentProjects;
+use crate::project::session::{ProjectSession, SessionState, TrustDecision};
 
 use super::toolbar;
 
@@ -106,6 +110,18 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::OpenProject(options) => {
+            if !open_project(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Recent => {
+            if !list_recent() {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::ProjectCheck(path) => {
             if !check_project(&path) {
                 // The project is not something this build can use as it stands, and the reason was
@@ -131,6 +147,135 @@ pub fn run(command: Command) {
                 std::process::exit(1);
             }
         },
+    }
+}
+
+/// Where this machine keeps the list of projects that were opened before.
+fn recent_list() -> Result<RecentProjects, String> {
+    let directories = HostDirectories::from_environment()
+        .map_err(|error| format!("this machine's configuration directory is unknown: {error}"))?;
+    RecentProjects::load(
+        directories
+            .path(HostDirectory::Config)
+            .join("recent-projects.json"),
+    )
+    .map_err(|error| format!("the recent list could not be read: {}", error.message()))
+}
+
+/// Opens a project: prints what it is, asks the question, and does nothing else unless asked.
+///
+/// Returns whether the project was opened.
+fn open_project(options: &crate::cli::OpenProjectOptions) -> bool {
+    let permissions = PermissionService::new();
+    let mut session = match ProjectSession::open(&options.path) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    println!("project: {}", session.path().display());
+    println!("root: {}", session.root().as_path().display());
+    println!("format: {}", session.file().verdict().message());
+    println!(
+        "identity: {} ({})",
+        session.name().unwrap_or("<not readable>"),
+        session.id().unwrap_or("<not readable>")
+    );
+    println!("state: {}", session.state().message());
+    println!(
+        "trust: {}",
+        if session.is_trusted(&permissions) {
+            "trusted"
+        } else {
+            "not decided yet"
+        }
+    );
+    println!("writable now: {}", yes_no(session.may_write(&permissions)));
+    println!("{}", session.question().ask());
+
+    // Opening is recorded as a place, never as a permission: the list holds a path, a name and an
+    // identity, and nothing in it can run anything.
+    match recent_list() {
+        Ok(mut recent) => {
+            let entry = session.recent_entry(std::time::SystemTime::now());
+            recent.record(entry);
+            match recent.save() {
+                Ok(path) => println!("remembered: {}", path.display()),
+                Err(error) => println!(
+                    "rustage: the recent list was not saved: {}",
+                    error.message()
+                ),
+            }
+        }
+        Err(reason) => println!("remembered: no — {reason}"),
+    }
+
+    if options.trust {
+        let outcome = session.decide(&permissions, TrustDecision::Trust);
+        println!("answer: {}", outcome.message());
+        if !outcome.trusted() {
+            return false;
+        }
+    }
+    if options.diagnose {
+        let state = session.diagnose_toolchain(&permissions);
+        println!("toolchain: {}", state.message());
+        if options.trust && state.report().is_none() {
+            return false;
+        }
+    } else {
+        println!("toolchain: {}", session.toolchain().message());
+    }
+    match session.state() {
+        SessionState::Readable => true,
+        // Read-only is a state this build reports and honours, not a failure: the acceptance is that
+        // the project *can* be opened read-only.
+        SessionState::ReadOnly { .. } => true,
+    }
+}
+
+/// Lists the projects opened before, and says which of them are still there.
+fn list_recent() -> bool {
+    let mut recent = match recent_list() {
+        Ok(recent) => recent,
+        Err(reason) => {
+            println!("rustage: {reason}");
+            return false;
+        }
+    };
+    println!("recent projects: {}", recent.path().display());
+    if recent.is_empty() {
+        println!("  none have been opened yet");
+        return true;
+    }
+    // Looking at the list notices which entries are gone, and remembers it: a person who comes back
+    // later should see "gone" rather than a silently missing line.
+    let entries: Vec<_> = recent.entries().to_vec();
+    let mut missing = 0usize;
+    for entry in &entries {
+        let state = recent.state_of(entry);
+        if state == crate::project::recent::RecentState::Missing {
+            missing += 1;
+        }
+    }
+    for line in recent.render() {
+        println!("  {line}");
+    }
+    if missing > 0 {
+        println!(
+            "  {missing} entry/entries are not there any more; they can be repaired or forgotten"
+        );
+    }
+    match recent.save() {
+        Ok(_) => true,
+        Err(error) => {
+            println!(
+                "rustage: the recent list was not saved: {}",
+                error.message()
+            );
+            false
+        }
     }
 }
 

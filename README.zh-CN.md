@@ -110,6 +110,7 @@ cargo run -- --probe-apis target/probe   # 写出 target/probe/api-probes.json�
 cargo run -- --probe-host target/host    # 写出 target/host/host-readiness.json；有检查未就绪时退出码 4
 cargo run -- --project-check examples/demo-project/project.json   # 读工程文档并把往返结果写在它旁边
 cargo run -- --new-project target/new-project       # 创建工程：先计划、写暂存目录，再一次改名提交
+cargo run -- --open-project target/new-project/project.json   # 只读打开工程并打印信任提问
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

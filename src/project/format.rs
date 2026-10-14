@@ -65,7 +65,6 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::contracts::revision::FormatVersion;
@@ -178,7 +177,10 @@ impl fmt::Display for ProjectWriteRefusal {
 }
 
 /// Why a project could not be read, or written.
-#[derive(Debug)]
+///
+/// Comparable and cloneable so a caller can hold one and still compare it: the value says what was
+/// found, and a report that had to compare messages would be comparing prose.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ProjectError {
     /// The file could not be read or written.
     Io {
@@ -470,7 +472,7 @@ fn encode_credential(credential: &CredentialRef) -> Json {
 /// written is not a difference anybody can act on. An instant so far from 1970 that it does not fit
 /// has no spelling here and the member is left out rather than saturated, so nothing is ever written
 /// as a time it is not.
-fn unix_millis(instant: SystemTime) -> Option<i64> {
+pub(crate) fn unix_millis(instant: SystemTime) -> Option<i64> {
     match instant.duration_since(UNIX_EPOCH) {
         Ok(duration) => i64::try_from(duration.as_millis()).ok(),
         Err(error) => i64::try_from(error.duration().as_millis())
@@ -1183,7 +1185,6 @@ impl ProjectWriter<'_> {
     /// target, which is the save path the roadmap asks for: prepare, write, commit, confirm. A
     /// failure in the middle leaves the target as it was.
     pub fn save_to(&self, path: impl AsRef<Path>) -> Result<PathBuf, ProjectError> {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let path = path.as_ref().to_path_buf();
         if path == self.file.path {
             let current = std::fs::read(&path).map_err(|error| ProjectError::Io {
@@ -1195,39 +1196,17 @@ impl ProjectWriter<'_> {
                 return Err(ProjectError::ChangedOnDisk { path });
             }
         }
-        let directory = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| PROJECT_FILE_NAME.to_owned());
-        let temporary = directory.join(format!(
-            ".{name}.{}.{}.tmp",
-            std::process::id(),
-            COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
-        ));
-        std::fs::write(&temporary, self.render()).map_err(|error| ProjectError::Io {
-            path: temporary.clone(),
+        json::write_atomically(&path, &self.render()).map_err(|error| ProjectError::Io {
+            path: path.clone(),
             action: "writing",
             reason: error.to_string(),
-        })?;
-        if let Err(error) = std::fs::rename(&temporary, &path) {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(ProjectError::Io {
-                path: path.clone(),
-                action: "committing the write",
-                reason: error.to_string(),
-            });
-        }
-        Ok(path)
+        })
     }
 }
 
 /// Reads a document that was already parsed, and says what this build makes of it.
 pub fn read(root: &ProjectRoot, value: &Json) -> Result<ProjectContent, ProjectError> {
-    let version = read_version(value)?;
+    let version = format_version(value)?;
     match version.get().cmp(&FormatVersion::CURRENT.get()) {
         Ordering::Equal => Ok(ProjectContent::Interpreted(interpret(root, value)?)),
         Ordering::Greater => Ok(ProjectContent::Foreign(foreign(version, value))),
@@ -1238,7 +1217,7 @@ pub fn read(root: &ProjectRoot, value: &Json) -> Result<ProjectContent, ProjectE
     }
 }
 
-fn read_version(value: &Json) -> Result<FormatVersion, ProjectError> {
+pub(crate) fn format_version(value: &Json) -> Result<FormatVersion, ProjectError> {
     let Some(object) = value.as_object() else {
         return Err(ProjectError::WrongType {
             path: "the document".to_owned(),

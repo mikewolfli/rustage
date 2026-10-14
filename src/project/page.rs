@@ -449,7 +449,7 @@ fn interpret(
     value: &Json,
 ) -> Result<PageDocument, ProjectError> {
     let context = Context { root };
-    let version = read_format(value)?;
+    let version = crate::project::format::format_version(value)?;
     match version.get().cmp(&FormatVersion::CURRENT.get()) {
         std::cmp::Ordering::Equal => {}
         std::cmp::Ordering::Greater => {
@@ -501,34 +501,6 @@ fn interpret(
         preserved,
         unknown,
     })
-}
-
-fn read_format(value: &Json) -> Result<FormatVersion, ProjectError> {
-    let Some(object) = value.as_object() else {
-        return Err(ProjectError::WrongType {
-            path: "the document".to_owned(),
-            expected: "an object",
-            found: value.kind(),
-        });
-    };
-    let Some(member) = object.get("format") else {
-        return Err(ProjectError::MissingMember {
-            path: "format".to_owned(),
-        });
-    };
-    let Some(number) = member.as_u64() else {
-        return Err(ProjectError::WrongType {
-            path: "format".to_owned(),
-            expected: "a whole number",
-            found: member.kind(),
-        });
-    };
-    let version = u32::try_from(number).map_err(|_| ProjectError::WrongType {
-        path: "format".to_owned(),
-        expected: "a whole number that fits in 32 bits",
-        found: JsonKind::Number,
-    })?;
-    Ok(FormatVersion::from_raw(version))
 }
 
 fn decode_page(reader: &mut Reader<'_>) -> Result<(Page, Preserved), ProjectError> {

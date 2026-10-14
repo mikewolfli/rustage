@@ -71,13 +71,13 @@ test('the committed data, document and whitepaper pass', () => {
   assert.deepEqual(result.errors, []);
   assert.equal(result.stats.areas, 9);
   assert.equal(result.stats.permissions, 8);
-  assert.equal(result.stats.invariants, 16);
+  assert.equal(result.stats.invariants, 19);
 });
 
 test('describe names what was checked', () => {
   assert.equal(
-    describe({ areas: 9, permissions: 7, invariants: 15, writers: 7, denials: 6 }),
-    '9 contract areas, 7 permission rows, 15 invariants, 7 declared write entry points, 6 denial reasons',
+    describe({ areas: 9, permissions: 7, invariants: 18, writers: 7, denials: 6 }),
+    '9 contract areas, 7 permission rows, 18 invariants, 7 declared write entry points, 6 denial reasons',
   );
 });
 

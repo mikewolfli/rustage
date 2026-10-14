@@ -57,7 +57,8 @@ order they are being closed in. It is a work list, not a statement of implemente
   specification is the module documentation of `src/project/format.rs` and whose example is the
   committed project under `examples/demo-project/`, and the page document format and the creation
   path T02.02 asks for, which write a project into a staging directory and put it in place with one
-  rename; the
+  rename, and opening a project T02.03 asks for, with the trust question, the machine-local recent
+  list and the toolchain check that runs only under a permit; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

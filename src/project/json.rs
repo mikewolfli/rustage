@@ -26,6 +26,8 @@
 //! of what needs a backslash.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 /// How deep a document may nest before it is refused.
 ///
@@ -348,6 +350,34 @@ impl JsonObject {
         let index = self.members.iter().position(|(member, _)| member == name)?;
         Some(self.members.remove(index).1)
     }
+}
+
+/// Writes text through a temporary file beside the target and a rename.
+///
+/// One definition for every writer of this format: a partial file is never the file a reader sees,
+/// and a failure in the middle leaves the target as it was. The temporary file is hidden and named
+/// after the target, so an interrupted write is recognisable rather than mysterious.
+pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<PathBuf, std::io::Error> {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let directory = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_owned());
+    let temporary = directory.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+    ));
+    std::fs::write(&temporary, text)?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(path.to_path_buf())
 }
 
 /// Escapes a string the way JSON requires.

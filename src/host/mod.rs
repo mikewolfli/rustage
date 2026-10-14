@@ -22,6 +22,7 @@
 //! | File events | [`watch`] | the adapter T03.05's external-modification detection reads |
 //! | Tasks | [`tasks`] | the background executor, task ownership, the bounded queue, progress and the timeout/cancellation protocol |
 //! | Subprocesses | [`subprocess`] | starting a process, capturing its output, and taking down only the group this session created |
+//! | Permissions | [`permission`] | project trust, the one gate that decides what may run, the permits that gate mints, and the record of every decision |
 //! | Readiness | [`readiness`] | what those services can actually do in this environment, with the evidence |
 //!
 //! Each service is its own module rather than another `platform` file, and each is behind a small
@@ -38,7 +39,9 @@
 //! Nothing here is a service registry yet, and this module deliberately has no `Service` trait: the
 //! registry that gives every service, including [`tasks::Executor`] and the processes
 //! [`subprocess`] starts, a project scope arrives in T01.07. Inventing that shape now would fix a
-//! boundary before the tasks that need it exist.
+//! boundary before the tasks that need it exist. What T01.05 did add is the direction of that
+//! dependency: [`permission::PermissionService`] decides, and [`subprocess::OwnedProcess::spawn`]
+//! requires a permit from it, so no service can perform an external effect without asking.
 
 // Parts of this surface have no runtime producer yet, and the reason is worth writing down rather
 // than hiding: the error variants for a failed init or loop are produced by platform adapters that
@@ -55,6 +58,7 @@ pub mod error;
 pub mod log;
 pub mod open_url;
 pub mod paths;
+pub mod permission;
 pub mod platform;
 pub mod readiness;
 pub mod startup;

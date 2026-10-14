@@ -103,6 +103,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-STALE-LABELED | 过期结果被标记为过期，不被当作当前结果展示 | `C-VERSION` | [`src/contracts/diagnostics.rs`](../../src/contracts/diagnostics.rs) | `a_stale_set_offers_no_current_entries_instead_of_old_ones` | 测试 |
 | INV-DIAGNOSTIC-LOCATABLE | 诊断在缺少节点映射时仍保留源码定位 | `C-DIAGNOSTIC` | [`src/contracts/diagnostics.rs`](../../src/contracts/diagnostics.rs) | `a_node_diagnostic_keeps_its_source_position` | 测试 |
 | INV-MOST-SPECIFIC-MAPPING | 嵌套区间取最具体的节点，未映射的位置返回空而不是猜测 | `C-SOURCEMAP` | [`src/contracts/source_map.rs`](../../src/contracts/source_map.rs) | `the_most_specific_span_wins_when_spans_nest` | 测试 |
+| INV-EFFECT-DECIDED | 每个外部效果类别要么由决策表的一行裁定，要么显式说明它没有决定 | `C-PERMISSION` | [`src/contracts/permission.rs`](../../src/contracts/permission.rs) | `every_external_effect_class_is_decided_or_explained` | 测试 |
 
 ## 不变量的补充说明
 
@@ -118,6 +119,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-STALE-LABELED | 快照与源映射各自带 stamp，可被同一套 Staleness 判定 |
 | INV-DIAGNOSTIC-LOCATABLE | 位置同时携带节点与源码区间，两者不是二选一 |
 | INV-MOST-SPECIFIC-MAPPING | 未映射的节点与位置另有用例覆盖 |
+| INV-EFFECT-DECIDED | 命令与文件分别由 run-cargo-check 与 write-file 裁定，映射理由写在 EffectClass 的文档注释里；网络与部署返回未决定并给出原因，宿主因此拒绝，而不是发明一条授权 |
 
 ## 为什么权限表要交叉校验
 

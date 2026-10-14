@@ -12,7 +12,7 @@
 //! Keeping the report derived means it cannot flatter the code: if the permission table changes,
 //! this output changes with it, and the contract check against whitepaper §12.5 still has to pass.
 
-use super::permission::{Capability, Decision, PermissionGate, Principal};
+use super::permission::{Capability, Decision, EffectClass, PermissionGate, Principal};
 use super::revision::{FormatVersion, GeneratorVersion};
 
 /// One line naming the format and generator versions this build was compiled with.
@@ -29,6 +29,33 @@ pub fn version_line() -> String {
 /// The project is untrusted and has no approvals, which is the state a project starts in. The
 /// answer is therefore "denied" for everything except the reversible case the policy leaves open,
 /// and each denial names the reason rather than an empty refusal.
+/// One line per external effect a task can declare: what decides it, or why nothing does.
+///
+/// This is the half a capability list cannot show. `run-cargo-check` says *who* may run a command;
+/// this says *which* effects there is a decision for at all — and the two effects the whitepaper's
+/// decision table does not cover print the reason instead of a verdict, because "no row" is not the
+/// same answer as "denied".
+pub fn effect_lines() -> Vec<String> {
+    EffectClass::ALL
+        .iter()
+        .map(|effect| match effect.decided_by() {
+            Some(capability) => format!(
+                "  {:<12} decided by {} ({})",
+                effect.name(),
+                capability.name(),
+                capability.default_grant().name(),
+            ),
+            None => format!(
+                "  {:<12} undecided: {}",
+                effect.name(),
+                effect
+                    .undecided_reason()
+                    .unwrap_or("the decision table has no row for it"),
+            ),
+        })
+        .collect()
+}
+
 pub fn permission_lines() -> Vec<String> {
     let gate = PermissionGate::new();
     Capability::ALL
@@ -54,8 +81,8 @@ pub fn permission_lines() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{permission_lines, version_line};
-    use crate::contracts::permission::Capability;
+    use super::{effect_lines, permission_lines, version_line};
+    use crate::contracts::permission::{Capability, EffectClass};
 
     #[test]
     fn the_version_line_names_both_versions() {
@@ -80,6 +107,33 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("denied: generated-code-read-only"))
+        );
+    }
+
+    #[test]
+    fn every_external_effect_appears_once_with_its_decision_or_its_reason() {
+        let lines = effect_lines();
+
+        assert_eq!(lines.len(), EffectClass::ALL.len());
+        for (line, effect) in lines.iter().zip(EffectClass::ALL) {
+            assert!(line.contains(effect.name()), "{line}");
+            match effect.decided_by() {
+                Some(capability) => assert!(line.contains(capability.name()), "{line}"),
+                None => {
+                    assert!(line.contains("undecided"), "{line}");
+                    assert!(
+                        effect
+                            .undecided_reason()
+                            .is_some_and(|reason| line.contains(reason)),
+                        "the reason has to be the one the effect itself gives: {line}",
+                    );
+                }
+            }
+        }
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("no decision-table row"))
         );
     }
 }

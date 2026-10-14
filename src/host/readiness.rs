@@ -34,13 +34,15 @@ use rust_widgets::widget::runtime;
 use super::clipboard::{ClipboardHost, ClipboardRead, ClipboardWrite, NativeClipboard};
 use super::dialog::{DialogMode, DialogOutcome, DialogRequest, FileChooser, FrameChooser};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
-use super::paths::{HostDirectories, HostDirectory, SystemPaths};
+use super::paths::{HostDirectories, HostDirectory, ProjectRoot, SystemPaths};
+use super::permission::{PermissionService, Scope};
 use super::subprocess::{OwnedProcess, ProcessPresence, ProcessSpec, Termination, presence};
 use super::tasks::{
     CancelResult, CancellationReason, Executor, ExecutorConfig, JobControl, JobOutcome, OwnerId,
     SubmitError, SubmitRequest, TaskOutcome, TaskState,
 };
 use super::watch::{DirectoryWatch, WatchEvent};
+use crate::contracts::permission::{Capability as PermissionCapability, EffectClass, Principal};
 
 /// How long a check waits for the operating system to deliver a file event.
 const EVENT_DEADLINE: Duration = Duration::from_secs(5);
@@ -68,11 +70,14 @@ pub enum Capability {
     /// Process ownership: taking down a whole process tree this session started, and leaving a
     /// process started outside it alone.
     ProcessTrees,
+    /// Project trust: an untrusted project runs no code, and the authorization that lets an agent
+    /// run one can be withdrawn.
+    ProjectTrust,
 }
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::NativeFileDialog,
         Self::ChooserFrame,
         Self::Clipboard,
@@ -82,6 +87,7 @@ impl Capability {
         Self::DirectoryWatch,
         Self::BackgroundExecutor,
         Self::ProcessTrees,
+        Self::ProjectTrust,
     ];
 
     /// The name this capability is known by in the artifact.
@@ -96,6 +102,7 @@ impl Capability {
             Self::DirectoryWatch => "directory-watch",
             Self::BackgroundExecutor => "background-executor",
             Self::ProcessTrees => "process-trees",
+            Self::ProjectTrust => "project-trust",
         }
     }
 }
@@ -206,6 +213,7 @@ impl ReadinessReport {
         checks.push(check_watch());
         checks.push(check_executor());
         checks.push(check_process_trees());
+        checks.push(check_project_trust());
 
         Self {
             rustage_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1148,9 +1156,29 @@ fn check_process_trees() -> CapabilityCheck {
     };
     let foreign_pid = foreign.id();
 
+    // Starting a program is an external effect, so the check obtains a permit exactly as a caller
+    // would: the session scope, for the human who is running this host. A check that spawned
+    // without asking would be exercising a path no caller has.
+    let service = PermissionService::new();
+    let permit = match service.permit(EffectClass::Command, Scope::Session, Principal::Human) {
+        Ok(permit) => permit,
+        Err(refusal) => {
+            let _ = foreign.kill();
+            let _ = foreign.wait();
+            return CapabilityCheck::new(
+                Capability::ProcessTrees,
+                CheckStatus::Gap {
+                    reason: refusal.message(),
+                },
+                "the host's own session was refused a command permit",
+            );
+        }
+    };
+
     let mut owned = match OwnedProcess::spawn(
         ProcessSpec::new("readiness: a tree of its own", "sh")
             .args(["-c", "sleep 30 & echo $!; wait"]),
+        &permit,
     ) {
         Ok(process) => process,
         Err(error) => {
@@ -1193,6 +1221,7 @@ fn check_process_trees() -> CapabilityCheck {
     let mut parts = vec![
         format!("termination: {}", termination.message()),
         ownership,
+        permit.evidence(),
         format!(
             "a process started outside this session: {}",
             if foreign_alive {
@@ -1240,6 +1269,207 @@ fn check_process_trees() -> CapabilityCheck {
     }
     CapabilityCheck::new(
         Capability::ProcessTrees,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
+}
+
+/// Whether an untrusted project really runs no code, and whether the authorization that lets an
+/// agent run one can be withdrawn.
+///
+/// This is T01.05's acceptance line. It is exercised as a sequence, because either half alone is
+/// easy to fake: a host that refused everything would "pass" the first half, and a host that
+/// checked nothing would "pass" the second. The command writes a marker file, so "no code ran" is
+/// observed as an absent file rather than as a return value.
+fn check_project_trust() -> CapabilityCheck {
+    let project = match Scratch::new("trust") {
+        Ok(project) => project,
+        Err(reason) => {
+            return CapabilityCheck::new(
+                Capability::ProjectTrust,
+                CheckStatus::NotVerified { reason },
+                "no project directory could be created",
+            );
+        }
+    };
+    // A build script, so the trust prompt has a real finding to read rather than a constant.
+    if let Err(error) = std::fs::write(project.path().join("build.rs"), "fn main() {}\n") {
+        return CapabilityCheck::new(
+            Capability::ProjectTrust,
+            CheckStatus::NotVerified {
+                reason: format!("a build script could not be written: {error}"),
+            },
+            "no project to trust",
+        );
+    }
+    let root = match ProjectRoot::new(project.path()) {
+        Ok(root) => root,
+        Err(error) => {
+            return CapabilityCheck::new(
+                Capability::ProjectTrust,
+                CheckStatus::NotVerified {
+                    reason: error.to_string(),
+                },
+                "the project directory could not be resolved",
+            );
+        }
+    };
+
+    let service = PermissionService::new();
+    let prompt = service.prompt(&root);
+    let marker = project.path().join("ran");
+    let command = || {
+        ProcessSpec::new("readiness: a command in a project", "sh")
+            .args(["-c", "touch ran"])
+            .in_directory(project.path())
+    };
+
+    // 1. Untrusted: refused, and nothing runs.
+    let untrusted = service
+        .permit(
+            EffectClass::Command,
+            Scope::Project(&root),
+            Principal::Agent,
+        )
+        .is_err();
+    let ran_untrusted = marker.exists();
+
+    // 2. Trusted, with the execution scope authorized: permitted, and the command really runs.
+    service.trust(&root);
+    let trusted_but_unauthorized = service
+        .permit(
+            EffectClass::Command,
+            Scope::Project(&root),
+            Principal::Agent,
+        )
+        .is_err();
+    let authorized = service
+        .authorize(Scope::Project(&root), PermissionCapability::RunCargoCheck)
+        .is_ok();
+    let ran_after_authorizing = match service.permit(
+        EffectClass::Command,
+        Scope::Project(&root),
+        Principal::Agent,
+    ) {
+        Ok(permit) => match OwnedProcess::spawn(command(), &permit) {
+            Ok(mut process) => {
+                let exit = process.wait_for(Duration::from_secs(5));
+                matches!(exit, Some(exit) if exit.is_success())
+            }
+            Err(_) => false,
+        },
+        Err(_) => false,
+    } && marker.exists();
+
+    // 3. Authorization withdrawn: refused again, and a second command does not run either.
+    let _ = std::fs::remove_file(&marker);
+    service.revoke_authorization(Scope::Project(&root), PermissionCapability::RunCargoCheck);
+    let revoked_refusal = service
+        .permit(
+            EffectClass::Command,
+            Scope::Project(&root),
+            Principal::Agent,
+        )
+        .is_err();
+    let ran_after_revoking = marker.exists();
+
+    // 4. The record holds the whole sequence, so the decisions can be reviewed rather than trusted.
+    let record = service.record();
+    let kinds: Vec<&str> = record
+        .events()
+        .iter()
+        .map(|event| event.kind.name())
+        .collect();
+    let recorded = kinds
+        == vec![
+            "decided", "trusted", "decided", "granted", "decided", "revoked", "decided",
+        ];
+    // The record itself, not a summary of it: an artifact that says "7 entries" is a claim, and an
+    // artifact that prints them is evidence.
+    let entries: Vec<String> = record
+        .render_text()
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    let evidence = format!(
+        "an untrusted project: {} and {}; after trusting and authorizing the scope: {} and the \
+         command {}; after withdrawing the authorization: {} and {}; the prompt read the directory: \
+         {}; the record ({} entries, {} grants, {} denials): {}",
+        if untrusted { "refused" } else { "permitted" },
+        if ran_untrusted {
+            "it ran anyway"
+        } else {
+            "wrote no marker"
+        },
+        if trusted_but_unauthorized {
+            "trust alone was not authorization"
+        } else {
+            "trust opened the scope by itself"
+        },
+        if ran_after_authorizing {
+            "wrote the marker"
+        } else {
+            "did not write the marker"
+        },
+        if revoked_refusal {
+            "refused"
+        } else {
+            "permitted"
+        },
+        if ran_after_revoking {
+            "it ran anyway"
+        } else {
+            "wrote no second marker"
+        },
+        if prompt.runs_code_at_build_time() {
+            "yes, build.rs"
+        } else {
+            "no"
+        },
+        record.len(),
+        record.grants().len(),
+        record.denials(),
+        entries.join(" | "),
+    );
+
+    let mut missing = Vec::new();
+    if !untrusted {
+        missing.push("an untrusted project was permitted to run a command");
+    }
+    if ran_untrusted {
+        missing.push("code ran in an untrusted project");
+    }
+    if !trusted_but_unauthorized {
+        missing.push("trust alone opened the execution scope");
+    }
+    if !authorized {
+        missing.push("a trusted project could not have its execution scope authorized");
+    }
+    if !ran_after_authorizing {
+        missing.push("an authorized command did not run");
+    }
+    if !revoked_refusal {
+        missing.push("a withdrawn authorization still permitted the command");
+    }
+    if ran_after_revoking {
+        missing.push("code ran after the authorization was withdrawn");
+    }
+    if !prompt.runs_code_at_build_time() {
+        missing.push("the trust prompt did not find the build script in the directory");
+    }
+    if !recorded {
+        missing.push("the authorization record does not hold the whole sequence");
+    }
+
+    if missing.is_empty() {
+        return CapabilityCheck::new(Capability::ProjectTrust, CheckStatus::Ready, evidence);
+    }
+    CapabilityCheck::new(
+        Capability::ProjectTrust,
         CheckStatus::Gap {
             reason: missing.join("; "),
         },

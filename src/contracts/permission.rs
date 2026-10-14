@@ -90,6 +90,90 @@ impl Capability {
     }
 }
 
+/// A class of external effect a task can have, in the four categories roadmap T01.05 names:
+/// running a command, writing a file, reaching the network, and deploying.
+///
+/// [`Capability`] is the decision table of whitepaper §12.5; this is the *effect* a caller declares
+/// before the host will perform one, because a caller that cannot say what it is about to do cannot
+/// be authorized for it. [`EffectClass::decided_by`] is the whole point: an effect that maps to no
+/// capability has no decision behind it, and the host refuses it instead of inventing a grant.
+///
+/// The mapping of `Command` and `FileWrite` to §12.5 rows is a reading of that table and is written
+/// down here so it can be argued with:
+///
+/// * `Command` → [`Capability::RunCargoCheck`]. The row is named after `cargo check`, but its
+///   stated reason is "can run build scripts / proc macros or reach the network, and is not
+///   read-only; it must go through the host's task and permission gate". That reason is about
+///   *running a command*, with `cargo check` as its instance, so the class maps to it. Nothing in
+///   the table is about running commands in general, and inventing a second row for one would be a
+///   second copy of a security decision.
+/// * `FileWrite` → [`Capability::WriteFile`], whose grant is human-only.
+/// * `Network` → none. The table has no row for reaching the network; T01.09 owns network
+///   authorization and T02.11 owns "commands with side effects are authorized by their real
+///   effect". Until a row exists, an automatic network effect has no decision to refer to.
+/// * `Deploy` → none. Deployment is a deferred capability (`C-REMOTE`, roadmap §1.3 "future
+///   extension"), so there is no decision to refer to either.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum EffectClass {
+    /// Starting a program, which may run project code.
+    Command,
+    /// Writing a file.
+    FileWrite,
+    /// Reaching the network.
+    Network,
+    /// Deploying to a device, a container or a remote host.
+    Deploy,
+}
+
+impl EffectClass {
+    /// Every external effect a caller can declare.
+    pub const ALL: [Self; 4] = [Self::Command, Self::FileWrite, Self::Network, Self::Deploy];
+
+    /// The machine name, used by the host's authorization record and its reports.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::FileWrite => "file-write",
+            Self::Network => "network",
+            Self::Deploy => "deploy",
+        }
+    }
+
+    /// What the effect is, in words a trust prompt can show.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Command => "running a program",
+            Self::FileWrite => "writing a file",
+            Self::Network => "reaching the network",
+            Self::Deploy => "deploying to a device, a container or a remote host",
+        }
+    }
+
+    /// The §12.5 capability that decides this effect, when the table has one.
+    pub const fn decided_by(self) -> Option<Capability> {
+        match self {
+            Self::Command => Some(Capability::RunCargoCheck),
+            Self::FileWrite => Some(Capability::WriteFile),
+            Self::Network | Self::Deploy => None,
+        }
+    }
+
+    /// Why no capability decides this effect, in a line fit for a report. Set exactly when
+    /// [`Self::decided_by`] is `None`, so a caller cannot get an unexplained "no".
+    pub const fn undecided_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Command | Self::FileWrite => None,
+            Self::Network => Some(
+                "no decision-table row covers reaching the network; T01.09 owns network authorization",
+            ),
+            Self::Deploy => Some(
+                "deployment is a deferred capability (C-REMOTE), so no row covers it and nothing \
+                 authorizes it",
+            ),
+        }
+    }
+}
+
 /// How far the default grant lets an agent go on its own.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Grant {
@@ -315,7 +399,10 @@ impl PermissionGate {
 
 #[cfg(test)]
 mod tests {
-    use super::{Capability, Decision, DenialReason, Grant, PermissionGate, Principal, TrustState};
+    use super::{
+        Capability, Decision, DenialReason, EffectClass, Grant, PermissionGate, Principal,
+        TrustState,
+    };
 
     #[test]
     fn the_default_table_matches_the_whitepaper_rows() {
@@ -497,6 +584,56 @@ mod tests {
                 "{}",
                 capability.name()
             );
+        }
+    }
+
+    #[test]
+    fn the_effect_classes_named_by_the_roadmap_map_to_the_decisions_that_exist() {
+        assert_eq!(
+            EffectClass::Command.decided_by(),
+            Some(Capability::RunCargoCheck),
+        );
+        assert_eq!(
+            EffectClass::FileWrite.decided_by(),
+            Some(Capability::WriteFile),
+        );
+        assert_eq!(EffectClass::Network.decided_by(), None);
+        assert_eq!(EffectClass::Deploy.decided_by(), None);
+
+        for effect in EffectClass::ALL {
+            let name = effect.name();
+            assert!(
+                name.starts_with(|character: char| character.is_ascii_lowercase())
+                    && name
+                        .chars()
+                        .all(|character| character.is_ascii_lowercase() || character == '-'),
+                "{name} is not a machine name",
+            );
+        }
+    }
+
+    #[test]
+    fn every_external_effect_class_is_decided_or_explained() {
+        for effect in EffectClass::ALL {
+            match (effect.decided_by(), effect.undecided_reason()) {
+                (Some(capability), None) => assert!(
+                    Capability::ALL.contains(&capability),
+                    "{} maps to a capability that is not in the decision table",
+                    effect.name(),
+                ),
+                (None, Some(reason)) => assert!(
+                    reason.split_whitespace().count() >= 8,
+                    "{} refuses without saying enough about why",
+                    effect.name(),
+                ),
+                // Both are "an effect with no decision" or "an effect with a decision and a
+                // reason against it not having one"; either way the host could not say what
+                // happened, which is the state this test exists to make unreachable.
+                (Some(_), Some(_)) | (None, None) => panic!(
+                    "{} must be either decided by a capability or explained, not both or neither",
+                    effect.name(),
+                ),
+            }
         }
     }
 

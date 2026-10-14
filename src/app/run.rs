@@ -38,6 +38,10 @@ pub fn run(command: Command) {
             for line in crate::contracts::vocabulary::permission_lines() {
                 println!("{line}");
             }
+            println!("External effects, and what decides each of them:");
+            for line in crate::contracts::vocabulary::effect_lines() {
+                println!("{line}");
+            }
         }
         Command::Launch(options) => {
             let request = StartupRequest {

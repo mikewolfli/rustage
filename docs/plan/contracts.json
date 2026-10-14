@@ -253,6 +253,15 @@
       "test": "the_most_specific_span_wins_when_spans_nest",
       "evidence": "测试",
       "note": "未映射的节点与位置另有用例覆盖"
+    },
+    {
+      "id": "INV-EFFECT-DECIDED",
+      "statement": "每个外部效果类别要么由决策表的一行裁定，要么显式说明它没有决定",
+      "area": "C-PERMISSION",
+      "enforcedBy": "src/contracts/permission.rs",
+      "test": "every_external_effect_class_is_decided_or_explained",
+      "evidence": "测试",
+      "note": "命令与文件分别由 run-cargo-check 与 write-file 裁定，映射理由写在 EffectClass 的文档注释里；网络与部署返回未决定并给出原因，宿主因此拒绝，而不是发明一条授权"
     }
   ]
 }

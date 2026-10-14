@@ -33,6 +33,18 @@
 //! of showing a prefix as if it were the whole log. A build that prints a hundred megabytes must not
 //! be able to grow the host's memory with it.
 //!
+//! **Waiting for those readers is bounded too.** End-of-file comes when every copy of the pipe's
+//! write end is gone, and a process *outside* this session can hold a copy: a child forked while
+//! another thread is creating a pipe inherits its descriptors, the same race that makes `exec` fail
+//! with `ETXTBSY`. Waiting for such a copy is waiting for an unrelated process to end — once, that
+//! turned "the polite signal stopped it in 5ms" into "it stopped after 30s" and held the caller for
+//! the same 30 seconds. [`DRAIN_DEADLINE`] bounds the wait, a shortfall is logged, and the time a
+//! termination reports is measured on the process rather than on the host's own bookkeeping.
+//!
+//! **Starting a process requires a permit.** [`OwnedProcess::spawn`] takes an
+//! [`super::permission::ExecutionPermit`], which only the permission service can mint and only after
+//! a decision, so an untrusted project cannot run code by forgetting to check.
+//!
 //! **What this module is not.** It is not the build service (T16.x), not a PTY, not a terminal
 //! emulator and not a scheduler: it starts one process, reports what it did and takes its tree down.
 //! Attaching a subprocess to a task, a log panel and a project scope is T01.03's executor, T01.06's
@@ -44,12 +56,29 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::log::{Level, emit};
+use super::permission::ExecutionPermit;
+use crate::contracts::permission::EffectClass;
+
 /// How long a terminated process is given to stop on its own before it is killed.
 pub const DEFAULT_GRACE: Duration = Duration::from_secs(3);
+
+/// How long the readers of a process's streams are given to reach end-of-file after it ends.
+///
+/// End-of-file arrives as soon as every copy of the pipe's write end is gone, and the only copy the
+/// host can account for is the process it started. A *different* process can inherit a copy when a
+/// child is forked while another thread is creating a pipe — the same race that makes `exec` fail
+/// with `ETXTBSY` — and that copy is closed when that process ends, which may be much later or never.
+/// Waiting for it unbounded turned a "the polite signal stopped it in 5ms" report into "it stopped
+/// after 30s" and blocked the caller for the same 30s, so the wait is bounded and the shortfall is
+/// logged. Everything the process itself wrote is readable well within this bound: it is already in
+/// the kernel's buffer when the process ends.
+pub const DRAIN_DEADLINE: Duration = Duration::from_secs(1);
 
 /// How much of each stream is kept when the caller does not say.
 pub const DEFAULT_CAPTURE_LIMIT: usize = 256 * 1024;
@@ -163,6 +192,11 @@ pub enum SpawnError {
         /// The OS's own reason.
         reason: String,
     },
+    /// The permit presented is for a different kind of effect than starting a program.
+    PermitForAnotherEffect {
+        /// The effect the permit was actually minted for.
+        effect: EffectClass,
+    },
 }
 
 impl SpawnError {
@@ -176,6 +210,10 @@ impl SpawnError {
             Self::WorkingDirectory { directory, reason } => format!(
                 "{} could not be used as the working directory: {reason}",
                 directory.display(),
+            ),
+            Self::PermitForAnotherEffect { effect } => format!(
+                "the permit is for {}, and starting a program is a command",
+                effect.name(),
             ),
         }
     }
@@ -377,14 +415,23 @@ pub struct OwnedProcess {
     started: Instant,
     captured: Arc<Mutex<Capture>>,
     readers: Vec<JoinHandle<()>>,
+    /// One message per reader that reached end-of-file, so waiting for them can be bounded.
+    drained: Receiver<()>,
 }
 
 impl OwnedProcess {
     /// Starts a process, capturing both of its streams.
     ///
     /// The child leads a process group of its own, so terminating it cannot reach anything this
-    /// session did not start.
-    pub fn spawn(spec: ProcessSpec) -> Result<Self, SpawnError> {
+    /// session did not start. It also cannot start without `permit`: the host's permission service
+    /// mints one only after a decision, and an untrusted project never gets one, so "an untrusted
+    /// project runs no code" is a property of the type rather than of a caller's care.
+    pub fn spawn(spec: ProcessSpec, permit: &ExecutionPermit) -> Result<Self, SpawnError> {
+        if permit.effect() != EffectClass::Command {
+            return Err(SpawnError::PermitForAnotherEffect {
+                effect: permit.effect(),
+            });
+        }
         if spec.program.as_os_str().is_empty() {
             return Err(SpawnError::NoProgram);
         }
@@ -418,13 +465,25 @@ impl OwnedProcess {
         })?;
         let pid = child.id();
         let captured = Arc::new(Mutex::new(Capture::new(spec.capture_limit)));
+        let (drained_tx, drained) = mpsc::channel();
         let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {
-            readers.push(read_into(captured.clone(), Stream::Stdout, stdout));
+            readers.push(read_into(
+                captured.clone(),
+                Stream::Stdout,
+                stdout,
+                drained_tx.clone(),
+            ));
         }
         if let Some(stderr) = child.stderr.take() {
-            readers.push(read_into(captured.clone(), Stream::Stderr, stderr));
+            readers.push(read_into(
+                captured.clone(),
+                Stream::Stderr,
+                stderr,
+                drained_tx.clone(),
+            ));
         }
+        drop(drained_tx);
 
         Ok(Self {
             id: ProcessId(NEXT_PROCESS.fetch_add(1, Ordering::Relaxed)),
@@ -435,6 +494,7 @@ impl OwnedProcess {
             started: Instant::now(),
             captured,
             readers,
+            drained,
         })
     }
 
@@ -478,16 +538,24 @@ impl OwnedProcess {
 
     /// Waits for it to end on its own and returns how it ended.
     pub fn wait(&mut self) -> ExitInfo {
-        let exit = match self.child.wait() {
+        let exit = self.reap();
+        self.drain_readers();
+        exit
+    }
+
+    /// Waits for the direct child to end, without draining its streams.
+    ///
+    /// Split out so a caller that reports how long something took can measure the process and not
+    /// its own bookkeeping; see [`DRAIN_DEADLINE`].
+    fn reap(&mut self) -> ExitInfo {
+        match self.child.wait() {
             Ok(status) => ExitInfo::from_status(&status),
             Err(error) => ExitInfo {
                 code: None,
                 signal: None,
             }
             .with_note(error.to_string()),
-        };
-        self.reap_readers();
-        exit
+        }
     }
 
     /// Waits up to `limit` for it to end, returning `None` if it is still running.
@@ -496,7 +564,7 @@ impl OwnedProcess {
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
-                    self.reap_readers();
+                    self.drain_readers();
                     return Some(ExitInfo::from_status(&status));
                 }
                 Ok(None) => {
@@ -515,7 +583,7 @@ impl OwnedProcess {
     /// The caller gets which of those happened, so "we asked" and "it stopped" never merge.
     pub fn terminate(&mut self, grace: Duration) -> Termination {
         if let Ok(Some(status)) = self.child.try_wait() {
-            self.reap_readers();
+            self.drain_readers();
             return Termination::AlreadyExited {
                 exit: ExitInfo::from_status(&status),
             };
@@ -549,10 +617,14 @@ impl OwnedProcess {
             loop {
                 match self.child.try_wait() {
                     Ok(Some(status)) => {
-                        self.reap_readers();
+                        // Measured before the streams are drained: "how long did the polite signal
+                        // take" is a fact about the process, and draining is the host's own work
+                        // (which can be delayed by a pipe another process inherited).
+                        let after = began.elapsed();
+                        self.drain_readers();
                         return Termination::Stopped {
                             exit: ExitInfo::from_status(&status),
-                            after: began.elapsed(),
+                            after,
                         };
                     }
                     Ok(None) if Instant::now() < deadline => {
@@ -574,11 +646,12 @@ impl OwnedProcess {
                     reason: error.to_string(),
                 };
             }
-            let exit = self.wait();
-            Termination::Killed {
-                exit,
-                after: began.elapsed(),
-            }
+            let exit = self.reap();
+            // The kill-to-reaped time, before the streams are drained: the same reason the polite
+            // path measures before draining.
+            let after = began.elapsed();
+            self.drain_readers();
+            Termination::Killed { exit, after }
         }
         #[cfg(not(unix))]
         {
@@ -629,7 +702,34 @@ impl OwnedProcess {
         }
     }
 
-    fn reap_readers(&mut self) {
+    /// Waits for the readers to reach end-of-file, for a bounded time.
+    ///
+    /// Bounded because end-of-file is not in this host's control: a descriptor inherited by an
+    /// unrelated process keeps the pipe open, and joining without a limit would hang the caller for
+    /// as long as that process lives (see [`DRAIN_DEADLINE`]).
+    fn drain_readers(&mut self) {
+        let expected = self.readers.len();
+        if expected == 0 {
+            return;
+        }
+        let finished = wait_for_readers(&self.drained, expected, Instant::now() + DRAIN_DEADLINE);
+        if finished < expected {
+            emit(
+                Level::Warn,
+                "host::subprocess",
+                &format!(
+                    "{} of {expected} stream readers for {} did not reach end-of-file within \
+                     {DRAIN_DEADLINE:?} of the process ending; they are left to finish on their own \
+                     rather than blocking the caller",
+                    expected - finished,
+                    self.label,
+                ),
+            );
+            // Dropping a handle detaches the thread, so the caller is not held by a pipe that a
+            // process outside this session inherited.
+            self.readers.clear();
+            return;
+        }
         for reader in self.readers.drain(..) {
             let _ = reader.join();
         }
@@ -659,7 +759,7 @@ impl Drop for OwnedProcess {
         // Dropping does not kill: a caller that stops caring about a process has not asked for it to
         // die, and a silent kill on drop would make "the process is still running" impossible to
         // report. The reader threads are collected so they cannot outlive the process handle.
-        self.reap_readers();
+        self.drain_readers();
     }
 }
 
@@ -762,17 +862,41 @@ fn read_into<R: Read + Send + 'static>(
     captured: Arc<Mutex<Capture>>,
     stream: Stream,
     mut source: R,
+    drained: mpsc::Sender<()>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0u8; 4096];
         loop {
             match source.read(&mut buffer) {
-                Ok(0) => return,
+                Ok(0) => break,
                 Ok(read) => capture(&captured).push(stream, &buffer[..read]),
-                Err(_) => return,
+                Err(_) => break,
             }
         }
+        // Sent whether the stream ended or errored: the host's question is "has this reader
+        // stopped reading", and a reader that gave up has.
+        let _ = drained.send(());
     })
+}
+
+/// Waits for `expected` readers to report that they stopped, until `deadline`.
+///
+/// Returns how many reported. A caller compares that with `expected` rather than assuming: the
+/// whole reason this is bounded is that the last reader may never report.
+fn wait_for_readers(drained: &Receiver<()>, expected: usize, deadline: Instant) -> usize {
+    let mut finished = 0;
+    while finished < expected {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        match drained.recv_timeout(remaining) {
+            Ok(()) => finished += 1,
+            // Out of time, or every sender is gone without having reported — a reader that panicked
+            // is the only way the second one happens. Neither arrives later, so stop waiting.
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    finished
 }
 
 /// Gives the child a process group of its own, where the platform has the notion.
@@ -846,6 +970,8 @@ mod tests {
         DEFAULT_GRACE, ExitInfo, OwnedProcess, ProcessPresence, ProcessSpec, SESSION_ENVIRONMENT,
         SpawnError, Termination, presence, session_marker,
     };
+    use crate::contracts::permission::{EffectClass, Principal};
+    use crate::host::permission::{ExecutionPermit, PermissionService, Scope};
     use crate::host::tasks::{
         CancelResult, Executor, ExecutorConfig, JobControl, JobOutcome, OwnerId, SubmitRequest,
         TaskOutcome,
@@ -857,6 +983,34 @@ mod tests {
     /// spawns a child without depending on any tool being installed.
     fn shell(label: &str, script: &str) -> ProcessSpec {
         ProcessSpec::new(label, "sh").args(["-c", script])
+    }
+
+    /// The permit every start in these tests goes through.
+    ///
+    /// Not a bypass: it is the same decision a caller gets, for the session scope, and a test that
+    /// needed a different decision would fail here rather than quietly start a process.
+    fn command_permit() -> ExecutionPermit {
+        PermissionService::new()
+            .permit(EffectClass::Command, Scope::Session, Principal::Human)
+            .expect("the host's own session may run a command")
+    }
+
+    #[test]
+    fn a_permit_for_another_effect_cannot_start_a_program() {
+        let permit = PermissionService::new()
+            .permit(EffectClass::FileWrite, Scope::Session, Principal::Human)
+            .expect("a human may write a file");
+
+        let error = OwnedProcess::spawn(shell("wrong-permit", "exit 0"), &permit)
+            .expect_err("a file-write permit does not authorize a command");
+
+        assert_eq!(
+            error,
+            SpawnError::PermitForAnotherEffect {
+                effect: EffectClass::FileWrite
+            },
+        );
+        assert!(error.message().contains("file-write"));
     }
 
     /// Waits for a pid to disappear, returning what was last seen.
@@ -872,9 +1026,66 @@ mod tests {
     }
 
     #[test]
+    fn waiting_for_readers_stops_at_its_deadline() {
+        let (tx, rx) = mpsc::channel::<()>();
+        let slow = tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(2));
+            let _ = slow.send(());
+        });
+        tx.send(()).expect("the receiver is alive");
+
+        let began = Instant::now();
+        let finished = super::wait_for_readers(&rx, 2, began + Duration::from_millis(50));
+        let took = began.elapsed();
+
+        assert_eq!(
+            finished, 1,
+            "the reader that is still blocked must not be counted",
+        );
+        assert!(
+            took < Duration::from_secs(1),
+            "the wait has to end at its deadline, not when the reader does: {took:?}",
+        );
+    }
+
+    #[test]
+    fn waiting_for_readers_counts_them_all_when_they_finish() {
+        let (tx, rx) = mpsc::channel::<()>();
+        for _ in 0..2 {
+            let sender = tx.clone();
+            std::thread::spawn(move || {
+                let _ = sender.send(());
+            });
+        }
+        drop(tx);
+
+        let finished = super::wait_for_readers(&rx, 2, Instant::now() + Duration::from_secs(5));
+
+        assert_eq!(finished, 2);
+    }
+
+    #[test]
+    fn a_reader_that_never_reports_is_not_counted_as_finished() {
+        // Every sender gone without a message is what a panicking reader looks like. The wait has to
+        // end then too, rather than sitting out the whole deadline.
+        let (tx, rx) = mpsc::channel::<()>();
+        drop(tx);
+
+        let began = Instant::now();
+        let finished = super::wait_for_readers(&rx, 2, began + Duration::from_secs(5));
+
+        assert_eq!(finished, 0);
+        assert!(began.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
     fn a_finished_process_reports_its_exit_code_and_both_streams() {
-        let mut process = OwnedProcess::spawn(shell("prints", "echo out; echo err >&2; exit 5"))
-            .expect("the shell starts");
+        let mut process = OwnedProcess::spawn(
+            shell("prints", "echo out; echo err >&2; exit 5"),
+            &command_permit(),
+        )
+        .expect("the shell starts");
 
         let exit = process.wait();
         let outcome = process.outcome(exit);
@@ -893,7 +1104,8 @@ mod tests {
 
     #[test]
     fn a_process_that_has_already_ended_is_reported_as_gone_not_terminated() {
-        let mut process = OwnedProcess::spawn(shell("quick", "exit 0")).expect("the shell starts");
+        let mut process = OwnedProcess::spawn(shell("quick", "exit 0"), &command_permit())
+            .expect("the shell starts");
         let _ = process.wait();
 
         let termination = process.terminate(Duration::from_secs(1));
@@ -908,8 +1120,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_cooperative_process_stops_after_the_polite_signal() {
-        let mut process =
-            OwnedProcess::spawn(shell("waits", "sleep 30")).expect("the shell starts");
+        let mut process = OwnedProcess::spawn(shell("waits", "sleep 30"), &command_permit())
+            .expect("the shell starts");
 
         let termination = process.terminate(Duration::from_secs(5));
 
@@ -930,10 +1142,13 @@ mod tests {
         // trap is installed, because a `SIGTERM` that arrives *before* a program has installed its
         // handler kills it — which is correct behaviour, not something to assert about here, and
         // racing it made this test flaky at first.
-        let mut process = OwnedProcess::spawn(shell(
-            "stubborn",
-            "trap '' TERM; echo ready; while true; do sleep 0.2; done",
-        ))
+        let mut process = OwnedProcess::spawn(
+            shell(
+                "stubborn",
+                "trap '' TERM; echo ready; while true; do sleep 0.2; done",
+            ),
+            &command_permit(),
+        )
         .expect("starts");
         let deadline = Instant::now() + Duration::from_secs(5);
         while !process.output_so_far().stdout.contains("ready") {
@@ -961,9 +1176,11 @@ mod tests {
 
     #[test]
     fn the_child_can_see_which_session_started_it() {
-        let mut process =
-            OwnedProcess::spawn(shell("marker", &format!("echo ${SESSION_ENVIRONMENT}")))
-                .expect("the shell starts");
+        let mut process = OwnedProcess::spawn(
+            shell("marker", &format!("echo ${SESSION_ENVIRONMENT}")),
+            &command_permit(),
+        )
+        .expect("the shell starts");
 
         let exit = process.wait();
         let outcome = process.outcome(exit);
@@ -985,7 +1202,8 @@ mod tests {
             .expect("the unrelated process starts");
         let foreign_pid = foreign.id();
 
-        let mut owned = OwnedProcess::spawn(shell("ours", "sleep 30")).expect("ours starts");
+        let mut owned =
+            OwnedProcess::spawn(shell("ours", "sleep 30"), &command_permit()).expect("ours starts");
         let owned_pid = owned.pid();
         let termination = owned.terminate(Duration::from_secs(5));
 
@@ -1009,8 +1227,9 @@ mod tests {
     fn a_descendant_inside_the_group_is_taken_down_with_its_parent() {
         // A build script's children are the reason cleanup targets a group: the direct child is not
         // the process that keeps a compiler running.
-        let mut process = OwnedProcess::spawn(shell("tree", "sleep 30 & echo $!; wait"))
-            .expect("the shell starts");
+        let mut process =
+            OwnedProcess::spawn(shell("tree", "sleep 30 & echo $!; wait"), &command_permit())
+                .expect("the shell starts");
 
         let grandchild = {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -1040,8 +1259,11 @@ mod tests {
 
     #[test]
     fn a_program_that_is_not_there_is_reported_rather_than_panicking() {
-        let error = OwnedProcess::spawn(ProcessSpec::new("missing", "/nonexistent/rustage-tool"))
-            .expect_err("the program is not there");
+        let error = OwnedProcess::spawn(
+            ProcessSpec::new("missing", "/nonexistent/rustage-tool"),
+            &command_permit(),
+        )
+        .expect_err("the program is not there");
 
         match &error {
             SpawnError::Unavailable { program, reason } => {
@@ -1057,6 +1279,7 @@ mod tests {
     fn a_working_directory_that_is_not_there_is_refused_before_anything_starts() {
         let error = OwnedProcess::spawn(
             shell("nowhere", "exit 0").in_directory("/nonexistent/rustage-directory"),
+            &command_permit(),
         )
         .expect_err("the directory is not there");
 
@@ -1065,7 +1288,8 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(
-            OwnedProcess::spawn(ProcessSpec::new("empty", "")).expect_err("no program"),
+            OwnedProcess::spawn(ProcessSpec::new("empty", ""), &command_permit())
+                .expect_err("no program"),
             SpawnError::NoProgram,
         );
     }
@@ -1074,6 +1298,7 @@ mod tests {
     fn output_beyond_the_capture_limit_is_dropped_and_the_amount_is_reported() {
         let mut process = OwnedProcess::spawn(
             shell("noisy", "head -c 4000 /dev/zero | tr '\\0' 'x'").capture_limit(64),
+            &command_permit(),
         )
         .expect("the shell starts");
 
@@ -1100,7 +1325,8 @@ mod tests {
 
     #[test]
     fn a_process_still_running_reports_no_exit_within_the_limit() {
-        let mut process = OwnedProcess::spawn(shell("slow", "sleep 30")).expect("the shell starts");
+        let mut process = OwnedProcess::spawn(shell("slow", "sleep 30"), &command_permit())
+            .expect("the shell starts");
 
         assert!(process.wait_for(Duration::from_millis(50)).is_none());
         assert!(process.is_running());
@@ -1112,8 +1338,10 @@ mod tests {
 
     #[test]
     fn two_processes_get_different_ids_and_groups_of_their_own() {
-        let first = OwnedProcess::spawn(shell("first", "sleep 1")).expect("starts");
-        let second = OwnedProcess::spawn(shell("second", "sleep 1")).expect("starts");
+        let first =
+            OwnedProcess::spawn(shell("first", "sleep 1"), &command_permit()).expect("starts");
+        let second =
+            OwnedProcess::spawn(shell("second", "sleep 1"), &command_permit()).expect("starts");
 
         assert_ne!(first.id(), second.id());
         assert_eq!(
@@ -1137,10 +1365,11 @@ mod tests {
             .submit(
                 SubmitRequest::new(OwnerId::new(), "a cancellable long job"),
                 move |control: JobControl| {
-                    let mut child = match OwnedProcess::spawn(shell("owned", "sleep 30")) {
-                        Ok(child) => child,
-                        Err(error) => return JobOutcome::failed(error.message()),
-                    };
+                    let mut child =
+                        match OwnedProcess::spawn(shell("owned", "sleep 30"), &command_permit()) {
+                            Ok(child) => child,
+                            Err(error) => return JobOutcome::failed(error.message()),
+                        };
                     let _ = pid_tx.send(child.pid());
                     // A real build polls both: the process, and the request to stop it.
                     loop {

@@ -49,10 +49,12 @@ order they are being closed in. It is a work list, not a statement of implemente
   what is still not verified (a window, interaction states, RTL).
 - [Host platform services, the painted chooser handoff and the host readiness report](log/log-20261014-1.md):
   the five services T01.02 asks for (file dialogs, the clipboard, system paths, URL opening and file
-  events), the environment this round's evidence came from — a Linux preview/stub backend, not the
-  macOS session the previous record measured — the three pre-existing problems found before starting
-  and how each was repaired, the upstream gaps the round found and recorded, and every check
-  `--probe-host` performs together with what it still cannot verify.
+  events), the background executor T01.03 asks for, the owned subprocesses and directed tree cleanup
+  T01.04 asks for, and project trust, permissions and the authorization record T01.05 asks for; the
+  environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
+  the previous record measured — the pre-existing problems found before starting and how each was
+  repaired, the defects the round's own tests turned up, the upstream gaps the round found and
+  recorded, and every check `--probe-host` performs together with what it still cannot verify.
 - [Dependency contract probes, a pinned toolchain, the editor surface, the support matrix, the decision register, the shared contracts, the journey walkthrough and the benchmark environment](log/log-20261013-4.md):
   the fixed Rust toolchain, the re-checked dependency policy, runnable probes over the layout,
   generation, event, unbind and text-editor APIs, the revision the report is pinned to, the one

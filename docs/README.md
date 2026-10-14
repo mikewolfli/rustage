@@ -51,7 +51,8 @@ order they are being closed in. It is a work list, not a statement of implemente
   the five services T01.02 asks for (file dialogs, the clipboard, system paths, URL opening and file
   events), the background executor T01.03 asks for, the owned subprocesses and directed tree cleanup
   T01.04 asks for, project trust, permissions and the authorization record T01.05 asks for, and the
-  notification centre T01.06 asks for; the
+  notification centre T01.06 asks for, and the project registry with its shutdown order T01.07 asks
+  for; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

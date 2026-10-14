@@ -24,6 +24,7 @@
 //! | Subprocesses | [`subprocess`] | starting a process, capturing its output, and taking down only the group this session created |
 //! | Permissions | [`permission`] | project trust, the one gate that decides what may run, the permits that gate mints, and the record of every decision |
 //! | Notifications | [`notify`] | the actionable half of a failure: its cause, its next step, the link to what it is about, and the de-duplication that keeps a repeat from prompting twice |
+//! | Service registry | [`registry`] | one scope per open project, the order a close takes, and the guarantee that a failed start changes nothing |
 //! | Readiness | [`readiness`] | what those services can actually do in this environment, with the evidence |
 //!
 //! Each service is its own module rather than another `platform` file, and each is behind a small
@@ -37,12 +38,16 @@
 //! claiming anything, and reports a refusal — not a success — when the backend is not interactive.
 //! That is the point of T01.01's acceptance line "no placeholder success".
 //!
-//! Nothing here is a service registry yet, and this module deliberately has no `Service` trait: the
-//! registry that gives every service, including [`tasks::Executor`] and the processes
-//! [`subprocess`] starts, a project scope arrives in T01.07. Inventing that shape now would fix a
-//! boundary before the tasks that need it exist. What T01.05 did add is the direction of that
-//! dependency: [`permission::PermissionService`] decides, and [`subprocess::OwnedProcess::spawn`]
-//! requires a permit from it, so no service can perform an external effect without asking.
+//! **The registry is [`registry::ServiceRegistry`]**, and it deliberately has no `Service` trait: a
+//! service is a value with a lifetime the registry owns, not an object with four methods every type
+//! has to grow. A scope holds the executor its tasks run on, the processes it started, and the
+//! handles to the shared permission service and notification centre; closing it takes those down in
+//! a fixed, reported order and invalidates the handles it handed out.
+//!
+//! The direction of the dependencies is the part worth keeping: [`permission::PermissionService`]
+//! decides, [`subprocess::OwnedProcess::spawn`] requires a permit from it, and
+//! [`registry::ProjectServices::spawn`] is the only route that mints one for a project — so a
+//! project's own trust and authorization are what decide whether its code runs.
 
 // Parts of this surface have no runtime producer yet, and the reason is worth writing down rather
 // than hiding: the error variants for a failed init or loop are produced by platform adapters that
@@ -63,6 +68,7 @@ pub mod paths;
 pub mod permission;
 pub mod platform;
 pub mod readiness;
+pub mod registry;
 pub mod startup;
 pub mod subprocess;
 pub mod tasks;

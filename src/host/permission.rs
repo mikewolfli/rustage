@@ -365,6 +365,15 @@ pub enum AuthorizationEventKind {
         /// The approvals and authorizations that were in force and are now gone.
         withdrawn: Vec<Capability>,
     },
+    /// The project was closed, so this session's decisions about it are forgotten.
+    ///
+    /// Recorded separately from [`Self::Distrusted`] because the two are different facts: one is a
+    /// person taking trust away, the other is a session ending. A reader has to be able to tell them
+    /// apart, and a reopened project must not inherit grants given for the previous open.
+    Closed {
+        /// The approvals and authorizations the close withdrew.
+        withdrawn: Vec<Capability>,
+    },
     /// An approval or an execution authorization was recorded.
     Granted {
         /// What was granted.
@@ -394,6 +403,7 @@ impl AuthorizationEventKind {
         match self {
             Self::Trusted { .. } => "trusted",
             Self::Distrusted { .. } => "distrusted",
+            Self::Closed { .. } => "closed",
             Self::Granted { .. } => "granted",
             Self::Revoked { .. } => "revoked",
             Self::Decided { .. } => "decided",
@@ -427,6 +437,20 @@ impl AuthorizationEvent {
                 } else {
                     format!(
                         "withdrew {}",
+                        withdrawn
+                            .iter()
+                            .map(|capability| capability.name())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )
+                }
+            }
+            AuthorizationEventKind::Closed { withdrawn } => {
+                if withdrawn.is_empty() {
+                    "nothing was granted under it".to_owned()
+                } else {
+                    format!(
+                        "forgot {}",
                         withdrawn
                             .iter()
                             .map(|capability| capability.name())
@@ -655,6 +679,41 @@ impl PermissionService {
                             .join(", "),
                     )
                 },
+            ),
+        );
+        withdrawn
+    }
+
+    /// Forgets everything decided about a project, because the project was closed.
+    ///
+    /// Separate from [`Self::distrust`] on purpose: nobody withdrew trust here — the session that
+    /// held it ended — and the record has to say which of the two happened. A reopened project must
+    /// not inherit grants that were given for the previous open, which is what T02.03's trust prompt
+    /// promises when it asks again.
+    pub fn close_scope(&self, root: &ProjectRoot) -> Vec<Capability> {
+        let at = self.clock.elapsed_millis();
+        let mut state = lock(&self.state);
+        let withdrawn = state
+            .projects
+            .remove(root.as_path())
+            .map(|entry| granted_under(&entry.gate))
+            .unwrap_or_default();
+        record(
+            &mut state,
+            at,
+            Scope::Project(root).label(),
+            Principal::Human,
+            AuthorizationEventKind::Closed {
+                withdrawn: withdrawn.clone(),
+            },
+        );
+        emit(
+            Level::Info,
+            "host::permission",
+            &format!(
+                "closed {}; {} grant(s) went with it",
+                root.as_path().display(),
+                withdrawn.len(),
             ),
         );
         withdrawn

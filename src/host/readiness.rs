@@ -37,6 +37,7 @@ use super::notify::{Cause, NotificationCentre, Severity};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
 use super::paths::{HostDirectories, HostDirectory, ProjectRoot, SystemPaths};
 use super::permission::{PermissionService, Scope};
+use super::registry::{ScopeRefusal, ServiceRegistry};
 use super::subprocess::{OwnedProcess, ProcessPresence, ProcessSpec, Termination, presence};
 use super::tasks::{
     CancelResult, CancellationReason, Executor, ExecutorConfig, JobControl, JobOutcome, OwnerId,
@@ -77,11 +78,14 @@ pub enum Capability {
     /// The notification centre: a real failure reaches it with a cause, a next step and a link, and
     /// a repeat of the same failure counts instead of prompting again.
     Notifications,
+    /// Project scope: two open projects cannot reach each other's work, and closing one leaves
+    /// nothing of it running.
+    ProjectScope,
 }
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::NativeFileDialog,
         Self::ChooserFrame,
         Self::Clipboard,
@@ -93,6 +97,7 @@ impl Capability {
         Self::ProcessTrees,
         Self::ProjectTrust,
         Self::Notifications,
+        Self::ProjectScope,
     ];
 
     /// The name this capability is known by in the artifact.
@@ -109,6 +114,7 @@ impl Capability {
             Self::ProcessTrees => "process-trees",
             Self::ProjectTrust => "project-trust",
             Self::Notifications => "notifications",
+            Self::ProjectScope => "project-scope",
         }
     }
 }
@@ -221,6 +227,7 @@ impl ReadinessReport {
         checks.push(check_process_trees());
         checks.push(check_project_trust());
         checks.push(check_notifications());
+        checks.push(check_project_scope());
 
         Self {
             rustage_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1695,6 +1702,201 @@ fn check_notifications() -> CapabilityCheck {
     }
     CapabilityCheck::new(
         Capability::Notifications,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
+}
+
+/// Whether two open projects stay out of each other's way, and whether closing one leaves nothing.
+///
+/// This is T01.07's acceptance line — "closing leaves no hanging service and no state leaking
+/// between projects". The two projects are real directories, the processes are real processes, and
+/// the task is run by the scope's own executor, so the isolation being checked is the isolation the
+/// host will really have rather than a description of it.
+fn check_project_scope() -> CapabilityCheck {
+    let registry = ServiceRegistry::new();
+    let (first, second) = match (Scratch::new("scope-a"), Scratch::new("scope-b")) {
+        (Ok(first), Ok(second)) => (first, second),
+        (Err(reason), _) | (_, Err(reason)) => {
+            return CapabilityCheck::new(
+                Capability::ProjectScope,
+                CheckStatus::NotVerified { reason },
+                "no project directories could be created",
+            );
+        }
+    };
+    let (a, b) = match (registry.open(first.path()), registry.open(second.path())) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(failure), _) | (_, Err(failure)) => {
+            return CapabilityCheck::new(
+                Capability::ProjectScope,
+                CheckStatus::Gap {
+                    reason: failure.message(),
+                },
+                "a project could not be opened",
+            );
+        }
+    };
+
+    // 1. Before anything is trusted: an agent's command in A is refused, and the refusal is reported.
+    let refused = a
+        .spawn(
+            ProcessSpec::new("readiness: refused before trust", "sh").args(["-c", "sleep 30"]),
+            Principal::Agent,
+        )
+        .is_err();
+
+    // 2. Both projects trust themselves and start one process each.
+    a.trust();
+    b.trust();
+    let a_process = a
+        .spawn(
+            ProcessSpec::new("readiness: A's process", "sh").args(["-c", "sleep 30"]),
+            Principal::Human,
+        )
+        .ok();
+    let b_process = b
+        .spawn(
+            ProcessSpec::new("readiness: B's process", "sh").args(["-c", "sleep 30"]),
+            Principal::Human,
+        )
+        .ok();
+
+    // 3. A task in A, run by A's own executor.
+    let a_task = a
+        .submit("readiness: a task in A", |_control: JobControl| {
+            JobOutcome::Succeeded
+        })
+        .ok()
+        .and_then(|id| a.executor().wait(id, Duration::from_secs(5)))
+        .is_some_and(|record| record.is_final());
+
+    // 4. Close A. Nothing of A may be left running, and B may not notice.
+    let close = registry.close(first.path());
+    let (a_owner, order, stopped, withdrawn, close_notifications, clean) = match &close {
+        Ok(report) => (
+            report.scope.owner(),
+            report.order.clone(),
+            report.processes.stopped.len(),
+            report.withdrawn.clone(),
+            report.notifications,
+            report.is_clean(),
+        ),
+        Err(failure) => {
+            return CapabilityCheck::new(
+                Capability::ProjectScope,
+                CheckStatus::Gap {
+                    reason: failure.message(),
+                },
+                "closing a project failed outright",
+            );
+        }
+    };
+    let a_pid = a_process.as_ref().map(|handle| handle.pid());
+    let b_pid = b_process.as_ref().map(|handle| handle.pid());
+    let a_gone = a_pid
+        .map(|pid| wait_for_presence(pid, Duration::from_secs(3)) == ProcessPresence::Gone)
+        .unwrap_or(false);
+    let b_alive = b_pid
+        .map(|pid| presence(pid) == ProcessPresence::Running)
+        .unwrap_or(false);
+    let handle_refuses = matches!(
+        a.submit("readiness: too late", |_control: JobControl| {
+            JobOutcome::Succeeded
+        }),
+        Err(ScopeRefusal::Closed { .. })
+    );
+    let a_forgotten = registry.services(first.path()).is_none();
+    let b_untouched = registry.services(second.path()).is_some()
+        && b.tasks().iter().all(|record| record.owner != a_owner)
+        && !b.is_closed();
+    let b_kept_its_trust = b.is_trusted();
+    let refusal_reported = registry
+        .notifications()
+        .notifications()
+        .iter()
+        .any(|notification| notification.link().kind() == "permission");
+
+    // 5. Close B, so the probe does not leave a process of its own behind either.
+    let b_close = registry.close(second.path()).ok();
+    let b_gone = b_pid
+        .map(|pid| wait_for_presence(pid, Duration::from_secs(3)) == ProcessPresence::Gone)
+        .unwrap_or(false);
+
+    let evidence = format!(
+        "two projects opened with their own owners ({}, {}); a command in the untrusted one was \
+         refused and reported to the centre: {refusal_reported}; one process started in each; A's \
+         task finished in A's executor: {a_task}; closing A: {stopped} process(es) stopped, \
+         withdrawn {withdrawn:?}, {close_notifications} notification(s), order {}, clean: {clean}; \
+         A's handle refused new work: {handle_refuses}; A forgotten by the registry: {a_forgotten}; \
+         A's process gone: {a_gone}; B's process still running: {b_alive}; B untouched: {b_untouched}; \
+         B kept its own trust: {b_kept_its_trust}; closing B left nothing: {} and its process is \
+         gone: {b_gone}",
+        a.scope().owner().value(),
+        b.scope().owner().value(),
+        order.join(" -> "),
+        b_close
+            .as_ref()
+            .is_some_and(super::registry::CloseReport::is_clean),
+    );
+
+    let mut missing = Vec::new();
+    if !refused {
+        missing.push("an untrusted project was allowed to start an agent's command");
+    }
+    if !refusal_reported {
+        missing.push("the refusal did not reach the notification centre");
+    }
+    if a_process.is_none() || b_process.is_none() {
+        missing.push("a trusted project could not start a process");
+    }
+    if !a_task {
+        missing.push("a task submitted in its own scope did not finish");
+    }
+    if !clean {
+        missing.push("closing a project left something running");
+    }
+    if stopped != 1 {
+        missing.push("the closed project's process was not accounted for");
+    }
+    if order != crate::host::registry::CLOSE_ORDER.to_vec() {
+        missing.push("the close did not report the order it took");
+    }
+    if !handle_refuses {
+        missing.push("a handle to a closed project still accepted work");
+    }
+    if !a_forgotten {
+        missing.push("the closed project was still in the registry");
+    }
+    if !a_gone {
+        missing.push("a process outlived the project it was started for");
+    }
+    if !b_alive {
+        missing.push("closing one project took down another project's process");
+    }
+    if !b_untouched {
+        missing.push("one project's work leaked into another's scope");
+    }
+    if !b_kept_its_trust {
+        missing.push("closing one project withdrew another project's trust");
+    }
+    if !b_close
+        .as_ref()
+        .is_some_and(super::registry::CloseReport::is_clean)
+    {
+        missing.push("closing the second project left something running");
+    }
+    if !b_gone {
+        missing.push("the second project's process outlived it");
+    }
+
+    if missing.is_empty() {
+        return CapabilityCheck::new(Capability::ProjectScope, CheckStatus::Ready, evidence);
+    }
+    CapabilityCheck::new(
+        Capability::ProjectScope,
         CheckStatus::Gap {
             reason: missing.join("; "),
         },

@@ -106,9 +106,11 @@ authorizes the execution scope, runs the command and sees its marker file, then 
 authorization and requires the refusal back — printing the authorization record it produced), and the
 notification centre (whose check feeds it a really failed task, a really failing process, a program that
 does not exist and a real permission refusal, and requires each to arrive with a cause, a next step and a
-link, with the repeated failure counted rather than raised again) — and writes `host-readiness.json` with
-the evidence for each, ending **not ready when a capability is missing or when the environment cannot
-produce the evidence**. It exits 4 in that case, which is
+link, with the repeated failure counted rather than raised again), and the project registry (whose check
+opens two real projects, starts a real process in each, closes one, and requires that project's process to
+be gone, the other's to survive, the closed handle to refuse new work and the other project to keep its own
+trust) — and writes `host-readiness.json` with the evidence for each, ending **not ready when a capability
+is missing or when the environment cannot produce the evidence**. It exits 4 in that case, which is
 `ExitCode::Reported` — "a real finding was reported" rather than a defect in the host. These probes do not establish that a
 window has displayed anything, that interaction states draw correctly, that a generated file
 compiles for a given profile, or that a GUI designer or any output target is

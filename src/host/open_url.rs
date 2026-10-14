@@ -14,13 +14,19 @@
 //! * **"Started" and "finished" are different answers.** The OS handler is a program; a program
 //!   that was spawned has not necessarily opened anything. So the outcome keeps
 //!   [`OpenOutcome::HandedOver`] (the handler exited 0), [`OpenOutcome::HandlerFailed`] (it ran and
-//!   failed, with its own exit code and stderr) and [`OpenOutcome::HandlerMissing`] (it could not
+//!   failed, with its own exit code and stderr) and [`OpenOutcome::HandlerNotStarted`] (it could not
 //!   be started at all) apart, instead of collapsing them into "opened" (principle #45).
 //! * **A target that would be read as an option is refused, not escaped.** `open` and `xdg-open`
 //!   parse their own arguments, so a target beginning with `-` is an option to them, not a URL —
 //!   `xdg-open -- <path>` is itself rejected with "unexpected option" (verified on the pinned
 //!   revision's host). Refusing an option-shaped target with a named reason keeps the caller's
 //!   mistake in front of them instead of handing a flag to the desktop (principle #29).
+//!
+//! **One transient refusal, handled rather than reported.** `ETXTBSY` ("text file busy") is what the
+//! kernel answers when the file being executed is still open for writing by any process — which, in a
+//! host with several threads, happens for milliseconds when one thread forks while another writes.
+//! [`ProgramOpener::spawn`] retries it a bounded number of times instead of telling the user a program
+//! that is right there is not installed; the evidence is in the log for 2026-10-14.
 //!
 //! **Ownership.** This module starts a process and reaps it; it does not own a process tree, log a
 //! child's output to a panel, or kill anything. That is T01.04's contract, which depends on the
@@ -35,6 +41,14 @@ use std::time::{Duration, Instant};
 
 /// How long the default opener waits for the OS handler to finish before giving up on it.
 pub const DEFAULT_HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many times a start is retried when the kernel says the file is still open for writing.
+const EXECUTABLE_BUSY_ATTEMPTS: usize = 50;
+
+/// How long to wait between those retries. Fifty attempts of 10ms bound the wait at half a second,
+/// which is far longer than the fork window that causes it and short enough not to hide a real
+/// refusal for long.
+const EXECUTABLE_BUSY_RETRY: Duration = Duration::from_millis(10);
 
 /// What the caller wants the OS to open.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -132,8 +146,11 @@ pub enum OpenOutcome {
         /// What it wrote to stderr, trimmed. Empty when it said nothing.
         detail: String,
     },
-    /// The handler could not be started at all.
-    HandlerMissing {
+    /// The handler could not be started: it is not installed, or the operating system refused to
+    /// start it. The reason is the OS's own, so a refusal caused by something else — a file still
+    /// open for writing, a script with no interpreter — stays distinguishable from "not installed"
+    /// instead of everything landing under that one word.
+    HandlerNotStarted {
         /// The handler program the host tried to start.
         program: String,
         /// The OS's own reason.
@@ -157,10 +174,10 @@ impl OpenOutcome {
         matches!(self, Self::HandedOver { .. })
     }
 
-    /// Whether the OS actually started something. [`Self::HandlerMissing`] is the only answer that
-    /// says the program never ran.
+    /// Whether the OS actually started something. [`Self::HandlerNotStarted`] is the only answer
+    /// that says the program never ran.
     pub fn started_the_handler(&self) -> bool {
-        !matches!(self, Self::HandlerMissing { .. })
+        !matches!(self, Self::HandlerNotStarted { .. })
     }
 
     /// A sentence for a log line or a diagnostic.
@@ -181,7 +198,7 @@ impl OpenOutcome {
                     format!("{program} failed to open the target (exit {code}): {detail}")
                 }
             }
-            Self::HandlerMissing { program, reason } => {
+            Self::HandlerNotStarted { program, reason } => {
                 format!("{program} could not be started: {reason}")
             }
             Self::StillRunning { program, after } => {
@@ -310,6 +327,37 @@ impl ProgramOpener {
         &self.program
     }
 
+    /// Starts the handler, retrying the one transient refusal the kernel can produce here.
+    ///
+    /// `ETXTBSY` — "text file busy" — is what the operating system answers when a file that some
+    /// process still holds open for writing is executed. In a multi-threaded host it is genuinely
+    /// transient: a thread that forked while another was writing a file inherits that descriptor
+    /// until it execs, so the refusal lasts milliseconds and then goes away. Reporting it as "the
+    /// handler is not installed" would send a user to look for a program that is right there, so the
+    /// start is retried a bounded number of times and the reason is carried out if it persists.
+    fn spawn(&self, argument: &str) -> std::io::Result<std::process::Child> {
+        let mut attempt = 0;
+        loop {
+            let mut command = Command::new(&self.program);
+            command.args(&self.prefix_arguments);
+            command.arg(argument);
+            command.stdin(Stdio::null());
+            command.stdout(Stdio::null());
+            command.stderr(Stdio::piped());
+            match command.spawn() {
+                Ok(child) => return Ok(child),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && attempt < EXECUTABLE_BUSY_ATTEMPTS =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(EXECUTABLE_BUSY_RETRY);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Whether the handler program can be found on `PATH`.
     ///
     /// Used by the readiness report, which must say "the handler is not installed" before anyone
@@ -348,17 +396,10 @@ fn is_executable(path: &Path) -> bool {
 impl UrlOpener for ProgramOpener {
     fn open(&self, target: &OpenTarget) -> Result<OpenOutcome, OpenRefusal> {
         let argument = accept(target)?;
-        let mut command = Command::new(&self.program);
-        command.args(&self.prefix_arguments);
-        command.arg(&argument);
-        command.stdin(Stdio::null());
-        command.stdout(Stdio::null());
-        command.stderr(Stdio::piped());
-
-        let mut child = match command.spawn() {
+        let mut child = match self.spawn(&argument) {
             Ok(child) => child,
             Err(error) => {
-                return Ok(OpenOutcome::HandlerMissing {
+                return Ok(OpenOutcome::HandlerNotStarted {
                     program: self.program.clone(),
                     reason: error.to_string(),
                 });
@@ -525,6 +566,35 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_handler_file_still_open_for_writing_is_retried_rather_than_reported_as_missing() {
+        // Reproduces `ETXTBSY` on purpose: another process holds the script open for writing, which
+        // is exactly what a forked thread's inherited descriptor does for a few milliseconds. The
+        // host must wait it out rather than telling the user the program is not installed.
+        let handler = FakeHandler::new("exit 0");
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&handler.path)
+            .expect("the script can be opened for writing");
+        let mut holder = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.2")
+            .stdout(held)
+            .spawn()
+            .expect("the holder process starts");
+
+        let outcome = opener(&handler, Duration::from_secs(5))
+            .open(&OpenTarget::Url("https://example.invalid/docs".to_owned()))
+            .expect("the URL is acceptable");
+
+        assert!(
+            matches!(outcome, OpenOutcome::HandedOver { .. }),
+            "{outcome:?}",
+        );
+        let _ = holder.wait();
+    }
+
     #[test]
     fn a_handler_that_is_not_installed_is_reported_as_missing() {
         let opener = ProgramOpener::with_program(
@@ -537,12 +607,12 @@ mod tests {
             .expect("the URL is acceptable");
 
         match &outcome {
-            OpenOutcome::HandlerMissing { program, reason } => {
+            OpenOutcome::HandlerNotStarted { program, reason } => {
                 assert_eq!(program, "rustage-no-such-handler-program");
                 assert!(!reason.is_empty());
                 assert!(!outcome.started_the_handler());
             }
-            other => panic!("expected HandlerMissing, got {other:?}"),
+            other => panic!("expected HandlerNotStarted, got {other:?}"),
         }
     }
 

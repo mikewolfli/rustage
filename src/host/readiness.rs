@@ -4,8 +4,8 @@
 //! What the host's platform services can actually do *here*, with the evidence. Contract **HOST**.
 //!
 //! T01.02 delivers five platform services — file dialogs, the clipboard, system paths, URL opening
-//! and file events — and every one of them is a claim about an operating system and about a pinned
-//! dependency revision. Principle #25 says a claim without evidence is not a claim, and principle
+//! and file events — and T01.03 adds the background executor every long build will run on. Each is a
+//! claim about an operating system, a pinned dependency revision, or a thread scheduler. Principle #25 says a claim without evidence is not a claim, and principle
 //! #22 says a failure must be visible rather than hidden behind a success-shaped default. So each
 //! capability is *exercised*, and this module keeps the three answers apart:
 //!
@@ -35,6 +35,10 @@ use super::clipboard::{ClipboardHost, ClipboardRead, ClipboardWrite, NativeClipb
 use super::dialog::{DialogMode, DialogOutcome, DialogRequest, FileChooser, FrameChooser};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
 use super::paths::{HostDirectories, HostDirectory, SystemPaths};
+use super::tasks::{
+    CancelResult, CancellationReason, Executor, ExecutorConfig, JobControl, JobOutcome, OwnerId,
+    SubmitError, SubmitRequest, TaskOutcome, TaskState,
+};
 use super::watch::{DirectoryWatch, WatchEvent};
 
 /// How long a check waits for the operating system to deliver a file event.
@@ -57,11 +61,14 @@ pub enum Capability {
     UrlHandover,
     /// Watching a directory for changes.
     DirectoryWatch,
+    /// The background executor: submission that returns, a real cancelling state, and an honest
+    /// report for a job that will not stop.
+    BackgroundExecutor,
 }
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::NativeFileDialog,
         Self::ChooserFrame,
         Self::Clipboard,
@@ -69,6 +76,7 @@ impl Capability {
         Self::UrlHandlerPresent,
         Self::UrlHandover,
         Self::DirectoryWatch,
+        Self::BackgroundExecutor,
     ];
 
     /// The name this capability is known by in the artifact.
@@ -81,6 +89,7 @@ impl Capability {
             Self::UrlHandlerPresent => "url-handler",
             Self::UrlHandover => "url-handover",
             Self::DirectoryWatch => "directory-watch",
+            Self::BackgroundExecutor => "background-executor",
         }
     }
 }
@@ -189,6 +198,7 @@ impl ReadinessReport {
         checks.push(present);
         checks.push(handover);
         checks.push(check_watch());
+        checks.push(check_executor());
 
         Self {
             rustage_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -263,13 +273,13 @@ impl ReadinessReport {
         for check in &self.checks {
             let _ = writeln!(
                 out,
-                "{:<18}{:<13}{}",
+                "{:<20}{:<13}{}",
                 check.capability.name(),
                 check.status.as_str(),
                 check.evidence,
             );
             if let Some(reason) = check.status.reason() {
-                let _ = writeln!(out, "{:<18}{:<13}{reason}", "", "");
+                let _ = writeln!(out, "{:<20}{:<13}{reason}", "", "");
             }
         }
         let (ready, gap, unverified) = self.counts();
@@ -918,6 +928,185 @@ fn check_watch() -> CapabilityCheck {
     }
 
     CapabilityCheck::new(Capability::DirectoryWatch, CheckStatus::Ready, evidence)
+}
+
+/// Whether the background executor keeps its promises about not blocking and about cancellation.
+///
+/// This is T01.03's acceptance line, exercised here rather than only in the unit tests because the
+/// promise is about a *thread scheduler*: a machine that serialises threads would break it, and the
+/// evidence has to come from the machine the host runs on.
+fn check_executor() -> CapabilityCheck {
+    let config = ExecutorConfig {
+        workers: 1,
+        queue_capacity: 4,
+        monitor_interval: Duration::from_millis(5),
+        timeout_grace: Duration::from_millis(50),
+        shutdown_grace: Duration::from_millis(200),
+    };
+    let executor = match Executor::new(config) {
+        Ok(executor) => executor,
+        Err(error) => {
+            return CapabilityCheck::new(
+                Capability::BackgroundExecutor,
+                CheckStatus::Gap {
+                    reason: error.message(),
+                },
+                "the executor did not start",
+            );
+        }
+    };
+
+    let owner = OwnerId::new();
+    let (started, started_rx) = std::sync::mpsc::channel();
+    let submitted = Instant::now();
+    let cooperative = executor.submit(
+        SubmitRequest::new(owner, "readiness: waits to be cancelled"),
+        move |control: JobControl| {
+            let _ = started.send(());
+            if control.token().wait(Duration::from_secs(5)) {
+                JobOutcome::Cancelled
+            } else {
+                JobOutcome::Succeeded
+            }
+        },
+    );
+    let submit_took = submitted.elapsed();
+    let cooperative = match cooperative {
+        Ok(id) => id,
+        Err(error) => {
+            return CapabilityCheck::new(
+                Capability::BackgroundExecutor,
+                CheckStatus::Gap {
+                    reason: error.message(),
+                },
+                "the executor refused a submission",
+            );
+        }
+    };
+    if started_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+        return CapabilityCheck::new(
+            Capability::BackgroundExecutor,
+            CheckStatus::Gap {
+                reason: "the job never started, so the caller would wait for work that never runs"
+                    .to_owned(),
+            },
+            "no worker picked up the job",
+        );
+    }
+
+    // The caller returned while the job was still running: that is what keeps a long build off the
+    // thread that drives the UI.
+    let caller_returned_early = submit_took < Duration::from_millis(50);
+    let requested = executor.cancel(cooperative) == CancelResult::Requested;
+    let cancelling_shown = executor
+        .record(cooperative)
+        .is_some_and(|record| record.state == TaskState::Cancelling);
+    let acknowledged = executor
+        .wait(cooperative, Duration::from_secs(5))
+        .and_then(|record| record.outcome);
+    let cancelled = matches!(
+        acknowledged,
+        Some(TaskOutcome::Cancelled {
+            reason: CancellationReason::Requested,
+            ..
+        })
+    );
+
+    // A job that ignores both its token and its deadline must be reported, not waited for forever.
+    let stubborn = executor.submit(
+        SubmitRequest::new(owner, "readiness: ignores its deadline")
+            .with_timeout(Duration::from_millis(30)),
+        |_control: JobControl| {
+            std::thread::sleep(Duration::from_millis(600));
+            JobOutcome::Succeeded
+        },
+    );
+    let abandoned = match stubborn {
+        Ok(id) => {
+            let record = executor.wait(id, Duration::from_secs(5));
+            matches!(
+                record.and_then(|record| record.outcome),
+                Some(TaskOutcome::Abandoned {
+                    job_still_running: true,
+                    ..
+                })
+            )
+        }
+        Err(_) => false,
+    };
+
+    // Shutdown must return, leave every task with an outcome, and refuse new work. It may report
+    // nothing as abandoned here because the deadline monitor already recorded that job — which is
+    // the point: the record, not the shutdown, is where "this job never stopped" lives.
+    let shutdown = executor.shutdown();
+    let everything_accounted_for = executor.records().iter().all(|record| record.is_final());
+    let refuses_new_work = matches!(
+        executor.submit(SubmitRequest::new(owner, "too late"), |_| {
+            JobOutcome::Succeeded
+        }),
+        Err(SubmitError::Stopped)
+    );
+
+    let evidence = format!(
+        "submit returned in {:?} while the job ran; cancel -> {}{}; a cooperative job -> {}; a job \
+         that ignored its 30ms deadline -> {}; shutdown -> {}",
+        submit_took,
+        if cancelling_shown {
+            "cancelling"
+        } else {
+            "not cancelling"
+        },
+        if requested { "" } else { " (not requested)" },
+        if cancelled {
+            "cancelled"
+        } else {
+            "not cancelled"
+        },
+        if abandoned {
+            "abandoned"
+        } else {
+            "not abandoned"
+        },
+        shutdown.message(),
+    );
+
+    let ready = caller_returned_early
+        && requested
+        && cancelling_shown
+        && cancelled
+        && abandoned
+        && everything_accounted_for
+        && refuses_new_work;
+    if ready {
+        return CapabilityCheck::new(Capability::BackgroundExecutor, CheckStatus::Ready, evidence);
+    }
+
+    let mut missing = Vec::new();
+    if !caller_returned_early {
+        missing.push("submission blocked the caller");
+    }
+    if !(requested && cancelling_shown) {
+        missing.push("the cancelling state was not observable");
+    }
+    if !cancelled {
+        missing.push("a cooperative job did not stop");
+    }
+    if !abandoned {
+        missing.push("a job that ignored its deadline was not reported as abandoned");
+    }
+    if !everything_accounted_for {
+        missing.push("shutdown left a task without an outcome");
+    }
+    if !refuses_new_work {
+        missing.push("a stopped executor accepted new work");
+    }
+    CapabilityCheck::new(
+        Capability::BackgroundExecutor,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
 }
 
 /// The system paths of this environment, without creating anything.

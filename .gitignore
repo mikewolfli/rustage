@@ -14,6 +14,9 @@ Desktop.ini
 *.pem
 *.key
 
+# Output of `rustage --project-check`, which is evidence rather than source
+*.roundtrip.json
+
 # Temporary files and editor swap files
 *.swp
 *.swo

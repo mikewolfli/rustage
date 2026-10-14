@@ -54,6 +54,7 @@ cargo test
 cargo run -- --help
 cargo run -- --probe-apis target/probe
 cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready
+cargo run -- --project-check examples/demo-project/project.json   # project format; exits 4 when it refuses to write
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -124,6 +125,19 @@ probe's own source: the check names are read out of `Capability::name` in
 on the host the record was produced on, and a blocked host has to say what is missing. It
 cannot run a macOS or Windows machine, so it proves the record is complete and consistent —
 not that its claims are true.
+`--project-check` reads a project document and reports what this build makes of it: the format
+version and what will happen to the file, the identity, the counts, every member it keeps without
+reading (decision `F1` requires them preserved and reported, never dropped), and every path in the
+document with how it resolved against the project root. It then writes the document back through
+this build's own writer, reads that file again, and compares: a document whose unknown members do not
+come back has failed the check. A version this build does not know is opened read-only, only its
+identity is read, and the writer is not reachable at all — the round trip is refused and `Reported`
+(4) is the exit status, because "a document I must not write" is a real finding rather than a defect.
+The demo under [`examples/demo-project/`](examples/demo-project/README.md) is a committed version 1
+document that a Rust test pins to exactly what the writer writes, so the format cannot drift away
+from its example. This does not establish that a page document can be written yet (its schema arrives
+with T02.02) or that a project can be created, opened or migrated by the designer.
+
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required
 community files, roadmap task dependencies, declared roadmap counts, and task

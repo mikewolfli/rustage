@@ -108,6 +108,7 @@ cargo run
 cargo run -- --help
 cargo run -- --probe-apis target/probe   # 写出 target/probe/api-probes.json；有缺口时退出码非零
 cargo run -- --probe-host target/host    # 写出 target/host/host-readiness.json；有检查未就绪时退出码 4
+cargo run -- --project-check examples/demo-project/project.json   # 读工程文档并把往返结果写在它旁边
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

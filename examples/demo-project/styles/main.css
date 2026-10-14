@@ -1,0 +1,8 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli */
+/* SPDX-License-Identifier: MIT */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -69,15 +69,15 @@ after(() => {
 test('the committed data, document and whitepaper pass', () => {
   const result = checkContracts(root);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.stats.areas, 8);
+  assert.equal(result.stats.areas, 9);
   assert.equal(result.stats.permissions, 8);
-  assert.equal(result.stats.invariants, 11);
+  assert.equal(result.stats.invariants, 13);
 });
 
 test('describe names what was checked', () => {
   assert.equal(
-    describe({ areas: 8, permissions: 7, invariants: 10, writers: 7, denials: 6 }),
-    '8 contract areas, 7 permission rows, 10 invariants, 7 declared write entry points, 6 denial reasons',
+    describe({ areas: 9, permissions: 7, invariants: 12, writers: 7, denials: 6 }),
+    '9 contract areas, 7 permission rows, 12 invariants, 7 declared write entry points, 6 denial reasons',
   );
 });
 

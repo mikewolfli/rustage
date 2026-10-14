@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::{self, Command};
 use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
+use crate::project::format::{ProjectContent, ProjectFile};
 
 use super::toolbar;
 
@@ -92,6 +93,14 @@ pub fn run(command: Command) {
                 std::process::exit(1);
             }
         },
+        Command::ProjectCheck(path) => {
+            if !check_project(&path) {
+                // The project is not something this build can use as it stands, and the reason was
+                // reported above. `Reported` says a real finding was found and printed.
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::ProbeHost(directory) => match write_host_report(&directory) {
             Ok((path, report)) => {
                 print!("{}", report.render_text());
@@ -110,6 +119,124 @@ pub fn run(command: Command) {
             }
         },
     }
+}
+
+/// Reads a project file and says what this build makes of it.
+///
+/// The point of the command is the acceptance line of the project format: a version this build does
+/// not know is never written, and nothing in a file this build does know is dropped. So the command
+/// does not stop at reading: it writes the document back through this build's own writer and reads
+/// that file again, which turns "nothing was dropped" into something a person can check rather than
+/// something a comment claims.
+///
+/// Returns whether the project came through cleanly.
+fn check_project(path: &Path) -> bool {
+    let file = match ProjectFile::open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    println!("project: {}", file.path().display());
+    println!("root: {}", file.root().as_path().display());
+    println!("format: {}", file.verdict().message());
+    match file.content() {
+        ProjectContent::Interpreted(document) => {
+            println!(
+                "identity: {} ({})",
+                document.identity().name(),
+                document.identity().id()
+            );
+            println!(
+                "pages: {}, resources: {}, targets: {}, generated: {}, services: {}",
+                document.pages().len(),
+                document.resources().len(),
+                document.targets().len(),
+                document.generated().len(),
+                document.services().len()
+            );
+            let unknown = document.unknown_fields();
+            println!(
+                "members this build keeps without reading: {}",
+                unknown.len()
+            );
+            for field in unknown {
+                println!("  {field}");
+            }
+            let references = document.references();
+            println!("references: {}", references.len());
+            for reference in references {
+                println!("  {}", reference.render());
+            }
+        }
+        ProjectContent::Foreign(foreign) => {
+            match foreign.identity() {
+                Some(identity) => println!(
+                    "identity: {} ({}) — read best effort from a layout this build does not know",
+                    identity.name(),
+                    identity.id()
+                ),
+                None => println!("identity: not readable without interpreting the document"),
+            }
+            println!("members: {}", foreign.members().join(", "));
+            match file.writer() {
+                Err(refusal) => println!("round trip: refused — {}", refusal.message()),
+                Ok(_) => println!(
+                    "round trip: nothing written — the version is not one this build writes"
+                ),
+            }
+            return false;
+        }
+    }
+
+    let roundtrip = path.with_extension("roundtrip.json");
+    let writer = match file.writer() {
+        Ok(writer) => writer,
+        Err(refusal) => {
+            println!("round trip: refused — {}", refusal.message());
+            return false;
+        }
+    };
+    let written = match writer.save_to(&roundtrip) {
+        Ok(written) => written,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    let before = file
+        .content()
+        .document()
+        .expect("the document was interpreted above");
+    match ProjectFile::open(&written) {
+        Ok(again) => {
+            let after = again
+                .content()
+                .document()
+                .expect("a version this build wrote");
+            let same_document = after == before;
+            let same_unknown = again.unknown_fields() == file.unknown_fields();
+            println!(
+                "round trip: wrote {}, read back: document unchanged: {}, members kept: {}",
+                written.display(),
+                yes_no(same_document),
+                yes_no(same_unknown)
+            );
+            same_document && same_unknown
+        }
+        Err(error) => {
+            println!(
+                "rustage: the round trip could not be read back: {}",
+                error.message()
+            );
+            false
+        }
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 /// Writes the icon strip's baseline renders, reporting the files written.

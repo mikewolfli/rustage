@@ -120,6 +120,7 @@ cargo run
 cargo run -- --help
 cargo run -- --probe-apis target/probe   # writes target/probe/api-probes.json; exits non-zero while a probe reports a gap
 cargo run -- --probe-host target/host    # writes target/host/host-readiness.json; exits 4 while a host check is not ready
+cargo run -- --project-check examples/demo-project/project.json   # reads a project document, writes its round trip next to it
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

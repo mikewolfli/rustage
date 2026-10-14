@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "project": {
+    "id": "demo-project-0001",
+    "name": "Rustage demo project"
+  },
+  "pages": [
+    {
+      "document": "pages/main.json",
+      "title": "Main window",
+      "stylesheet": "styles/main.css"
+    }
+  ],
+  "resources": [],
+  "targets": [
+    {
+      "name": "desktop",
+      "profile": "debug",
+      "features": [
+        "desktop"
+      ]
+    }
+  ],
+  "generated": [
+    {
+      "output": "src/generated/main.rs",
+      "from": "pages/main.json"
+    }
+  ],
+  "network": {
+    "services": []
+  }
+}

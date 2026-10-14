@@ -31,6 +31,9 @@ pub enum Command {
     ProbeApis(PathBuf),
     /// Runs the host capability checks and writes the report into the given directory.
     ProbeHost(PathBuf),
+    /// Reads a project file, reports what this build makes of it, and writes the round trip next to
+    /// it as evidence that nothing in it was dropped.
+    ProjectCheck(PathBuf),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -167,18 +170,19 @@ where
             }
             return Ok(Command::Launch(options));
         }
-        "--render-icons" | "--probe-apis" | "--probe-host" => {
-            let Some(directory) = arguments.next() else {
+        "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
+            let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
             };
             let mut rest = arguments;
             if let Some(argument) = rest.next() {
                 return Err(ParseError { argument });
             }
-            let path = PathBuf::from(directory);
+            let path = PathBuf::from(value);
             return Ok(match text {
                 "--render-icons" => Command::RenderIcons(path),
                 "--probe-apis" => Command::ProbeApis(path),
+                "--project-check" => Command::ProjectCheck(path),
                 _ => Command::ProbeHost(path),
             });
         }
@@ -196,7 +200,7 @@ pub fn help_text() -> &'static str {
     "rustage - Rust desktop UI designer\n\n\
      Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n\
             rustage [--render-icons <directory> | --probe-apis <directory>]\n\
-            rustage [--probe-host <directory>]\n\n\
+            rustage [--probe-host <directory> | --project-check <file>]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -205,7 +209,9 @@ pub fn help_text() -> &'static str {
        --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n\
        --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n\
        --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n\
-       --probe-host <directory>      Check the host platform services and write host-readiness.json\n\n\
+       --probe-host <directory>      Check the host platform services and write host-readiness.json\n\
+       --project-check <file>        Read a project file, report what is understood and what is\n\
+                                     kept, and write <file>.roundtrip.json as evidence\n\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -248,6 +254,10 @@ mod tests {
         assert_eq!(
             parse(["--probe-host", "out/host"]),
             Ok(Command::ProbeHost(PathBuf::from("out/host")))
+        );
+        assert_eq!(
+            parse(["--project-check", "demo/project.json"]),
+            Ok(Command::ProjectCheck(PathBuf::from("demo/project.json")))
         );
     }
 

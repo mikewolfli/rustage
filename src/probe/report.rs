@@ -203,36 +203,15 @@ impl ProbeReport {
     }
 }
 
-/// Appends `value` as a JSON string literal, escaping what JSON requires.
-///
-/// Escapes the two mandatory characters (`"` and `\`), the three short control escapes, and every
-/// other C0 control character as `\u00XX`, which is the smallest set that keeps the output valid
-/// JSON for any Rust `&str`.
 /// Escapes a string as a JSON literal.
 ///
-/// `pub(crate)` because the host readiness report renders its own artifact and must not grow a
-/// second escaper: two implementations would eventually disagree about which characters are legal
-/// inside a literal, and one of the two artifacts would be the one that is wrong (principle #35).
+/// `pub(crate)` because the host readiness report and the project file render their own artifacts
+/// and must not grow a second escaper: two implementations would eventually disagree about which
+/// characters are legal inside a literal, and one of the two artifacts would be the one that is
+/// wrong (principle #35). The rule itself lives next to the writer that owns it,
+/// [`crate::project::json::escape_string`].
 pub(crate) fn json_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            control if (control as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", control as u32);
-            }
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
+    crate::project::json::escape_string(value)
 }
 
 #[cfg(test)]

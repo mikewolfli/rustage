@@ -57,6 +57,12 @@
       "concern": "唯一可写模型与只读视图/快照",
       "module": "src/contracts/store.rs",
       "principle": "principle #6（跨视图/服务没有第二份可写模型）"
+    },
+    {
+      "id": "C-PROJECT",
+      "concern": "工程文档、根相对路径引用与格式版本策略",
+      "module": "src/project/format.rs",
+      "principle": "principle #22（拒绝必须是准确结果）"
     }
   ],
   "grants": {
@@ -272,6 +278,24 @@
       "test": "every_external_effect_class_is_decided_or_explained",
       "evidence": "测试",
       "note": "命令、文件与网络分别由 run-cargo-check、write-file 与 request-network-service 裁定，映射理由写在 EffectClass 的文档注释里；部署仍是未决定（C-REMOTE 为延期能力）并给出原因，宿主因此拒绝，而不是发明一条授权"
+    },
+    {
+      "id": "INV-VERSION-UNKNOWN-NOT-WRITTEN",
+      "statement": "本构建不认识的格式版本只读打开：不解释任何成员，也没有任何写回路径",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/format.rs",
+      "test": "a_newer_format_version_refuses_to_write_the_project",
+      "evidence": "结构 + 测试",
+      "note": "未知版本不会成为 ProjectDocument，而只有 ProjectDocument 才能渲染，因此“不写回”是类型结构而不是纪律；读取时只尽力读身份，其余成员原样列出"
+    },
+    {
+      "id": "INV-NO-FIELD-LOSS",
+      "statement": "本构建不认识的成员被原样保留并报告，保存时写回原位，不静默丢弃",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/format.rs",
+      "test": "unknown_members_survive_a_round_trip_and_are_reported",
+      "evidence": "测试",
+      "note": "唯一例外是凭证引用与其来源：那里的成员集合是封闭的，出现未知成员按“机密被写进工程”拒绝，而不是保留"
     }
   ]
 }

@@ -47,6 +47,7 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | C-DIAGNOSTIC | 问题、定位与过期标记 | [`src/contracts/diagnostics.rs`](../../src/contracts/diagnostics.rs) | principle #25（失败显式化） |
 | C-SOURCEMAP | 节点与生成源码区间 | [`src/contracts/source_map.rs`](../../src/contracts/source_map.rs) | principle #24（结论需可复核证据） |
 | C-STORE | 唯一可写模型与只读视图/快照 | [`src/contracts/store.rs`](../../src/contracts/store.rs) | principle #6（跨视图/服务没有第二份可写模型） |
+| C-PROJECT | 工程文档、根相对路径引用与格式版本策略 | [`src/project/format.rs`](../../src/project/format.rs) | principle #22（拒绝必须是准确结果） |
 
 ## 权限词汇
 
@@ -106,6 +107,8 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-DIAGNOSTIC-LOCATABLE | 诊断在缺少节点映射时仍保留源码定位 | `C-DIAGNOSTIC` | [`src/contracts/diagnostics.rs`](../../src/contracts/diagnostics.rs) | `a_node_diagnostic_keeps_its_source_position` | 测试 |
 | INV-MOST-SPECIFIC-MAPPING | 嵌套区间取最具体的节点，未映射的位置返回空而不是猜测 | `C-SOURCEMAP` | [`src/contracts/source_map.rs`](../../src/contracts/source_map.rs) | `the_most_specific_span_wins_when_spans_nest` | 测试 |
 | INV-EFFECT-DECIDED | 每个外部效果类别要么由决策表的一行裁定，要么显式说明它没有决定 | `C-PERMISSION` | [`src/contracts/permission.rs`](../../src/contracts/permission.rs) | `every_external_effect_class_is_decided_or_explained` | 测试 |
+| INV-VERSION-UNKNOWN-NOT-WRITTEN | 本构建不认识的格式版本只读打开：不解释任何成员，也没有任何写回路径 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `a_newer_format_version_refuses_to_write_the_project` | 结构 + 测试 |
+| INV-NO-FIELD-LOSS | 本构建不认识的成员被原样保留并报告，保存时写回原位，不静默丢弃 | `C-PROJECT` | [`src/project/format.rs`](../../src/project/format.rs) | `unknown_members_survive_a_round_trip_and_are_reported` | 测试 |
 
 ## 不变量的补充说明
 
@@ -122,6 +125,8 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-DIAGNOSTIC-LOCATABLE | 位置同时携带节点与源码区间，两者不是二选一 |
 | INV-MOST-SPECIFIC-MAPPING | 未映射的节点与位置另有用例覆盖 |
 | INV-EFFECT-DECIDED | 命令、文件与网络分别由 run-cargo-check、write-file 与 request-network-service 裁定，映射理由写在 EffectClass 的文档注释里；部署仍是未决定（C-REMOTE 为延期能力）并给出原因，宿主因此拒绝，而不是发明一条授权 |
+| INV-VERSION-UNKNOWN-NOT-WRITTEN | 未知版本不会成为 ProjectDocument，而只有 ProjectDocument 才能渲染，因此“不写回”是类型结构而不是纪律；读取时只尽力读身份，其余成员原样列出 |
+| INV-NO-FIELD-LOSS | 唯一例外是凭证引用与其来源：那里的成员集合是封闭的，出现未知成员按“机密被写进工程”拒绝，而不是保留 |
 
 ## 为什么权限表要交叉校验
 

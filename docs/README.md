@@ -53,7 +53,9 @@ order they are being closed in. It is a work list, not a statement of implemente
   T01.04 asks for, project trust, permissions and the authorization record T01.05 asks for, and the
   notification centre T01.06 asks for, the project registry with its shutdown order T01.07 asks for,
   and the credential references, TLS configuration and network permits T01.09 asks for (with the
-  decision-table row that change required); the
+  decision-table row that change required), and the project format version 1 T02.01 asks for, whose
+  specification is the module documentation of `src/project/format.rs` and whose example is the
+  committed project under `examples/demo-project/`; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

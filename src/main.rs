@@ -3,6 +3,7 @@ mod cli;
 mod contracts;
 mod host;
 mod probe;
+mod project;
 mod resources;
 
 fn main() {

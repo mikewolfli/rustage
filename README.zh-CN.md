@@ -113,8 +113,9 @@ node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 ```
 
-Rust 骨架使用 2024 edition，唯一的第三方依赖是固定修订的 `rust-widgets`（冷构建时由 Cargo
-联网拉取），Rust 工具链由 `rust-toolchain.toml` 固定。文档检查需要
+Rust 骨架使用 2024 edition，第三方依赖是固定修订的 `rust-widgets`（冷构建时由 Cargo 联网拉取），
+以及仅 unix 目标上的 `libc`（按需用于进程组信号，解析结果已在 `Cargo.lock` 中）；Rust 工具链由
+`rust-toolchain.toml` 固定。文档检查需要
 **Node.js 22 或更新版本**及 Git，无 npm 依赖。当前可执行程序报告项目状态、支持帮助与版本
 选项、渲染图标条带、运行依赖契约探针、检查宿主自身的平台服务，并启动有界的基线桌面会话。
 尚未实现设计器本身：文档模型、画布、属性面板、预览与生成器都还不存在。

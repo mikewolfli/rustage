@@ -21,6 +21,7 @@
 //! | URL opening | [`open_url`] | handing a URL or a path to the operating system's handler, and refusing what must not be handed over |
 //! | File events | [`watch`] | the adapter T03.05's external-modification detection reads |
 //! | Tasks | [`tasks`] | the background executor, task ownership, the bounded queue, progress and the timeout/cancellation protocol |
+//! | Subprocesses | [`subprocess`] | starting a process, capturing its output, and taking down only the group this session created |
 //! | Readiness | [`readiness`] | what those services can actually do in this environment, with the evidence |
 //!
 //! Each service is its own module rather than another `platform` file, and each is behind a small
@@ -34,9 +35,9 @@
 //! claiming anything, and reports a refusal — not a success — when the backend is not interactive.
 //! That is the point of T01.01's acceptance line "no placeholder success".
 //!
-//! Nothing here is a service registry yet, and this module deliberately has no `Service` trait:
-//! subprocess trees arrive in T01.04 and the registry that gives every service, including
-//! [`tasks::Executor`], a project scope arrives in T01.07. Inventing that shape now would fix a
+//! Nothing here is a service registry yet, and this module deliberately has no `Service` trait: the
+//! registry that gives every service, including [`tasks::Executor`] and the processes
+//! [`subprocess`] starts, a project scope arrives in T01.07. Inventing that shape now would fix a
 //! boundary before the tasks that need it exist.
 
 // Parts of this surface have no runtime producer yet, and the reason is worth writing down rather
@@ -57,5 +58,6 @@ pub mod paths;
 pub mod platform;
 pub mod readiness;
 pub mod startup;
+pub mod subprocess;
 pub mod tasks;
 pub mod watch;

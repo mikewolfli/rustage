@@ -125,9 +125,10 @@ node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
 ```
 
-The Rust scaffold uses the 2024 edition. Its one third-party dependency is the
+The Rust scaffold uses the 2024 edition. Its third-party dependencies are the
 pinned `rust-widgets` revision, which Cargo fetches over the network on a cold
-build, and its Rust toolchain is pinned by `rust-toolchain.toml`. Documentation
+build, and `libc` on Unix only, and its Rust toolchain is pinned by
+`rust-toolchain.toml`. Documentation
 checks require **Node.js 22 or newer** and Git, with no npm dependencies. The
 executable currently reports its status, supports help and version options, renders
 the icon strip, runs the dependency contract probes, checks the host's own platform

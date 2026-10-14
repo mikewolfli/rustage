@@ -42,10 +42,11 @@ Contributors retain their rights; no copyright assignment is required.
 
 ## Checks available today
 
-Use Git, Rust, and Node.js 22 or newer. No npm packages are required; the one Rust dependency is
-the pinned `rust-widgets` revision, which Cargo fetches over the network on a cold build. The Rust
-toolchain is pinned by `rust-toolchain.toml`, so the checks run under the version the recorded
-evidence was produced with:
+Use Git, Rust, and Node.js 22 or newer. No npm packages are required. The Rust dependencies are the
+pinned `rust-widgets` revision, which Cargo fetches over the network on a cold build, and `libc` on
+Unix only (for the process-group signals T01.04 needs; its resolution is already in `Cargo.lock`
+through the widget dependency). The Rust toolchain is pinned by `rust-toolchain.toml`, so the checks
+run under the version the recorded evidence was produced with:
 
 ```sh
 cargo fmt --check
@@ -97,7 +98,9 @@ gap** — a gap is a recorded finding, not a pass, and the open ones are listed 
 `--probe-host` checks the host's own services — the operating system's file chooser, the painted
 chooser frame, the clipboard, the host directories, the URL handler, directory watching and the
 background executor (whose check proves that a submission returns while the job runs, that `cancelling`
-is observable, and that a job ignoring its deadline is reported as abandoned) — and writes
+is observable, and that a job ignoring its deadline is reported as abandoned), and process ownership
+(whose check starts three processes — one of this session, one started by that one, and one started
+outside the session entirely — and requires the outsider to survive) — and writes
 `host-readiness.json` with the evidence for each, ending **not ready when a capability is missing or
 when the environment cannot produce the evidence**. It exits 4 in that case, which is
 `ExitCode::Reported` — "a real finding was reported" rather than a defect in the host. These probes do not establish that a

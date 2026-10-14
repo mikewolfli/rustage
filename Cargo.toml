@@ -12,3 +12,10 @@ license = "MIT"
 publish = false
 [dependencies]
 rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "c957fdec7f30cc1a526b7c898c0f44b458ef4a57", default-features = false, features = ["desktop"] }
+
+# The process tree cleanup T01.04 needs: signalling a *process group* and asking whether a pid is
+# alive are `kill(2)`, which the standard library does not expose. Declared for the targets that have
+# it rather than for every target (principle #47), and pinned to a major version whose resolution is
+# already in `Cargo.lock` through the widget dependency, so this adds no new download.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

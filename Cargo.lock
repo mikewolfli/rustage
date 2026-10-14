@@ -2477,6 +2477,7 @@ dependencies = [
 name = "rustage"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rust_widgets",
 ]
 

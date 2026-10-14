@@ -35,6 +35,7 @@ use super::clipboard::{ClipboardHost, ClipboardRead, ClipboardWrite, NativeClipb
 use super::dialog::{DialogMode, DialogOutcome, DialogRequest, FileChooser, FrameChooser};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
 use super::paths::{HostDirectories, HostDirectory, SystemPaths};
+use super::subprocess::{OwnedProcess, ProcessPresence, ProcessSpec, Termination, presence};
 use super::tasks::{
     CancelResult, CancellationReason, Executor, ExecutorConfig, JobControl, JobOutcome, OwnerId,
     SubmitError, SubmitRequest, TaskOutcome, TaskState,
@@ -64,11 +65,14 @@ pub enum Capability {
     /// The background executor: submission that returns, a real cancelling state, and an honest
     /// report for a job that will not stop.
     BackgroundExecutor,
+    /// Process ownership: taking down a whole process tree this session started, and leaving a
+    /// process started outside it alone.
+    ProcessTrees,
 }
 
 impl Capability {
     /// Every capability this report covers, in report order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::NativeFileDialog,
         Self::ChooserFrame,
         Self::Clipboard,
@@ -77,6 +81,7 @@ impl Capability {
         Self::UrlHandover,
         Self::DirectoryWatch,
         Self::BackgroundExecutor,
+        Self::ProcessTrees,
     ];
 
     /// The name this capability is known by in the artifact.
@@ -90,6 +95,7 @@ impl Capability {
             Self::UrlHandover => "url-handover",
             Self::DirectoryWatch => "directory-watch",
             Self::BackgroundExecutor => "background-executor",
+            Self::ProcessTrees => "process-trees",
         }
     }
 }
@@ -199,6 +205,7 @@ impl ReadinessReport {
         checks.push(handover);
         checks.push(check_watch());
         checks.push(check_executor());
+        checks.push(check_process_trees());
 
         Self {
             rustage_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1107,6 +1114,149 @@ fn check_executor() -> CapabilityCheck {
         },
         evidence,
     )
+}
+
+/// Whether this host can take down the process tree it started, and only that tree.
+///
+/// This is T01.04's acceptance line — "only processes this session owns are cleaned up, and no
+/// external process is killed" — exercised on the machine the host is running on, with three
+/// processes at once: one this session started, one *that process* started, and one started outside
+/// this session entirely. The last one has to survive.
+fn check_process_trees() -> CapabilityCheck {
+    let evidence = |parts: &[String]| parts.join("; ");
+
+    // A process this session did not start and must not touch. It deliberately looks exactly like
+    // the ones we do start: a test that used a differently named program would pass by accident.
+    let mut foreign = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 30")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return CapabilityCheck::new(
+                Capability::ProcessTrees,
+                CheckStatus::NotVerified {
+                    reason: format!("an unrelated test process could not be started: {error}"),
+                },
+                "no control process",
+            );
+        }
+    };
+    let foreign_pid = foreign.id();
+
+    let mut owned = match OwnedProcess::spawn(
+        ProcessSpec::new("readiness: a tree of its own", "sh")
+            .args(["-c", "sleep 30 & echo $!; wait"]),
+    ) {
+        Ok(process) => process,
+        Err(error) => {
+            let _ = foreign.kill();
+            let _ = foreign.wait();
+            return CapabilityCheck::new(
+                Capability::ProcessTrees,
+                CheckStatus::Gap {
+                    reason: error.message(),
+                },
+                "a process could not be started at all",
+            );
+        }
+    };
+    let owned_pid = owned.pid();
+    let ownership = owned.ownership_evidence();
+
+    let descendant = {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(pid) = owned.output_so_far().stdout.trim().parse::<u32>() {
+                break Some(pid);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    let termination = owned.terminate(Duration::from_secs(5));
+    let owned_gone = wait_for_presence(owned_pid, Duration::from_secs(3)) == ProcessPresence::Gone;
+    let descendant_gone = descendant
+        .map(|pid| wait_for_presence(pid, Duration::from_secs(3)) == ProcessPresence::Gone);
+    let foreign_alive = presence(foreign_pid) == ProcessPresence::Running;
+
+    let _ = foreign.kill();
+    let _ = foreign.wait();
+
+    let mut parts = vec![
+        format!("termination: {}", termination.message()),
+        ownership,
+        format!(
+            "a process started outside this session: {}",
+            if foreign_alive {
+                "survived"
+            } else {
+                "was not running"
+            }
+        ),
+    ];
+    match descendant {
+        Some(pid) => parts.push(format!(
+            "its descendant {pid} is {}",
+            if descendant_gone == Some(true) {
+                "gone"
+            } else {
+                "still running"
+            }
+        )),
+        None => parts.push("its descendant never reported its pid".to_owned()),
+    }
+    let evidence = evidence(&parts);
+
+    let mut missing = Vec::new();
+    if !owned_gone {
+        parts.push("the process this session started outlived its termination".to_owned());
+        missing.push("the owned process outlived its termination");
+    }
+    if descendant.is_none() {
+        missing.push("the descendant never reported its pid");
+    } else if descendant_gone != Some(true) {
+        missing.push("a descendant inside the owned group survived");
+    }
+    if !foreign_alive {
+        missing.push("a process started outside this session did not survive");
+    }
+    if !matches!(
+        termination,
+        Termination::Stopped { .. } | Termination::Killed { .. }
+    ) {
+        missing.push("the termination did not report which signal ended the tree");
+    }
+
+    if missing.is_empty() {
+        return CapabilityCheck::new(Capability::ProcessTrees, CheckStatus::Ready, evidence);
+    }
+    CapabilityCheck::new(
+        Capability::ProcessTrees,
+        CheckStatus::Gap {
+            reason: missing.join("; "),
+        },
+        evidence,
+    )
+}
+
+/// Waits for a pid to stop existing, returning what was last seen.
+fn wait_for_presence(pid: u32, limit: Duration) -> ProcessPresence {
+    let deadline = Instant::now() + limit;
+    loop {
+        let seen = presence(pid);
+        if seen != ProcessPresence::Running || Instant::now() >= deadline {
+            return seen;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The system paths of this environment, without creating anything.

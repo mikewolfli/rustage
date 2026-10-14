@@ -121,6 +121,8 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-CONFIG-SOURCE-VISIBLE | 构建/运行配置的每个生效值都带来源（内置默认 / 目标 / 本机覆盖）以及它替换掉的各层取值：没有“只看值”的读取路径 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `every_value_says_where_it_came_from` | 结构 + 测试 |
 | INV-CONFIG-NOT-SHARED | 本机记录的活动目标与覆盖都带工程身份：读取时必须给出身份，属于别的工程的选择与覆盖一律不使用并说明原因 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `an_active_configuration_does_not_leak_between_projects` | 结构 + 测试 |
 | INV-CREDENTIAL-VIEW-NEVER-MATERIAL | 机密引用视图只呈现“名字 + 材料在哪 + 存储怎么说”，从不读取、持有或渲染材料本身 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `a_credential_is_shown_as_a_reference_and_its_health_never_its_material` | 结构 + 测试 |
+| INV-IMPORT-PLANS-BEFORE-WRITING | 导入先给候选：每一步迁移与每个会变的成员（diff）都在写盘之前列出，候选本身不写盘 | `C-PROJECT` | [`src/project/import.rs`](../../src/project/import.rs) | `the_candidate_names_the_steps_and_every_member_that_would_change` | 测试 |
+| INV-MIGRATION-KEEPS-ORIGINAL | 迁移先留底并逐字节校验留底内容，再写结果并读回；任何一步失败都保证工程保持原样（失败发生在写之后则把原文放回） | `C-PROJECT` | [`src/project/import.rs`](../../src/project/import.rs) | `committing_keeps_the_file_it_read_and_the_result_reads_back` | 测试 |
 
 ## 不变量的补充说明
 
@@ -151,6 +153,8 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-CONFIG-SOURCE-VISIBLE | Setting 同时持有 value、source 与 replaced，因此调用方拿到值就拿到来源；某一层沉默不等于它说了“无”——沉默时下层决定，报告据实写出（quiet 目标用例）；本机覆盖替换列表时也逐条报告被替换项，避免“被去掉的特性”看起来像“从来没要过” |
 | INV-CONFIG-NOT-SHARED | active_for(id) 只回答该身份；别处的选择返回 AnotherProject 并把双方身份都写出来，解析时不采用；覆盖按 工程+目标 判定，未命中的进 Skipped 并带原因；ResolvedConfiguration::for_project 拒绝把配置交给别的工程 |
 | INV-CREDENTIAL-VIEW-NEVER-MATERIAL | 凭据视图由 CredentialRef::health(store, now) 得出（该接口只回答 Usable/ExpiringSoon/Expired/Missing/Unavailable）；lookup 只在网络层发出请求前调用；本模块的类型里没有 Secret 字段，因此“渲染出机密”不是纪律而是不可表达 |
+| INV-IMPORT-PLANS-BEFORE-WRITING | 候选由 migration_path 与「读到的 JSON」对「本构建会写出的 JSON」的差异算出，两者都只读；diff 不列出没有变化的成员（否则没人读），容器只报形状与规模；候选不写盘这条由用例直接断言（文件原文未变、备份不存在） |
+| INV-MIGRATION-KEEPS-ORIGINAL | 顺序是有意的：先比对磁盘上的文件仍是读到的那份 → 已有留底则拒绝（绝不覆盖留底）→ 写留底并读回逐字节比对 → 迁移 → 读回要求是当前版本；写失败或读回失败时用留底把原字节放回，放回也失败才报告 left_behind；已有留底与外部改动两个用例断言「工程一动没动」 |
 
 ## 为什么权限表要交叉校验
 

@@ -49,6 +49,9 @@ pub enum Command {
     FileOp(FileOpOptions),
     /// Shows the build configuration of a project, and what each value came from (task T02.06).
     Configuration(ConfigurationOptions),
+    /// Imports an existing project: what it is, what would change, and the migration itself
+    /// (task T02.07).
+    Import(ImportOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -125,6 +128,31 @@ impl DropEntryOptions {
             path: path.into(),
             document: document.into(),
             fix: false,
+            trust: false,
+        }
+    }
+}
+
+/// Which existing project to import, and how far to go.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ImportOptions {
+    /// The project document, or the directory that holds one.
+    pub path: PathBuf,
+    /// Whether the migration should be carried out instead of only described.
+    pub apply: bool,
+    /// Whether to report the files a past migration kept, instead of planning a new one.
+    pub check_backup: bool,
+    /// Whether the person answering the project's question said yes.
+    pub trust: bool,
+}
+
+impl ImportOptions {
+    /// Options that describe an import and write nothing.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            apply: false,
+            check_backup: false,
             trust: false,
         }
     }
@@ -527,6 +555,24 @@ where
             }
             return Ok(Command::Configuration(options));
         }
+        "--import" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = ImportOptions::new(PathBuf::from(path));
+            for argument in arguments {
+                match argument.to_str().unwrap_or_default() {
+                    "--apply" => options.apply = true,
+                    "--check-backup" => options.check_backup = true,
+                    "--trust" => options.trust = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            if options.apply && options.check_backup {
+                return Err(ParseError { argument });
+            }
+            return Ok(Command::Import(options));
+        }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
             let Some(value) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -566,6 +612,7 @@ pub fn help_text() -> &'static str {
                                  [--move <from> <to>] [--apply] [--trust]\n\n\
             rustage --configuration <file> [--target <name>] [--override <key>=<value>]\n\
                                   [--remember | --forget]\n\n\
+            rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -601,6 +648,10 @@ pub fn help_text() -> &'static str {
        --remember                    With --configuration, record the target and the overrides\n\
                                      for this project on this machine\n\
        --forget                      With --configuration, forget everything recorded for it\n\n\
+       --import <file-or-directory>  Read an existing project, say what it is, and what an\n\
+                                     import would change; --apply migrates it, keeping the file\n\
+                                     that was read, and --check-backup reports what was kept\n\
+       --check-backup                With --import, report the files a past migration kept\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -610,8 +661,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, LaunchOptions,
-        NewProjectOptions, OpenProjectOptions, log_level_of, parse,
+        Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions,
+        LaunchOptions, NewProjectOptions, OpenProjectOptions, log_level_of, parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -774,6 +825,40 @@ mod tests {
         assert!(log_level_of(["--log-level"]).is_err());
         assert!(log_level_of(["--log-level", "shout"]).is_err());
         assert!(parse(["--log-level", "shout", "--help"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_import_options() {
+        assert_eq!(
+            parse(["--import", "demo/project.json"]),
+            Ok(Command::Import(ImportOptions::new(PathBuf::from(
+                "demo/project.json"
+            ))))
+        );
+        assert_eq!(
+            parse(["\u{2d}\u{2d}import", "demo", "--apply", "--trust"]),
+            Ok(Command::Import(ImportOptions {
+                path: PathBuf::from("demo"),
+                apply: true,
+                check_backup: false,
+                trust: true,
+            }))
+        );
+        assert_eq!(
+            parse(["\u{2d}\u{2d}import", "demo", "--check-backup"]),
+            Ok(Command::Import(ImportOptions {
+                path: PathBuf::from("demo"),
+                apply: false,
+                check_backup: true,
+                trust: false,
+            }))
+        );
+
+        // A missing path, an unknown flag, and asking to migrate and to only report at the same time
+        // are usage errors: none of them can be read as "do nothing", which would look like success.
+        assert!(parse(["\u{2d}\u{2d}import"]).is_err());
+        assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
+        assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
     }
 
     #[test]

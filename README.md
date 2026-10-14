@@ -126,6 +126,7 @@ cargo run -- --open-project target/new-project/project.json   # opens a project 
 cargo run -- --project-tree target/new-project/project.json   # what the project has, classified
 cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json   # previews a move and rewrites what named it; --apply does it
 cargo run -- --configuration target/new-project/project.json   # which target builds it, and what each value came from
+cargo run -- --import target/new-project/project.json   # what it is, and what an import would change
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

@@ -63,7 +63,9 @@ order they are being closed in. It is a work list, not a statement of implemente
   project tree, the rule that removing an entry fixes the references to it or blocks, and the file
   operations T02.05 asks for, whose plan reads the project without writing and whose failure puts
   the moves it already made back, and the build configuration T02.06 asks for, whose every value
-  carries the layer it came from and whose machine-local choices belong to one project; the
+  carries the layer it came from and whose machine-local choices belong to one project, and the
+  import T02.07 asks for, whose candidate is a diff before anything is written and whose failure
+  keeps the file that was read; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

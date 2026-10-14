@@ -1578,6 +1578,14 @@ impl ProjectFile {
         &self.content
     }
 
+    /// The bytes that were read.
+    ///
+    /// Exposed because two things have to be able to compare themselves with what was read: the
+    /// conflict check inside a write, and a backup that claims to be the record of this file.
+    pub fn original(&self) -> &[u8] {
+        &self.original
+    }
+
     /// The version the document declares.
     pub const fn version(&self) -> FormatVersion {
         self.content.version()

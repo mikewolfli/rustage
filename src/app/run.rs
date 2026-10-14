@@ -25,6 +25,7 @@ use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
 use crate::project::entries::{ProjectEntries, ProjectTree};
 use crate::project::files::FilePlan;
 use crate::project::format::{ProjectContent, ProjectFile};
+use crate::project::import::{Backup, Import, backups_of};
 use crate::project::recent::RecentProjects;
 use crate::project::session::{ProjectSession, SessionState, TrustDecision};
 
@@ -142,6 +143,12 @@ pub fn run(command: Command) {
         }
         Command::Configuration(options) => {
             if !configuration(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Import(options) => {
+            if !import(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
@@ -486,6 +493,121 @@ fn file_op(options: &crate::cli::FileOpOptions) -> bool {
             println!("recovered: {}", failure.is_recovered());
             // The operation did not happen, so this is not a success even when everything was put
             // back; the recovery is reported because it decides whether anyone has to look.
+            false
+        }
+    }
+}
+
+/// Imports an existing project: what it is, what an import would change, and the migration itself
+/// (task T02.07).
+///
+/// Reading and planning decide nothing and need no permission: the report is what a person looks at
+/// before agreeing. `--apply` is the only path that writes, so it is the only one that asks the
+/// project's question and takes the write permission.
+fn import(options: &crate::cli::ImportOptions) -> bool {
+    let import = match Import::inspect(&options.path) {
+        Ok(import) => import,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    for line in import.render() {
+        println!("{line}");
+    }
+
+    if options.check_backup {
+        let backups = backups_of(import.path());
+        if backups.is_empty() {
+            println!("kept files: none; no migration of this project has been done here");
+            return true;
+        }
+        println!("kept files:");
+        let mut unreadable = 0usize;
+        for path in &backups {
+            match Backup::read(path) {
+                Ok(backup) => {
+                    if !backup.is_readable() {
+                        unreadable += 1;
+                    }
+                    println!("  {}", backup.render());
+                }
+                Err(reason) => {
+                    unreadable += 1;
+                    println!("  {reason}");
+                }
+            }
+        }
+        if unreadable > 0 {
+            println!(
+                "rustage: {unreadable} kept file(s) cannot be read back as a document, so this \
+                 build cannot go back to them"
+            );
+            return false;
+        }
+        return true;
+    }
+
+    let candidate = match import.candidate() {
+        Ok(candidate) => candidate,
+        Err(refusal) => {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+    };
+    for line in candidate.render() {
+        println!("{line}");
+    }
+
+    if !options.apply {
+        println!(
+            "nothing was written: this is the plan, and the project on disk is exactly what it was"
+        );
+        return true;
+    }
+
+    let permissions = PermissionService::new();
+    let session = match ProjectSession::open(import.path()) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    println!("{}", session.question().ask());
+    let outcome = session.decide(
+        &permissions,
+        if options.trust {
+            TrustDecision::Trust
+        } else {
+            TrustDecision::DoNotTrust
+        },
+    );
+    println!("answer: {}", outcome.message());
+    if !outcome.trusted() {
+        return false;
+    }
+    if let Err(refusal) = permissions.permit(
+        crate::contracts::permission::EffectClass::FileWrite,
+        crate::host::permission::Scope::Project(session.root()),
+        crate::contracts::permission::Principal::Human,
+    ) {
+        println!("rustage: {}", refusal.message());
+        return false;
+    }
+
+    match import.commit() {
+        Ok(imported) => {
+            for line in imported.render() {
+                println!("{line}");
+            }
+            true
+        }
+        Err(failure) => {
+            // Every line is printed, including what could not be put back: a migrated project that
+            // says it is fine is the one outcome this command must not produce.
+            println!("rustage: {}", failure.message());
+            println!("recovered: {}", failure.is_recovered());
             false
         }
     }

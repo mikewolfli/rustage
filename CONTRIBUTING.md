@@ -64,6 +64,8 @@ cargo run -- --file-op target/new-project/project.json --move pages/main.json pa
 cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json --apply --trust
 cargo run -- --configuration target/new-project/project.json          # which target, what each value came from
 cargo run -- --configuration target/new-project/project.json --target default --remember   # choose one for this machine
+cargo run -- --import target/new-project/project.json          # what it is, and what an import would change
+cargo run -- --import target/new-project/project.json --check-backup   # what a past migration kept
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -225,6 +227,23 @@ credential store`, or an environment variable) and the health the host's store r
 the material, which is why the view has no field a secret could be put in. A settings window, the
 per-setting editors and the credential picker belong to the shell (T26); kit-versus-profile and the
 target triple belong to T02.10.
+
+`--import <file-or-directory>` is where this milestone's fourth acceptance line lives: "a diff before
+and after the import, and a failed migration keeps the original project". Reading decides nothing and
+writes nothing; `Import::candidate` is the plan, and it is two things a person looks at before
+agreeing: the versioned steps that would run, and the diff between the document as it was read and
+the document as this build would write it. The diff is by member, not by line, and members that do
+not change are left out — the report is about what the import would do. `--apply` is the only path
+that writes, so it is the only one that asks the project's question and takes the write permission;
+it then works in this order: the file on disk must still be the file that was read (an edit made
+while the plan was on screen stops the import, and the edit is the file that stays); a backup that is
+already there stops it (a second migration must not overwrite the record of the first); the backup is
+written and read back **byte for byte**; the migration is written; the result is read back and must be
+the version this build writes. A failure before the write leaves the project exactly as it was, and a
+failure after it puts the original bytes back from the backup — only a restore that also failed is
+reported as something left behind. `--check-backup` reports the files a past migration kept: what
+version they are, how many bytes, and whether this build reads them back as a document. Importing
+another tool's format, merging two projects and migrating downwards all belong elsewhere (T02.10/T28).
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

@@ -404,6 +404,24 @@
       "test": "a_credential_is_shown_as_a_reference_and_its_health_never_its_material",
       "evidence": "结构 + 测试",
       "note": "凭据视图由 CredentialRef::health(store, now) 得出（该接口只回答 Usable/ExpiringSoon/Expired/Missing/Unavailable）；lookup 只在网络层发出请求前调用；本模块的类型里没有 Secret 字段，因此“渲染出机密”不是纪律而是不可表达"
+    },
+    {
+      "id": "INV-IMPORT-PLANS-BEFORE-WRITING",
+      "statement": "导入先给候选：每一步迁移与每个会变的成员（diff）都在写盘之前列出，候选本身不写盘",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/import.rs",
+      "test": "the_candidate_names_the_steps_and_every_member_that_would_change",
+      "evidence": "测试",
+      "note": "候选由 migration_path 与「读到的 JSON」对「本构建会写出的 JSON」的差异算出，两者都只读；diff 不列出没有变化的成员（否则没人读），容器只报形状与规模；候选不写盘这条由用例直接断言（文件原文未变、备份不存在）"
+    },
+    {
+      "id": "INV-MIGRATION-KEEPS-ORIGINAL",
+      "statement": "迁移先留底并逐字节校验留底内容，再写结果并读回；任何一步失败都保证工程保持原样（失败发生在写之后则把原文放回）",
+      "area": "C-PROJECT",
+      "enforcedBy": "src/project/import.rs",
+      "test": "committing_keeps_the_file_it_read_and_the_result_reads_back",
+      "evidence": "测试",
+      "note": "顺序是有意的：先比对磁盘上的文件仍是读到的那份 → 已有留底则拒绝（绝不覆盖留底）→ 写留底并读回逐字节比对 → 迁移 → 读回要求是当前版本；写失败或读回失败时用留底把原字节放回，放回也失败才报告 left_behind；已有留底与外部改动两个用例断言「工程一动没动」"
     }
   ]
 }

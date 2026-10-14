@@ -123,6 +123,10 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-CREDENTIAL-VIEW-NEVER-MATERIAL | 机密引用视图只呈现“名字 + 材料在哪 + 存储怎么说”，从不读取、持有或渲染材料本身 | `C-PROJECT` | [`src/project/configuration.rs`](../../src/project/configuration.rs) | `a_credential_is_shown_as_a_reference_and_its_health_never_its_material` | 结构 + 测试 |
 | INV-IMPORT-PLANS-BEFORE-WRITING | 导入先给候选：每一步迁移与每个会变的成员（diff）都在写盘之前列出，候选本身不写盘 | `C-PROJECT` | [`src/project/import.rs`](../../src/project/import.rs) | `the_candidate_names_the_steps_and_every_member_that_would_change` | 测试 |
 | INV-MIGRATION-KEEPS-ORIGINAL | 迁移先留底并逐字节校验留底内容，再写结果并读回；任何一步失败都保证工程保持原样（失败发生在写之后则把原文放回） | `C-PROJECT` | [`src/project/import.rs`](../../src/project/import.rs) | `committing_keeps_the_file_it_read_and_the_result_reads_back` | 测试 |
+| INV-VALIDATION-NEVER-WRITES | 工程校验只回答不写盘：缺失的 SDK/资源被逐条列出，文档既不被清空也不被改写，且每次运行都把「文档逐字节未变」当作结论念出来 | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `validating_a_project_with_nothing_present_is_a_report_and_not_an_edit` | 结构 + 测试 |
+| INV-MISSING-IS-NOT-NOT-CHECKED | 「没有看过」与「不在那里」是两条不同结论：未读工具链、许可被拒、凭据存储不可达都报 not-checked，只有真查过而缺失的才报 missing，越出工程根的引用报 refused 而不是 missing | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `not_looking_at_the_toolchain_is_not_the_same_finding_as_a_missing_sdk` | 测试 |
+| INV-OFFLINE-OPEN | 打开工程不向任何远端提问：每条需求的答案都带来源，来源由需求类别唯一决定，而没有任何类别的来源是网络 | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `every_answer_says_where_it_came_from_and_none_of_them_needs_the_network` | 结构 + 测试 |
+| INV-RESCAN-IS-FRESH | 重扫是重新读文件而不是复用记住的状态：记录的扫描只作对照，条目按文档写出的路径标识（一个文件的多个成员只算一条），属于别的工程或来自更新构建的记录一律拒绝 | `C-PROJECT` | [`src/project/validate.rs`](../../src/project/validate.rs) | `a_re_scan_names_what_appeared_what_vanished_and_what_nothing_touched` | 测试 |
 
 ## 不变量的补充说明
 
@@ -155,6 +159,10 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-CREDENTIAL-VIEW-NEVER-MATERIAL | 凭据视图由 CredentialRef::health(store, now) 得出（该接口只回答 Usable/ExpiringSoon/Expired/Missing/Unavailable）；lookup 只在网络层发出请求前调用；本模块的类型里没有 Secret 字段，因此“渲染出机密”不是纪律而是不可表达 |
 | INV-IMPORT-PLANS-BEFORE-WRITING | 候选由 migration_path 与「读到的 JSON」对「本构建会写出的 JSON」的差异算出，两者都只读；diff 不列出没有变化的成员（否则没人读），容器只报形状与规模；候选不写盘这条由用例直接断言（文件原文未变、备份不存在） |
 | INV-MIGRATION-KEEPS-ORIGINAL | 顺序是有意的：先比对磁盘上的文件仍是读到的那份 → 已有留底则拒绝（绝不覆盖留底）→ 写留底并读回逐字节比对 → 迁移 → 读回要求是当前版本；写失败或读回失败时用留底把原字节放回，放回也失败才报告 left_behind；已有留底与外部改动两个用例断言「工程一动没动」 |
+| INV-VALIDATION-NEVER-WRITES | 结构：Validation::of 只取已读入的文档、已诊断的工具链状态与已查过的凭据视图，本模块里没有任何写入者；测试：同一工程缺资源又缺 SDK 时先断言文件字节未变，再走既有编辑路径（with_resource + write_document）断言页面/目标/服务/身份都还在；命令行每次收尾都重读项目文件逐字节比对，是本条已有的第二处证据 |
+| INV-MISSING-IS-NOT-NOT-CHECKED | Availability 的四个取值合并任意两个都会把「没查」说成「没有」，所以是四个而不是两个；工具链映射取 ToolchainState 自己的话：NotChecked 一律 not-checked（没人问/工程未信任/许可拒绝），Checked 里没答上的程序才是 missing；凭据同理（存储不可达是 not-checked，环境变量没设是 missing）；路径层拒绝的引用是 refused |
+| INV-OFFLINE-OPEN | Where::of(kind) 是全函数：文件→工程自身文件，工具链与目标→本机，凭据→本机凭据存储，网络这一取值在 ALL 里但没有类别映射到它，所以「离线打开同一条路径」是类型的性质而不是散文；报告把来源折成一行念出来，并在真有网络需求时改口（不是一句永远成立的 yes）；用例断言 needs_no_network() 与「每个需求的 source 都不是 Network」，并在无网络命名空间（unshare -rn，curl 取不到主机）里跑过一次真实调用链 |
+| INV-RESCAN-IS-FRESH | Scan::read 重新打开并扫描（用例断言它与「先前读入的文档」在文件出现后给出不同答案）；Scan::of 取文件声明的版本（migrated_from 优先）而不是文档值自带的版本——文档值自带的版本是本构建解释出的版本，这条陷阱以前栽过一次；Scanned::key 是文档写出的路径，因为状态是路径的性质而不是成员的，所以同一文件被多个成员命名时只有一条；Scan::between 先比对工程身份，身份不同的记录被拒绝而不是当成对照 |
 
 ## 为什么权限表要交叉校验
 

@@ -65,7 +65,9 @@ order they are being closed in. It is a work list, not a statement of implemente
   the moves it already made back, and the build configuration T02.06 asks for, whose every value
   carries the layer it came from and whose machine-local choices belong to one project, and the
   import T02.07 asks for, whose candidate is a diff before anything is written and whose failure
-  keeps the file that was read; the
+  keeps the file that was read, and the validation and re-scan T02.08 asks for, which answers every
+  need with present/missing/not-checked/refused and prints the project's own bytes unchanged as its
+  last line; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

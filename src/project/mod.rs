@@ -32,3 +32,4 @@ pub mod json;
 pub mod page;
 pub mod recent;
 pub mod session;
+pub mod validate;

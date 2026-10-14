@@ -240,6 +240,20 @@ pub struct ToolchainReport {
 }
 
 impl ToolchainReport {
+    /// The report a toolchain check produced: what each program answered, and every command that was
+    /// run, which is what makes the report checkable.
+    pub(crate) fn from_checks(
+        cargo: Option<ToolVersion>,
+        rustc: Option<ToolVersion>,
+        checks: Vec<String>,
+    ) -> Self {
+        Self {
+            cargo,
+            rustc,
+            checks,
+        }
+    }
+
     /// Cargo, when it answered.
     pub fn cargo(&self) -> Option<&ToolVersion> {
         self.cargo.as_ref()
@@ -540,14 +554,17 @@ impl ProjectSession {
         let rustc = read("rustc");
         // A program that would not start is a finding about the machine, and the report keeps it:
         // returning "not checked" here would throw away the one half that did answer.
-        let mut report = ToolchainReport {
-            cargo: cargo.as_ref().ok().cloned(),
-            rustc: rustc.as_ref().ok().cloned(),
-            checks,
-        };
-        for failure in [cargo.err(), rustc.err()].into_iter().flatten() {
-            report.checks.push(failure.message());
+        for failure in [cargo.as_ref().err(), rustc.as_ref().err()]
+            .into_iter()
+            .flatten()
+        {
+            checks.push(failure.message());
         }
+        let report = ToolchainReport::from_checks(
+            cargo.as_ref().ok().cloned(),
+            rustc.as_ref().ok().cloned(),
+            checks,
+        );
         self.toolchain = ToolchainState::Checked(report);
         &self.toolchain
     }

@@ -71,7 +71,7 @@ test('the committed data, document and whitepaper pass', () => {
   assert.deepEqual(result.errors, []);
   assert.equal(result.stats.areas, 9);
   assert.equal(result.stats.permissions, 8);
-  assert.equal(result.stats.invariants, 27);
+  assert.equal(result.stats.invariants, 31);
 });
 
 test('describe names what was checked', () => {

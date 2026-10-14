@@ -52,6 +52,8 @@ pub enum Command {
     /// Imports an existing project: what it is, what would change, and the migration itself
     /// (task T02.07).
     Import(ImportOptions),
+    /// Checks what a project needs, re-scans it, and changes nothing (task T02.08).
+    Validate(ValidateOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -154,6 +156,38 @@ impl ImportOptions {
             apply: false,
             check_backup: false,
             trust: false,
+        }
+    }
+}
+
+/// How a project should be checked, and what should be recorded or compared (task T02.08).
+///
+/// Checking writes nothing outside the two paths below, and never the project document: `record` is
+/// where a scan of the project is written, and `rescan` is the scan to compare against. Both are
+/// optional, and neither is the project.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ValidateOptions {
+    /// The project document.
+    pub path: PathBuf,
+    /// Whether to read the toolchain, which runs two programs.
+    pub diagnose: bool,
+    /// Whether the person answering the project's question said yes.
+    pub trust: bool,
+    /// Where to write a scan of the project, when one should be kept.
+    pub record: Option<PathBuf>,
+    /// The scan to compare against, when a re-scan was asked for.
+    pub rescan: Option<PathBuf>,
+}
+
+impl ValidateOptions {
+    /// Options that check a project and write nothing.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            diagnose: false,
+            trust: false,
+            record: None,
+            rescan: None,
         }
     }
 }
@@ -503,6 +537,34 @@ where
             options.trust = trust;
             return Ok(Command::FileOp(options));
         }
+        "--validate" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = ValidateOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--diagnose" => options.diagnose = true,
+                    "--trust" => options.trust = true,
+                    "--record" | "--rescan" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if argument.to_str().unwrap_or_default() == "--record" {
+                            options.record = Some(PathBuf::from(path));
+                        } else {
+                            options.rescan = Some(PathBuf::from(path));
+                        }
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Validate(options));
+        }
         "--configuration" => {
             let Some(path) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -612,7 +674,9 @@ pub fn help_text() -> &'static str {
                                  [--move <from> <to>] [--apply] [--trust]\n\n\
             rustage --configuration <file> [--target <name>] [--override <key>=<value>]\n\
                                   [--remember | --forget]\n\n\
-            rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n\n\
+            rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n\
+            rustage --validate <file> [--diagnose] [--trust]\n\
+                                 [--record <file> | --rescan <file>]\n\n\
      With no options, prints the current project status.\n\n\
      Options:\n\
        -h, --help                    Print this help message\n\
@@ -652,6 +716,14 @@ pub fn help_text() -> &'static str {
                                      import would change; --apply migrates it, keeping the file\n\
                                      that was read, and --check-backup reports what was kept\n\
        --check-backup                With --import, report the files a past migration kept\n\
+       --validate <file>             Check what the project needs and whether it is there, and\n\
+                                     change nothing: the document is read, never written\n\
+       --diagnose                    With --validate or --open-project, read the toolchain, which\n\
+                                     runs two programs and needs the project to be trusted\n\
+       --record <file>               With --validate, write a scan of the project to <file>, so a\n\
+                                     later --rescan has something to compare against\n\
+       --rescan <file>               With --validate, compare the project with the scan recorded in\n\
+                                     <file> and name what appeared, vanished or changed\n\
      Global options:\n\
        --log-level <level>           error | warn | info | debug | trace (default: info)\n"
 }
@@ -662,7 +734,7 @@ mod tests {
 
     use super::{
         Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions,
-        LaunchOptions, NewProjectOptions, OpenProjectOptions, log_level_of, parse,
+        LaunchOptions, NewProjectOptions, OpenProjectOptions, ValidateOptions, log_level_of, parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -859,6 +931,50 @@ mod tests {
         assert!(parse(["\u{2d}\u{2d}import"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_validate_options() {
+        assert_eq!(
+            parse(["--validate", "demo/project.json"]),
+            Ok(Command::Validate(ValidateOptions::new(PathBuf::from(
+                "demo/project.json"
+            ))))
+        );
+        assert_eq!(
+            parse([
+                "--validate",
+                "demo/project.json",
+                "--diagnose",
+                "--trust",
+                "--record",
+                "out/scan.json",
+            ]),
+            Ok(Command::Validate(ValidateOptions {
+                path: PathBuf::from("demo/project.json"),
+                diagnose: true,
+                trust: true,
+                record: Some(PathBuf::from("out/scan.json")),
+                rescan: None,
+            }))
+        );
+        assert_eq!(
+            parse(["--validate", "demo", "--rescan", "out/scan.json"]),
+            Ok(Command::Validate(ValidateOptions {
+                path: PathBuf::from("demo"),
+                diagnose: false,
+                trust: false,
+                record: None,
+                rescan: Some(PathBuf::from("out/scan.json")),
+            }))
+        );
+
+        // A missing path, an unknown flag, and a flag whose value is not there are usage errors:
+        // none of them can be read as "check it and change nothing", which would look like success.
+        assert!(parse(["--validate"]).is_err());
+        assert!(parse(["--validate", "demo", "--wat"]).is_err());
+        assert!(parse(["--validate", "demo", "--record"]).is_err());
+        assert!(parse(["--validate", "demo", "--rescan"]).is_err());
     }
 
     #[test]

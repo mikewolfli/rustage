@@ -147,6 +147,12 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Validate(options) => {
+            if !validate(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Import(options) => {
             if !import(&options) {
                 crate::host::log::flush();
@@ -493,6 +499,193 @@ fn file_op(options: &crate::cli::FileOpOptions) -> bool {
             println!("recovered: {}", failure.is_recovered());
             // The operation did not happen, so this is not a success even when everything was put
             // back; the recovery is reported because it decides whether anyone has to look.
+            false
+        }
+    }
+}
+
+/// Ends a check that refused something.
+///
+/// The last line is printed either way, and the answer is *not* that line: a check that could not do
+/// what it was asked returns a failure even though the document is untouched, because "nothing was
+/// written" describes the file and not what the command achieved. Reporting the two as one answer is
+/// how a refusal comes out as a success with a reassuring last line.
+fn stop_without_writing(session: &ProjectSession, before: &[u8]) -> bool {
+    if !nothing_written(session, before) {
+        println!("rustage: and the document is not what it was, which it must be");
+    }
+    false
+}
+
+/// Checks what a project needs, re-scans it when asked, and proves on the way out that nothing was
+/// written (task T02.08).
+///
+/// The check reads the document, the filesystem, the toolchain (only when asked, because reading the
+/// toolchain runs two programs) and this machine's credential store. That is the whole of it: there
+/// is no writer in this path except `--record`, which writes the scan to the path the caller names,
+/// and the last line of the output is the project's own bytes compared with the ones read at the
+/// start — so "this did not clear my document" is shown rather than promised.
+fn validate(options: &crate::cli::ValidateOptions) -> bool {
+    use crate::project::validate::{Reach, Scan, Validation};
+
+    let permissions = PermissionService::new();
+    let mut session = match ProjectSession::open(&options.path) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    let before = match std::fs::read(session.path()) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            println!(
+                "rustage: {} could not be read: {error}",
+                session.path().display()
+            );
+            return false;
+        }
+    };
+    println!("project: {}", session.path().display());
+    println!("root: {}", session.root().as_path().display());
+    println!("format: {}", session.file().verdict().message());
+
+    let toolchain = match session.file().document() {
+        Some(_) => {
+            if options.diagnose {
+                println!("{}", session.question().ask());
+                if options.trust {
+                    let outcome = session.decide(&permissions, TrustDecision::Trust);
+                    println!("answer: {}", outcome.message());
+                }
+                session.diagnose_toolchain(&permissions).clone()
+            } else {
+                session.toolchain().clone()
+            }
+        }
+        None => {
+            // A document this build does not interpret cannot be checked, and this is not an empty
+            // report pretending otherwise.
+            println!(
+                "rustage: {} cannot be checked — {}; the file is untouched and stays readable",
+                session.path().display(),
+                session.file().verdict().message()
+            );
+            return stop_without_writing(&session, &before);
+        }
+    };
+    println!("toolchain: {}", toolchain.message());
+    println!(
+        "identity: {} ({})",
+        session.name().unwrap_or("<not readable>"),
+        session.id().unwrap_or("<not readable>")
+    );
+
+    let store = crate::host::network::default_store();
+    let document = session
+        .file()
+        .document()
+        .expect("the document was interpreted above");
+    let reach = Reach::of(document, store.as_ref(), SystemTime::now());
+    let validation = Validation::of(document, &toolchain, &reach);
+    for line in validation.render() {
+        println!("{line}");
+    }
+    // A missing dependency is a finding, not a failure: the project is still open and editable, and
+    // saying so is the difference between a report and a repair.
+    if !validation.missing().is_empty() {
+        println!(
+            "missing: {} — the project stays open and editable, and nothing was cleared to make \
+             this report simpler",
+            validation.missing().len()
+        );
+    }
+
+    if let Some(record) = options.record.as_deref() {
+        if let Err(refusal) = crate::project::validate::may_record_at(session.file(), record) {
+            println!("rustage: {}", refusal.message());
+            return stop_without_writing(&session, &before);
+        }
+        // The record is taken from the file as it is now, the same way a re-scan is: a record of
+        // what a document was when it was opened is not a record of the project.
+        match Scan::read(session.path()) {
+            Ok(scan) => match scan.save(record) {
+                Ok(path) => println!("recorded scan: {}", path.display()),
+                Err(error) => {
+                    println!("rustage: {}", error.message());
+                    return stop_without_writing(&session, &before);
+                }
+            },
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return stop_without_writing(&session, &before);
+            }
+        }
+    }
+
+    if let Some(baseline) = options.rescan.as_deref() {
+        let recorded = match Scan::load(baseline) {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return stop_without_writing(&session, &before);
+            }
+        };
+        // A re-scan reads the file again rather than reusing the document that was read at the
+        // start: a remembered state reported as the current one is the failure this is here to
+        // avoid.
+        let now = match Scan::read(session.path()) {
+            Ok(now) => now,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return stop_without_writing(&session, &before);
+            }
+        };
+        match recorded.between(&now) {
+            Ok(rescan) => {
+                println!("re-scan against {}:", baseline.display());
+                for line in rescan.render() {
+                    println!("{line}");
+                }
+            }
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return stop_without_writing(&session, &before);
+            }
+        }
+    }
+
+    nothing_written(&session, &before)
+}
+
+/// The last line of a check: the document is byte for byte what it was when the check began.
+///
+/// It is printed on every path out, including the ones that refused something, because "the file was
+/// not touched" is exactly what a person needs to know before they trust the report.
+fn nothing_written(session: &ProjectSession, before: &[u8]) -> bool {
+    match std::fs::read(session.path()) {
+        Ok(after) if after == before => {
+            println!(
+                "unchanged: {} is byte for byte what it was ({} byte(s))",
+                session.path().display(),
+                after.len()
+            );
+            true
+        }
+        Ok(after) => {
+            println!(
+                "rustage: {} changed while it was being checked ({} byte(s) before, {} now)",
+                session.path().display(),
+                before.len(),
+                after.len()
+            );
+            false
+        }
+        Err(error) => {
+            println!(
+                "rustage: {} could not be read back: {error}",
+                session.path().display()
+            );
             false
         }
     }

@@ -115,6 +115,8 @@ cargo run -- --project-tree target/new-project/project.json   # 分类列出工�
 cargo run -- --file-op target/new-project/project.json --move pages/main.json pages/windows/main.json   # 预览移动并改写引用它的地方；加 --apply 才真正执行
 cargo run -- --configuration target/new-project/project.json   # 用哪个目标构建，每个值来自哪里
 cargo run -- --import target/new-project/project.json   # 它是什么，导入会改什么
+cargo run -- --validate target/new-project/project.json   # 它需要什么、是否都在；不写盘
+cargo run -- --validate target/new-project/project.json --rescan target/scan.json   # 与记录的扫描相比改了什么
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

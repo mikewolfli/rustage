@@ -66,6 +66,10 @@ cargo run -- --configuration target/new-project/project.json          # which ta
 cargo run -- --configuration target/new-project/project.json --target default --remember   # choose one for this machine
 cargo run -- --import target/new-project/project.json          # what it is, and what an import would change
 cargo run -- --import target/new-project/project.json --check-backup   # what a past migration kept
+cargo run -- --validate target/new-project/project.json      # what it needs, and whether it is there; writes nothing
+cargo run -- --validate target/new-project/project.json --diagnose --trust   # include the toolchain (runs two programs)
+cargo run -- --validate target/new-project/project.json --record target/scan.json   # keep a scan to compare against
+cargo run -- --validate target/new-project/project.json --rescan target/scan.json   # what changed since that scan
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -244,6 +248,31 @@ failure after it puts the original bytes back from the backup — only a restore
 reported as something left behind. `--check-backup` reports the files a past migration kept: what
 version they are, how many bytes, and whether this build reads them back as a document. Importing
 another tool's format, merging two projects and migrating downwards all belong elsewhere (T02.10/T28).
+
+`--validate <file>` is where this milestone's fifth acceptance line lives: "a missing SDK or resource
+does not clear the editable document". Checking is answering, and the types say so: there is no writer
+in `src/project/validate.rs` at all, and the command prints, as its last line, the project's own bytes
+compared with the ones it read when it started. Every need is answered with one of four words, because
+folding them together is how a report starts lying: `present`, `missing`, `not-checked` (nobody looked
+— the project is not trusted, the permission table said no, the store could not be reached) and
+`refused` (the path leaves the project root, so it was never resolved). An unread toolchain is
+therefore *not* a missing SDK: `--diagnose --trust` reads it, and only then does a program that did not
+answer become a missing one. Needs are identified the way a scan identifies an item — by the path the
+document writes — so a file that three members name is one need and one item, and the two reports of
+the same document agree about how much there is. Each need also carries where its answer came from,
+and the sources fold into one line: the project's own files, this machine, this machine's credential
+store. Nothing in a check asks a far end, and the mapping from a kind of need to a source is a total
+function with no arm that is the network — which is what "this project opens offline" means here, and
+it was run once inside a network namespace (`unshare -rn`, where `curl` cannot reach a host) rather
+than asserted in prose. Opening the project still reads nothing off the disk it should not: validation
+never writes, and the only path that writes anything at all is `--record`, which writes a scan to the
+file the caller names and refuses to write it over the project document *or over any file the project
+declares* — a report that destroys what it is about is not a report. A refusal in the
+command (a record that is the project, a baseline that belongs to another project or a newer build, a
+document this build does not interpret) exits 4 while still printing that the file was not touched:
+"nothing was written" describes the file, and reporting it as the command's own success is how a
+refusal comes out looking like one. Reusing the SDK/kit identities T02.10 defines, and the designer's
+own validation panel, belong to those tasks.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

@@ -147,6 +147,12 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Dependencies(options) => {
+            if !dependencies(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Kit(options) => {
             if !kit(&options) {
                 crate::host::log::flush();
@@ -543,6 +549,225 @@ fn stop_without_writing(session: &ProjectSession, before: &[u8]) -> bool {
 /// whether anything was *decided* to be wrong: "nobody looked" leaves the kit incomplete and is not
 /// reported as a failure, because a script that treats it as one would be told to fix what may be
 /// fine.
+/// Resolves a workspace's dependencies, and says exactly what it did (task T02.11).
+///
+/// The order here *is* the guarantee: the resolution is decided (a command and its effects), it is
+/// shown, every effect is mapped to the class the permission table uses, each class is authorized,
+/// and only then is anything started. Nothing is inferred from "it is only cargo": the effects come
+/// from the resolution that was asked for, and a caller who did not authorize one does not get it.
+fn dependencies(options: &crate::cli::DependenciesOptions) -> bool {
+    use crate::contracts::permission::{EffectClass, Principal};
+    use crate::host::paths::ProjectRoot;
+    use crate::host::permission::Scope;
+    use crate::host::subprocess::{OwnedProcess, ProcessSpec};
+    use crate::project::dependencies::{
+        Digest, LOCKFILE_FILE_NAME, Lockfile, Resolution, Review, failure_reason,
+        is_a_lockfile_disagreement, manifest_of, may_record_at,
+    };
+    use crate::project::session::{TrustDecision, TrustQuestion};
+
+    if let Err(refusal) = manifest_of(&options.directory) {
+        println!("rustage: {}", refusal.message());
+        return false;
+    }
+    let root = match ProjectRoot::new(&options.directory) {
+        Ok(root) => root,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+
+    // The resolution is a value, and the flags are its effects: what would be run, and what running
+    // it could do, are decided once, here, and reported before anything is asked for.
+    let resolution = Resolution::with_effects(
+        root.as_path(),
+        options.allow_lockfile_change,
+        options.allow_network,
+    );
+    println!("{}", resolution.render());
+
+    let permissions = PermissionService::new();
+    let question = TrustQuestion::read(&root);
+    println!("{}", question.ask());
+    let outcome = crate::project::session::answer(
+        &question,
+        &permissions,
+        if options.trust {
+            TrustDecision::Trust
+        } else {
+            TrustDecision::DoNotTrust
+        },
+    );
+    println!("answer: {}", outcome.message());
+
+    let mut authorized = Vec::new();
+    let mut command_permit = None;
+    if outcome.trusted() {
+        for class in [
+            EffectClass::Command,
+            EffectClass::FileWrite,
+            EffectClass::Network,
+        ] {
+            if !resolution
+                .effects()
+                .iter()
+                .any(|effect| effect.class() == class)
+            {
+                continue;
+            }
+            match permissions.permit(class, Scope::Project(&root), Principal::Human) {
+                Ok(permit) => {
+                    if class == EffectClass::Command {
+                        command_permit = Some(permit);
+                    }
+                    authorized.push(class);
+                }
+                Err(refusal) => {
+                    println!("rustage: {}", refusal.message());
+                    return false;
+                }
+            }
+        }
+    }
+    let unauthorized = resolution.unauthorized(&authorized);
+    if !unauthorized.is_empty() {
+        println!(
+            "rustage: {} effect(s) are not authorized here: {}; nothing was run",
+            unauthorized.len(),
+            unauthorized
+                .iter()
+                .map(|effect| effect.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        return false;
+    }
+    let Some(command_permit) = command_permit else {
+        // Unreachable while `RunsAProgram` is part of every resolution, and a branch rather than an
+        // unwrap so that a future resolution without it still cannot run an unauthorized program.
+        println!("rustage: no command was authorized; nothing was run");
+        return false;
+    };
+
+    let before = Lockfile::read(root.as_path());
+    let mut spec = ProcessSpec::new(resolution.command(), "cargo");
+    for argument in resolution.arguments() {
+        spec = spec.arg(argument);
+    }
+    let mut process = match OwnedProcess::spawn(spec, &command_permit) {
+        Ok(process) => process,
+        Err(error) => {
+            println!("rustage: `cargo` could not be started: {error}");
+            return false;
+        }
+    };
+    let exit = process.wait();
+    let output = process.output_so_far();
+
+    if !exit.is_success() {
+        // A resolution that failed is reported as a failure, with cargo's own reason, and the one
+        // reason that is not a defect is named as what it is: a dependency change is pending, and
+        // this resolution does not make it.
+        match failure_reason(&output.stderr) {
+            Some(reason) if is_a_lockfile_disagreement(&reason) => {
+                println!("rustage: `{}` failed: {reason}", resolution.command());
+                println!(
+                    "a dependency change is pending: {} is not what the manifest resolves to, and \
+                     this resolution does not change it (--allow-lockfile-change resolves it \
+                     offline; --allow-network additionally lets it reach the registry)",
+                    LOCKFILE_FILE_NAME
+                );
+            }
+            Some(reason) => println!("rustage: `{}` failed: {reason}", resolution.command()),
+            None => println!(
+                "rustage: `{}` ended with {}: {}",
+                resolution.command(),
+                exit.message(),
+                output.stderr.trim()
+            ),
+        }
+        return false;
+    }
+
+    let digest = match Digest::of_cargo_metadata(&output.stdout, root.as_path()) {
+        Ok(digest) => digest,
+        Err(error) => {
+            println!(
+                "rustage: cargo reported something this build could not read: {}",
+                error.message()
+            );
+            return false;
+        }
+    };
+    for line in digest.render() {
+        println!("{line}");
+    }
+    // The lockfile is read where cargo keeps it, and where that is not the directory that was named,
+    // saying so is the honest answer: a member directory's lockfile is the workspace's.
+    let workspace_root = PathBuf::from(digest.root());
+    let after = digest.lockfile().clone();
+    if workspace_root != root.as_path() {
+        println!(
+            "this manifest is a member of the workspace at {}: {LOCKFILE_FILE_NAME} is there, {}",
+            workspace_root.display(),
+            after.render()
+        );
+    } else if before != after {
+        println!(
+            "this resolution changed {LOCKFILE_FILE_NAME}: {} before, {} after",
+            packages_of(&before),
+            packages_of(&after)
+        );
+    }
+
+    if let Some(path) = options.review.as_ref() {
+        let recorded = match Digest::load(path) {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                println!("rustage: the record could not be read: {}", error.message());
+                return false;
+            }
+        };
+        match Review::between(&recorded, &digest) {
+            Ok(review) => {
+                for line in review.render() {
+                    println!("{line}");
+                }
+            }
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        }
+    }
+    if let Some(path) = options.record.as_ref() {
+        if let Err(refusal) = may_record_at(root.as_path(), path) {
+            println!("rustage: {}", refusal.message());
+            return false;
+        }
+        match digest.save(path) {
+            Ok(written) => println!("recorded: {}", written.display()),
+            Err(error) => {
+                println!(
+                    "rustage: the record could not be written: {}",
+                    error.message()
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// How many packages a lockfile holds, for a line about a change.
+fn packages_of(lockfile: &crate::project::dependencies::Lockfile) -> String {
+    match lockfile.packages() {
+        Some(packages) => format!("{packages} package(s)"),
+        None => "absent".to_owned(),
+    }
+}
+
 fn kit(options: &crate::cli::KitOptions) -> bool {
     use crate::project::kit::{Found, Kit, Observed, Probe};
     use crate::project::session::{TrustDecision, TrustQuestion};

@@ -70,7 +70,8 @@ order they are being closed in. It is a work list, not a statement of implemente
   last line, and the workspace T02.09 asks for, whose files are identified by the member that names
   them and whose member removal touches no directory, and the versioned kit T02.10 asks for, whose
   members declare the triples they can serve and which is asked about a triple rather than a
-  profile; the
+  profile, and the dependency resolution T02.11 asks for, whose command and effects are one value
+  authorized class by class and whose default resolution cannot write a file or reach the network; the
   environment this round's evidence came from — a Linux preview/stub backend, not the macOS session
   the previous record measured — the pre-existing problems found before starting and how each was
   repaired, the defects the round's own tests turned up, the upstream gaps the round found and

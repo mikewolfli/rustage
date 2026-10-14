@@ -615,6 +615,20 @@ mod tests {
         }
     }
 
+    /// A directory outside every sandbox, one per test.
+    ///
+    /// The same counter argument as [`sandbox`]: two tests that shared one directory would remove it
+    /// from under each other, and a link left pointing at a directory that no longer exists is a
+    /// different case from a link pointing outside the root.
+    fn outside() -> TempDirectory {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("rustage-outside-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("a temporary directory is creatable");
+        TempDirectory(path)
+    }
+
     #[test]
     fn a_relative_path_resolves_against_the_root() {
         let sandbox = sandbox();
@@ -717,9 +731,8 @@ mod tests {
     #[test]
     fn a_new_directory_reached_through_a_link_out_of_the_root_is_still_refused() {
         let sandbox = sandbox();
-        let outside = std::env::temp_dir().join(format!("rustage-outside-{}", std::process::id()));
-        std::fs::create_dir_all(&outside).unwrap();
-        std::os::unix::fs::symlink(&outside, sandbox.root.join("escape")).unwrap();
+        let outside = outside();
+        std::os::unix::fs::symlink(&outside.0, sandbox.root.join("escape")).unwrap();
         let root = ProjectRoot::new(&sandbox.root).unwrap();
 
         // The link itself exists, so the check stops there and sees where it leads; the part of the
@@ -731,16 +744,14 @@ mod tests {
             matches!(error, PathError::LeavesRootThroughLink { .. }),
             "expected a link escape, got {error:?}",
         );
-        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_link_pointing_out_of_the_root_is_refused() {
         let sandbox = sandbox();
-        let outside = std::env::temp_dir().join(format!("rustage-outside-{}", std::process::id()));
-        std::fs::create_dir_all(&outside).unwrap();
-        std::os::unix::fs::symlink(&outside, sandbox.root.join("escape")).unwrap();
+        let outside = outside();
+        std::os::unix::fs::symlink(&outside.0, sandbox.root.join("escape")).unwrap();
         let root = ProjectRoot::new(&sandbox.root).unwrap();
 
         let error = root.resolve("escape/secret.txt").unwrap_err();
@@ -749,7 +760,6 @@ mod tests {
             matches!(error, PathError::LeavesRootThroughLink { .. }),
             "expected a link escape, got {error:?}",
         );
-        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]

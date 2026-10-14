@@ -68,6 +68,11 @@ impl Json {
         Self::Array(values.into_iter().collect())
     }
 
+    /// A boolean value.
+    pub const fn bool(value: bool) -> Self {
+        Self::Bool(value)
+    }
+
     /// Which kind of value this is.
     pub const fn kind(&self) -> JsonKind {
         match self {
@@ -92,6 +97,14 @@ impl Json {
     pub fn as_array(&self) -> Option<&[Json]> {
         match self {
             Self::Array(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    /// The boolean, when this is one.
+    pub const fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(value) => Some(*value),
             _ => None,
         }
     }

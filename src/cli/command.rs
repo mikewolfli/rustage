@@ -65,6 +65,9 @@ pub enum Command {
     NewWorkspace(NewWorkspaceOptions),
     /// Shows which tools a kit is made of, and what this machine has of them (task T02.10).
     Kit(KitOptions),
+    /// Resolves a workspace's dependencies: what it is made of, and what changed since a record
+    /// (task T02.11).
+    Dependencies(DependenciesOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -197,6 +200,44 @@ impl KitOptions {
             path: path.into(),
             diagnose: false,
             triple: None,
+            trust: false,
+        }
+    }
+}
+
+/// How a workspace's dependencies should be resolved (task T02.11).
+///
+/// Showing the resolution runs nothing: it prints the command and the effects that command would
+/// have. Nothing is started until every effect has been authorized, because a dependency command is
+/// the one command in this build that can write a file or reach the network. The flags *are* those
+/// effects: `--allow-lockfile-change` lets the resolution write the lockfile, `--allow-network` lets
+/// it reach the registry, and neither asks for an upgrade — the resolution stays locked unless the
+/// lockfile itself may change, and then the change is what the report is about.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DependenciesOptions {
+    /// The workspace directory: the one the manifest is in.
+    pub directory: PathBuf,
+    /// The record to compare the resolution against, when there is one.
+    pub review: Option<PathBuf>,
+    /// Where to write the record, when the caller asked for one.
+    pub record: Option<PathBuf>,
+    /// Whether the lockfile may be written.
+    pub allow_lockfile_change: bool,
+    /// Whether the registry may be reached.
+    pub allow_network: bool,
+    /// Whether the person answering the directory's question said yes.
+    pub trust: bool,
+}
+
+impl DependenciesOptions {
+    /// Options that resolve a workspace and change nothing.
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+            review: None,
+            record: None,
+            allow_lockfile_change: false,
+            allow_network: false,
             trust: false,
         }
     }
@@ -684,6 +725,35 @@ where
             }
             return Ok(Command::Kit(options));
         }
+        "--dependencies" => {
+            let Some(directory) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = DependenciesOptions::new(PathBuf::from(directory));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                match argument.to_str().unwrap_or_default() {
+                    "--allow-lockfile-change" => options.allow_lockfile_change = true,
+                    "--allow-network" => options.allow_network = true,
+                    "--trust" => options.trust = true,
+                    "--review" | "--record" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if argument.to_str().unwrap_or_default() == "--review" {
+                            options.review = Some(PathBuf::from(path));
+                        } else {
+                            options.record = Some(PathBuf::from(path));
+                        }
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Dependencies(options));
+        }
         "--new-workspace" => {
             let Some(directory) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -915,6 +985,9 @@ pub fn help_text() -> &'static str {
             rustage --validate <file> [--diagnose] [--trust]\n\
                                  [--record <file> | --rescan <file>]\n\
             rustage --kit <file> [--diagnose] [--trust] [--triple <triple>]\n\
+            rustage --dependencies <directory> [--review <record> | --record <record>]\n\
+                                               [--allow-lockfile-change] [--allow-network]\n\
+                                               [--trust]\n\
             rustage --new-workspace <directory> [--name <name>]\n\
             rustage --workspace <file> [--add <name>=<root> | --remove <name> |\n\
                                        --activate <name> | --file <member>:<path>]\n\
@@ -971,6 +1044,15 @@ pub fn help_text() -> &'static str {
                                      programs the kit names), --triple says which output to ask about\n\
        --triple <triple>             With --kit, the output triple to ask about: a kit never\n\
                                      carries which profile is being built\n\
+       --dependencies <directory>    Resolve a Cargo workspace's dependencies and report the tree;\n\
+                                     nothing runs until the directory is trusted and each effect of\n\
+                                     the resolution has been authorized\n\
+       --review <record>             With --dependencies, compare the resolution with a record and\n\
+                                     name what was added, removed, re-versioned or re-featured\n\
+       --allow-lockfile-change       With --dependencies, let the resolution write Cargo.lock\n\
+                                     (offline: cargo resolves from what this machine has)\n\
+       --allow-network               With --dependencies, let the resolution reach the registry;\n\
+                                     without it the resolution is offline\n\
        --new-workspace <directory>   Create a workspace document in a directory, with no members\n\
                                      yet; --name <name> (default: the directory)\n\
        --workspace <file>            Show a workspace: its members, what each holds, and its files\n\
@@ -992,9 +1074,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Command, ConfigurationOptions, DropEntryOptions, FileOpOptions, ImportOptions, KitOptions,
-        LaunchOptions, NewProjectOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
-        WorkspaceAction, WorkspaceOptions, log_level_of, parse,
+        Command, ConfigurationOptions, DependenciesOptions, DropEntryOptions, FileOpOptions,
+        ImportOptions, KitOptions, LaunchOptions, NewProjectOptions, NewWorkspaceOptions,
+        OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions, log_level_of,
+        parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -1191,6 +1274,43 @@ mod tests {
         assert!(parse(["\u{2d}\u{2d}import"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--wat"]).is_err());
         assert!(parse(["\u{2d}\u{2d}import", "demo", "--apply", "--check-backup"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_dependency_options() {
+        assert_eq!(
+            parse(["--dependencies", "area"]),
+            Ok(Command::Dependencies(DependenciesOptions::new(
+                PathBuf::from("area")
+            )))
+        );
+        assert_eq!(
+            parse([
+                "--dependencies",
+                "area",
+                "--review",
+                "area/deps.json",
+                "--record",
+                "area/now.json",
+                "--allow-lockfile-change",
+                "--allow-network",
+                "--trust",
+            ]),
+            Ok(Command::Dependencies(DependenciesOptions {
+                directory: PathBuf::from("area"),
+                review: Some(PathBuf::from("area/deps.json")),
+                record: Some(PathBuf::from("area/now.json")),
+                allow_lockfile_change: true,
+                allow_network: true,
+                trust: true,
+            }))
+        );
+        assert!(parse(["--dependencies"]).is_err());
+        assert!(parse(["--dependencies", "area", "--wat"]).is_err());
+        assert!(parse(["--dependencies", "area", "--record"]).is_err());
+        assert!(parse(["--dependencies", "area", "--review"]).is_err());
+        // Neither flag is spelled in a way that could be mistaken for the other:
+        assert!(parse(["--dependencies", "area", "--lockfile"]).is_err());
     }
 
     #[test]

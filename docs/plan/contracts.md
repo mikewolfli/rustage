@@ -133,6 +133,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-KIT-IS-NOT-AN-OUTPUT | Kit 只描述工具组合，从不描述输出：文档里没有 profile/triple 作为它自己的属性（写进来会被读入时拒绝），输出只以 triple 提问，成员各自显式声明能服务哪些 triple | `C-PROJECT` | [`src/project/kit.rs`](../../src/project/kit.rs) | `a_kit_is_not_an_output_and_a_profile_in_it_is_refused` | 结构 + 测试 |
 | INV-KIT-DIAGNOSES-EXPLICITLY | 缺成员、版本不符、无法服务与不兼容组合都显式给出，且绝不互相冒充：「没人问过」不是缺，无法比较的版本不判满足也不判不满足，必需角色没有成员时明说无法构建 | `C-PROJECT` | [`src/project/kit.rs`](../../src/project/kit.rs) | `not_asked_a_missing_member_and_a_wrong_version_are_three_different_findings` | 结构 + 测试 |
 | INV-KIT-IS-VERSIONED-AND-KEYED-BY-ROLE | Kit 自带版本（两个版本是两个 Kit），成员按角色唯一：同一角色两个成员、角色不认识、版本要求读不出来、路径探针配版本要求，都在读入时拒绝，不留到解析时按「找到哪个算哪个」决定 | `C-PROJECT` | [`src/project/kit.rs`](../../src/project/kit.rs) | `a_document_that_cannot_be_a_combination_is_refused_when_it_is_read` | 测试 |
+| INV-RESOLUTION-EFFECTS-AUTHORIZED | 一次解析就是一个值：命令与它会产生哪些副作用一起给出，每个副作用按权限表的类别命名，默认解析靠 `--locked --offline` 在结构上是只读的，任何副作用未获授权就不启动任何程序，也绝不会默认升级依赖或访问网络 | `C-PROJECT` | [`src/project/dependencies.rs`](../../src/project/dependencies.rs) | `the_command_a_resolution_would_run_says_what_it_would_do` | 结构 + 测试 |
+| INV-DEPENDENCY-RECORD-BELONGS-TO-ONE-WORKSPACE | 依赖记录属于一个工作区：记录按 cargo 报告的工作区根键控，拿别的工作区的记录作基线一律拒绝比较而不是照比，记录也不许写到清单或锁文件上，一次版本变化配对成一条变化而不是「删一个加一个」 | `C-PROJECT` | [`src/project/dependencies.rs`](../../src/project/dependencies.rs) | `a_review_names_what_changed_and_what_did_not` | 结构 + 测试 |
+| INV-DEPENDENCY-FACTS-ARE-READ-WHERE-THEY-LIVE | 依赖事实只在它所在的地方读：锁文件按 cargo 报告的工作区根读取（成员目录的锁文件属于工作区），报告的工作区根与所指名的目录不同时如实说出锁文件在那里，而不是把「这个目录没有锁文件」当成工作区的状态 | `C-PROJECT` | [`src/project/dependencies.rs`](../../src/project/dependencies.rs) | `the_lockfile_is_read_where_cargo_keeps_it` | 结构 + 测试 |
 
 ## 不变量的补充说明
 
@@ -175,6 +178,9 @@ T00.05 的最低验收是「跨视图/服务没有第二份可写模型」。这
 | INV-KIT-IS-NOT-AN-OUTPUT | Kit::diagnose 只接一个 triple，没有任何参数是 profile；成员用 Serves（Every 或一组 triple，两种都写出来，不靠省略字段表达「都行」）；不认识的成员在读入时被拒绝并说明「哪个 profile 由工程配置回答」，因此「把 profile 塞进 kit」不是被忽略而是报错；报告的每一行都写着这一点 |
 | INV-KIT-DIAGNOSES-EXPLICITLY | Finding 五态（Ok/Missing/Version/NotChecked/CannotServe）合并任意两个都会把「没查」说成「没有」或把「版本不符」说成「没装」；Observed 里没有记录的成员返回 NotChecked 而不是 Nothing，理由原文保留；Requirement::holds 对无法比较的版本返回 None → NotChecked，并把版本与要求都写出来；必需角色（只有 toolchain）缺成员时报告里带「nothing can be built without one」；命令的退出码看 has_decided_problems（被判定为错），不看 is_complete，所以「没查过」不会冒充失败 |
 | INV-KIT-IS-VERSIONED-AND-KEYED-BY-ROLE | identity 的三个成员是 id/name/version，version 为空即拒绝；角色用 ProjectError::Duplicate 拒绝第二个同角色成员（两个 toolchain 是提问而不是组合）；版本要求只有 `*`、`1.2.3`、`>=1.2.3` 三种形状，其它形状在读入时报出写法；路径探针的「版本」只能是 `*`，因为路径无法回答版本，能检查的要求才准写进去 |
+| INV-RESOLUTION-EFFECTS-AUTHORIZED | Effect 三态与权限表类别一一对应（RunsAProgram/Command、MayWriteTheLockfile/FileWrite、MayReachTheRegistry/Network），用例断言只授权 Command 时 unauthorized 正好列出另外两个；参数与副作用由 with_effects 的两个布尔同时决定（默认两个都 false），因此「不隐式升级」不是约定而是构造里没有这条路径：只有准许改锁文件才丢 `--locked`，只有准许访问网络才丢 `--offline`；命令行对每个类别各取一次 permit 之后才 spawn，未获授权时打印「nothing was run」并以 4 退出；解析总是带 --manifest-path，运行的那条命令就是报告里那一行 |
+| INV-DEPENDENCY-RECORD-BELONGS-TO-ONE-WORKSPACE | ReviewRefusal::AnotherWorkspace 把双方路径都写出来，拒绝时不产生任何比较结果；写记录前用 may_record_at 拒绝清单与锁文件（把 `sub/../Cargo.lock` 这类同一文件的另一种写法也算出来，用 canonicalize 判定），因此「记录自己描述的东西」不会被记录覆盖掉；配对按（包名, 来源）进行，cargo 的标识符带版本，所以 1.0.200→1.0.210 是一条 Version 变化；同标识符不同版本这种 cargo 不会产生的形状仍报为版本变化而不是「没变」 |
+| INV-DEPENDENCY-FACTS-ARE-READ-WHERE-THEY-LIVE | lockfile_beside 就是这条规则：报告里的根是本机的一个目录就用它，否则才退回所指名的目录；用例覆盖成员目录（锁文件读的是工作区根那一份）与「报告的根在这台机器上不存在」（退回所指名目录，没有锁文件就如实说没有）；命令行在这种情况下报告锁文件位于工作区根及其状态，不与解析前在所指名目录读到的值比较，因为那个值不是工作区的状态 |
 
 ## 为什么权限表要交叉校验
 

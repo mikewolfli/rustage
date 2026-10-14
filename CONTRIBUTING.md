@@ -78,6 +78,9 @@ cargo run -- --workspace target/area/workspace.json --file lib:pages/main.json  
 cargo run -- --workspace target/area/workspace.json --activate lib                  # which member is active, on this machine
 cargo run -- --kit target/area/kit.json        # which tools the kit is made of; runs nothing
 cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # asks this machine
+cargo run -- --dependencies target/area        # the dependency tree, resolved read-only: --locked --offline
+cargo run -- --dependencies target/area --allow-lockfile-change --trust --record target/deps.json   # the only effect allowed to change something
+cargo run -- --dependencies target/area --review target/deps.json   # what changed since that record
 cargo run -- --launch --exit-after-ms 600    # baseline desktop session, bounded
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs
@@ -331,6 +334,32 @@ rather than later surprises: one member per role (two toolchains are a question,
 and a version requirement in one of three shapes. The command's exit code reports whether anything was
 *decided* to be wrong, so "nobody looked" does not come out as a failure. The Kit/feature/target UI
 belongs to the shell (T18.01), and Cargo members, features and the dependency tree belong to T02.11.
+
+`--dependencies <directory>` is where this milestone's eighth acceptance line lives: "the parsing
+command is authorized by the effects it actually has, and no dependency is upgraded and no network is
+touched implicitly". The command *and* the effects it would have are one value (`Resolution`), decided
+before anything is asked for and printed as one line, so "which command runs" and "what it can do" can
+never disagree. Each effect names the class the permission table is keyed by (`RunsAProgram` →
+`command`, `MayWriteTheLockfile` → `file-write`, `MayReachTheRegistry` → `network`), the command line
+takes one permit per class, and nothing is started while any effect is unauthorized — the refusal says
+`nothing was run`, which is true because the permit is taken before the program is spawned. The
+default resolution is read-only *by construction*: `cargo metadata --locked --offline` cannot write the
+lockfile and cannot fetch, so no amount of authorization is needed to make it safe, and a caller who
+wants one of the other two effects asks for it by name (`--allow-lockfile-change` drops `--locked`
+only; `--allow-network` drops `--offline` only). Neither flag exists in the default, and neither
+upgrades anything: with the lockfile writable cargo records what the manifest resolves to, and the
+report shows what that did to the file afterwards. The manifest is named with `--manifest-path`, so
+the command that runs is the command that was reported rather than whatever happens to be in this
+process's directory. The tree itself is read from what cargo reports (members, features, versions,
+sources) and kept small in one record per workspace: a review compares two records of the *same*
+workspace, names what was added, removed, re-versioned or re-featured, counts what did not change
+instead of listing it, and refuses a record of another workspace rather than comparing it. A failed
+resolution is reported with cargo's own reason, and the one reason that is not a defect is named as
+what it is — a dependency change is pending and this resolution does not make it. The lockfile is read
+where cargo keeps it (at the workspace root the report names, not beside a member's manifest), and
+records may not be written over the manifest or the lockfile. The dependency panel and the "accept
+this change" dialog belong to the shell (T18), and the resolve-versus-build distinction belongs to
+T22.
 
 Documentation checks
 cover local Markdown file links, whitespace, conflict markers, required

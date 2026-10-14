@@ -121,6 +121,8 @@ cargo run -- --new-workspace target/area            # 一份工作区文档，�
 cargo run -- --workspace target/area/workspace.json --add app=app --apply --trust   # 添加成员；目录必须已经在那里
 cargo run -- --workspace target/area/workspace.json --file app:pages/main.json      # 按成员区分同名文件
 cargo run -- --kit target/area/kit.json --diagnose --trust --triple x86_64-unknown-linux-gnu   # 工具组合里缺什么
+cargo run -- --dependencies target/area             # cargo 解析出的依赖树，不做任何会改变它的动作
+cargo run -- --dependencies target/area --review target/deps.json   # 与那份记录相比改了什么
 cargo test
 node --test tools/check-docs.test.mjs
 node tools/check-docs.mjs

@@ -1256,7 +1256,40 @@ mod tests {
         }
     }
 
-    fn sandbox(name: &str) -> (PathBuf, ProjectRoot) {
+    /// A temporary project directory, removed when the guard drops.
+    ///
+    /// The guard is the fix for a defect recorded in the fifth development record (§29.5 item 10):
+    /// this helper used to return a bare path and every caller left its directory behind, so a
+    /// machine accumulated one `rustage-network-*` per test run (112 of them were found on the
+    /// machine that recorded it). `Drop` also covers the panic path, which a cleanup call at the end
+    /// of a test does not — and the sibling test modules in `host` and `project` use the same shape.
+    struct Sandbox {
+        path: PathBuf,
+        root: ProjectRoot,
+        _guard: TempDirectory,
+    }
+
+    impl Sandbox {
+        /// The directory itself.
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        /// The same directory as a project root, which is what the gateway is asked about.
+        fn root(&self) -> &ProjectRoot {
+            &self.root
+        }
+    }
+
+    struct TempDirectory(PathBuf);
+
+    impl Drop for TempDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn sandbox(name: &str) -> Sandbox {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "rustage-network-{name}-{}-{}",
@@ -1266,7 +1299,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("a temporary project is creatable");
         let root = ProjectRoot::new(&path).expect("the sandbox is a directory");
-        (path, root)
+        Sandbox {
+            path: path.clone(),
+            root,
+            _guard: TempDirectory(path),
+        }
     }
 
     fn service(name: &str, port: u16) -> ServicePolicy {
@@ -1451,7 +1488,8 @@ mod tests {
     #[test]
     fn an_additional_anchor_has_to_be_a_certificate() {
         let now = SystemTime::now();
-        let (path, _root) = sandbox("anchors");
+        let sandbox = sandbox("anchors");
+        let path = sandbox.path();
         let missing = path.join("not-there.pem");
         let junk = path.join("junk.pem");
         let certificate = path.join("ca.pem");
@@ -1484,8 +1522,6 @@ mod tests {
         assert!(resolved.render().contains("plus"));
         assert!(!not_a_certificate.message().contains("MIIB"));
         assert!(not_a_certificate.next_step().contains("path"));
-
-        std::fs::remove_dir_all(&path).ok();
     }
 
     #[test]
@@ -1570,14 +1606,15 @@ mod tests {
 
     #[test]
     fn a_service_that_is_not_declared_is_refused_with_the_list_that_is() {
-        let (_path, root) = sandbox("undeclared");
+        let sandbox = sandbox("undeclared");
+        let root = sandbox.root();
         let permission = Arc::new(PermissionService::new());
         let gateway = NetworkGateway::new(permission, Arc::new(TestStore::empty()));
         let mut policy = NetworkPolicy::new();
         policy.declare(service("declared", 443));
 
         let refusal = gateway
-            .permit(&root, &policy, "something-else", Principal::Human)
+            .permit(root, &policy, "something-else", Principal::Human)
             .expect_err("a service nobody declared is not reachable");
 
         match &refusal {
@@ -1593,14 +1630,15 @@ mod tests {
 
     #[test]
     fn an_untrusted_project_reaches_nothing_even_when_the_service_is_declared() {
-        let (_path, root) = sandbox("untrusted");
+        let sandbox = sandbox("untrusted");
+        let root = sandbox.root();
         let permission = Arc::new(PermissionService::new());
         let gateway = NetworkGateway::new(permission, Arc::new(TestStore::empty()));
         let mut policy = NetworkPolicy::new();
         policy.declare(service("declared", 443));
 
         let refusal = gateway
-            .permit(&root, &policy, "declared", Principal::Human)
+            .permit(root, &policy, "declared", Principal::Human)
             .expect_err("an untrusted project runs nothing, and nothing leaves it");
 
         match refusal {
@@ -1613,22 +1651,23 @@ mod tests {
 
     #[test]
     fn a_trusted_project_with_the_scope_authorized_gets_a_permit() {
-        let (_path, root) = sandbox("permit");
+        let sandbox = sandbox("permit");
+        let root = sandbox.root();
         let permission = Arc::new(PermissionService::new());
-        permission.trust(&root);
+        permission.trust(root);
         permission
             .authorize(
-                PermissionScope::Project(&root),
+                PermissionScope::Project(root),
                 Capability::RequestNetworkService,
             )
             .expect("authorized");
         let gateway = NetworkGateway::new(Arc::clone(&permission), Arc::new(TestStore::empty()));
         let mut policy = NetworkPolicy::new();
         policy.declare(service("declared", 8443));
-        gateway.declare_policy(&root, &policy);
+        gateway.declare_policy(root, &policy);
 
         let permit = gateway
-            .permit(&root, &policy, "declared", Principal::Agent)
+            .permit(root, &policy, "declared", Principal::Agent)
             .expect("the project is trusted and the scope is authorized");
 
         assert_eq!(permit.service(), "declared");
@@ -1642,9 +1681,10 @@ mod tests {
     #[test]
     fn a_permit_carries_the_credential_and_never_prints_it() {
         let now = SystemTime::now();
-        let (_path, root) = sandbox("credential");
+        let sandbox = sandbox("credential");
+        let root = sandbox.root();
         let permission = Arc::new(PermissionService::new());
-        permission.trust(&root);
+        permission.trust(root);
         let store = Arc::new(TestStore::holding(&[("service-token", "hunter2-token")]));
         let gateway = NetworkGateway::new(permission, store);
         let mut policy = NetworkPolicy::new();
@@ -1654,10 +1694,10 @@ mod tests {
                     .expiring_at(now + Duration::from_secs(90 * 24 * 60 * 60)),
             ),
         );
-        gateway.declare_policy(&root, &policy);
+        gateway.declare_policy(root, &policy);
 
         let permit = gateway
-            .permit(&root, &policy, "declared", Principal::Human)
+            .permit(root, &policy, "declared", Principal::Human)
             .expect("permitted");
 
         assert!(permit.presents_credential());
@@ -1674,9 +1714,10 @@ mod tests {
 
     #[test]
     fn an_expired_credential_stops_the_request_before_it_is_made() {
-        let (_path, root) = sandbox("stale");
+        let sandbox = sandbox("stale");
+        let root = sandbox.root();
         let permission = Arc::new(PermissionService::new());
-        permission.trust(&root);
+        permission.trust(root);
         let gateway = NetworkGateway::new(
             permission,
             Arc::new(TestStore::holding(&[("stale", "an-old-token")])),
@@ -1688,10 +1729,10 @@ mod tests {
                     .expiring_at(SystemTime::now() - Duration::from_secs(60 * 60)),
             ),
         );
-        gateway.declare_policy(&root, &policy);
+        gateway.declare_policy(root, &policy);
 
         let refusal = gateway
-            .permit(&root, &policy, "declared", Principal::Human)
+            .permit(root, &policy, "declared", Principal::Human)
             .expect_err("a stale credential is diagnosed, not sent");
 
         match &refusal {
@@ -1712,7 +1753,8 @@ mod tests {
 
     #[test]
     fn a_real_request_goes_through_a_permit_and_answers_on_the_wire() {
-        let (_path, root) = sandbox("loopback");
+        let sandbox = sandbox("loopback");
+        let root = sandbox.root();
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
         let port = listener.local_addr().expect("an address").port();
         std::thread::spawn(move || {
@@ -1724,20 +1766,20 @@ mod tests {
             }
         });
         let permission = Arc::new(PermissionService::new());
-        permission.trust(&root);
+        permission.trust(root);
         permission
             .authorize(
-                PermissionScope::Project(&root),
+                PermissionScope::Project(root),
                 Capability::RequestNetworkService,
             )
             .expect("authorized");
         let gateway = NetworkGateway::new(permission, Arc::new(TestStore::empty()));
         let mut policy = NetworkPolicy::new();
         policy.declare(service("readiness-loopback", port));
-        gateway.declare_policy(&root, &policy);
+        gateway.declare_policy(root, &policy);
 
         let permit = gateway
-            .permit(&root, &policy, "readiness-loopback", Principal::Human)
+            .permit(root, &policy, "readiness-loopback", Principal::Human)
             .expect("permitted");
         let mut stream = connect(&permit, Duration::from_secs(5)).expect("connected");
         let answer = exchange(&mut stream, "ping").expect("answered");
@@ -1765,13 +1807,14 @@ mod tests {
 
     #[test]
     fn a_refusal_is_a_sentence_with_a_next_step() {
-        let (_path, root) = sandbox("sentences");
+        let sandbox = sandbox("sentences");
+        let root = sandbox.root();
         let permission = Arc::new(PermissionService::new());
         let gateway = NetworkGateway::new(permission, Arc::new(TestStore::empty()));
         let policy = NetworkPolicy::new();
 
         let refusal = gateway
-            .permit(&root, &policy, "anything", Principal::Human)
+            .permit(root, &policy, "anything", Principal::Human)
             .expect_err("nothing is declared");
 
         assert!(
@@ -1785,7 +1828,8 @@ mod tests {
 
     #[test]
     fn a_file_can_be_read_with_its_secrets_redacted() {
-        let (path, _root) = sandbox("redacted-file");
+        let sandbox = sandbox("redacted-file");
+        let path = sandbox.path();
         let file = path.join("config.toml");
         std::fs::write(
             &file,
@@ -1799,7 +1843,6 @@ mod tests {
         assert!(!text.contains("hunter2"), "{text}");
         assert!(text.contains("[redacted]"));
         assert!(text.contains("proxy.invalid"), "only the secret is removed");
-        std::fs::remove_dir_all(&path).ok();
     }
 
     #[test]

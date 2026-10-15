@@ -10,7 +10,9 @@
 //! a **control** consumes it, that the pinned dependency's flattener accepts it, or that a theme
 //! switch reaches it. This module builds the controls for real — `ToolButton` for tools, `Icon`
 //! for role-bearing status glyphs — assigns the seam's sources to them, and lays them out as a
-//! strip that a window and the baseline exporter both draw.
+//! strip the baseline exporter draws. The second consumer named when this module was written — a
+//! **window** that draws the same strip — arrives with T04's workbench, which is why the refresh
+//! and composition members below are exercised by tests rather than by a running loop today.
 //!
 //! # The two content channels, and why both are here
 //!
@@ -44,6 +46,15 @@
 //! [`ToolbarSample::refresh_if_stale`]. Without that, the light and dark renders of a glyph would
 //! differ only in the backdrop — the defect the dependency's own SVG exporter once shipped, and
 //! wrote a test for.
+
+// The strip's *reporting* and *refresh* half has no runtime consumer until a window draws it: the
+// baseline exporter writes the four renders and says which files it wrote, so `composition`,
+// `glyphs_mut` and `refresh_if_stale` are exercised by this module's own tests today. The consumer
+// that makes them live is T04's workbench — a window that draws this strip and has to re-resolve
+// role colours when the theme changes. Silencing the lint here, with that reason, is the same choice
+// `contracts`, `host`, `project` and `resources` make for their own not-yet-consumed surfaces;
+// deleting the members instead would delete behaviour that is already tested.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

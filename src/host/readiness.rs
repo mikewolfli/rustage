@@ -41,7 +41,7 @@ use super::network::{
 };
 use super::notify::{Cause, NotificationCentre, Severity};
 use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
-use super::paths::{HostDirectories, HostDirectory, ProjectRoot, SystemPaths};
+use super::paths::{HostDirectories, HostDirectory, ProjectRoot};
 use super::permission::{PermissionService, Scope};
 use super::registry::{ScopeRefusal, ServiceRegistry};
 use super::subprocess::{OwnedProcess, ProcessPresence, ProcessSpec, Termination, presence};
@@ -54,6 +54,22 @@ use crate::contracts::permission::{Capability as PermissionCapability, EffectCla
 
 /// How long a check waits for the operating system to deliver a file event.
 const EVENT_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The deadline the startup check asks a session for.
+///
+/// Short on purpose: the check's question is "does a window open here", not "can this host run a
+/// long session", and a person reading the report should not wait for it.
+const SESSION_DEADLINE: Duration = Duration::from_millis(150);
+
+/// How long the parent gives that child session before it stops waiting and stops it.
+///
+/// Generous next to [`SESSION_DEADLINE`] because the thing this guards against is not a slow
+/// machine but a child that cannot reach its own deadline at all; a host whose real startup is
+/// slower than this reports a gap, which is the honest answer for a session that takes 20 seconds.
+const SESSION_CHILD_LIMIT: Duration = Duration::from_secs(20);
+
+/// How long a child session is given to stop before it is killed, when it overruns the limit.
+const SESSION_CHILD_GRACE: Duration = Duration::from_secs(5);
 
 /// One capability of the host's platform layer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -481,58 +497,189 @@ impl Drop for Scratch {
 /// the outcome as a value. A refusal is a *finding*, not a pass — and on a machine whose backend is
 /// a preview/stub one there is no composited window, so the honest status is
 /// [`CheckStatus::NotVerified`] rather than a claim that the capability is missing.
-fn check_startup_session() -> CapabilityCheck {
-    let request = crate::host::startup::StartupRequest {
-        title: "rustage readiness".to_owned(),
-        width: 640,
-        height: 420,
-        exit_after: Duration::from_millis(120),
-    };
-    let report = crate::host::startup::launch(&request);
-    let evidence = format!("{} ({})", report.summary(), request_bounds(&request));
+/// How a session run as a child process ended, and what it said.
+struct ChildSession {
+    /// How it ended, in words the parent can vouch for.
+    ending: String,
+    /// The exit code, when the platform reported one.
+    code: Option<i32>,
+    /// Everything it printed, both streams.
+    output: String,
+}
 
-    if report.is_started() {
-        return CapabilityCheck::new(Capability::StartupSession, CheckStatus::Ready, evidence);
+impl ChildSession {
+    /// The evidence this check publishes: how the child ended, and its own words.
+    fn evidence(&self) -> String {
+        let printed = self.output.trim();
+        if printed.is_empty() {
+            format!("{}; it printed nothing", self.ending)
+        } else {
+            format!("{}; it printed:\n{printed}", self.ending)
+        }
     }
-    let refusal = match &report.outcome {
-        crate::host::startup::StartupOutcome::Refused { reason, .. } => Some(reason.clone()),
-        crate::host::startup::StartupOutcome::Started { .. } => None,
+}
+
+/// Runs the baseline session in a child process and reports how it ended.
+///
+/// # Why the session cannot be run here
+///
+/// A session that owns the event loop ends its **process**. The pinned revision cannot be asked to
+/// end a loop from another thread (`docs/rw-feedback/feedback-20261013.md` §6), so
+/// `--launch --exit-after-ms` ends the process from its deadline watcher. Run in *this* process —
+/// which is what this check used to do — the watcher ends the report instead: measured on a GTK
+/// session it printed the four log lines up to the deadline, wrote no JSON artifact, and exited 0,
+/// so a run in which a window really did open looked like a truncated success (principle #22:
+/// failure must not be presented in a success shape; the measurement is recorded in
+/// `docs/log/log-20261015-1.md` §8).
+///
+/// A child process is both the fix and the better evidence: the session is started by the same
+/// command a person would run, and what that process prints comes back as this check's evidence
+/// rather than being thrown away with its process.
+///
+/// # Errors
+///
+/// A host that cannot report its own path, obtain a command permit for the session, or start the
+/// child at all: each is a finding about this environment, and the caller reports which.
+fn run_session_in_a_child_process(
+    request: &crate::host::startup::StartupRequest,
+) -> Result<ChildSession, String> {
+    let program = std::env::current_exe()
+        .map_err(|error| format!("this host's own path could not be read: {error}"))?;
+    let service = PermissionService::new();
+    let permit = service
+        .permit(EffectClass::Command, Scope::Session, Principal::Human)
+        .map_err(|refusal| refusal.message())?;
+    let spec = ProcessSpec::new("readiness: the baseline session", program).args([
+        "--launch".to_owned(),
+        // Named rather than inherited: the child's INFO lines are this check's evidence, and a
+        // process-level default that changed would silently thin it out.
+        "--log-level".to_owned(),
+        "info".to_owned(),
+        "--exit-after-ms".to_owned(),
+        request.exit_after.as_millis().to_string(),
+    ]);
+    let mut process = OwnedProcess::spawn(spec, &permit).map_err(|error| error.message())?;
+
+    let Some(exit) = process.wait_for(SESSION_CHILD_LIMIT) else {
+        let termination = process.terminate(SESSION_CHILD_GRACE);
+        let output = process.output_so_far();
+        return Ok(ChildSession {
+            ending: format!(
+                "a separate process was still running after {SESSION_CHILD_LIMIT:?} and was stopped \
+                 ({})",
+                termination.message(),
+            ),
+            code: None,
+            output: printed(&output),
+        });
     };
-    match refusal {
-        // What the host means by this exit code is "the environment cannot do this, and that is not
-        // a code defect": a backend with no window needs a machine with a display, so the honest
-        // answer is that this environment cannot produce the evidence.
-        Some(reason)
-            if report.exit_code() == crate::host::error::ExitCode::EnvironmentUnavailable =>
+    let outcome = process.outcome(exit);
+    Ok(ChildSession {
+        ending: format!("a separate process ended {}", outcome.exit.message()),
+        code: outcome.exit.code,
+        output: printed(&outcome.output),
+    })
+}
+
+/// What a process printed, both streams, as the evidence text.
+///
+/// The dropped-byte count is kept next to the text for the reason [`super::subprocess`] keeps it: a
+/// truncated log presented as the whole log is a failure shown as a success.
+fn printed(output: &super::subprocess::CapturedOutput) -> String {
+    let mut text = String::new();
+    for stream in [&output.stdout, &output.stderr] {
+        for line in stream
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
         {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    if output.is_truncated() {
+        let _ = writeln!(
+            text,
+            "({} bytes of output were dropped)",
+            output.dropped_bytes
+        );
+    }
+    text
+}
+
+fn check_startup_session() -> CapabilityCheck {
+    // The same request `--launch` builds for itself, so what this check says it asked for is what
+    // the child process really did: a check that asked for 640x420 here while the child opened its
+    // own default window would be reporting a request nobody made.
+    let request = crate::host::startup::StartupRequest {
+        exit_after: SESSION_DEADLINE,
+        ..crate::host::startup::StartupRequest::default()
+    };
+    let bounds = request_bounds(&request);
+
+    let session = match run_session_in_a_child_process(&request) {
+        Ok(session) => session,
+        Err(reason) => {
+            return CapabilityCheck::new(
+                Capability::StartupSession,
+                CheckStatus::Gap { reason },
+                bounds,
+            );
+        }
+    };
+    let evidence = format!("{bounds}; {}", session.evidence());
+
+    match session.code {
+        // The session was started by a process of its own and ended: at its deadline, because the
+        // pinned revision ends the process rather than the loop (`--launch` prints which of the two
+        // happened, and that line is in the evidence above).
+        Some(0) => CapabilityCheck::new(Capability::StartupSession, CheckStatus::Ready, evidence),
+        // The exit code the host reserves for "this environment cannot do this, and that is not a
+        // code defect": a backend with no window needs a machine with a display, so the honest
+        // answer is that this environment cannot produce the evidence.
+        Some(code) if code == crate::host::error::ExitCode::EnvironmentUnavailable.code() => {
             CapabilityCheck::new(
                 Capability::StartupSession,
                 CheckStatus::NotVerified {
-                    reason: format!("this session has no composited window: {reason}"),
+                    reason: format!(
+                        "this session has no composited window: the session process refused and \
+                         ended with exit code {code}, which this host reserves for an environment \
+                         that cannot do this (its own words are in the evidence)"
+                    ),
                 },
                 evidence,
             )
         }
-        Some(reason) => CapabilityCheck::new(
+        Some(code) => CapabilityCheck::new(
             Capability::StartupSession,
-            CheckStatus::Gap { reason },
+            CheckStatus::Gap {
+                reason: format!(
+                    "the session process ended with exit code {code}; its own words are in the \
+                     evidence"
+                ),
+            },
             evidence,
         ),
         None => CapabilityCheck::new(
             Capability::StartupSession,
             CheckStatus::Gap {
-                reason: "the session did not start and gave no reason".to_owned(),
+                reason: session.ending.clone(),
             },
             evidence,
         ),
     }
 }
 
-/// The bounds the startup check asked for, as part of its evidence.
+/// What the session check asked for, as part of its evidence.
+///
+/// The geometry is named as the session's own default rather than as a number this check chose: the
+/// child runs the host's own `--launch`, and the window it opened is printed in the evidence line
+/// above this one.
 fn request_bounds(request: &crate::host::startup::StartupRequest) -> String {
     format!(
-        "asked for {}x{} and an exit after {:?}",
-        request.width, request.height, request.exit_after,
+        "the host's own launch command, asked for an exit after {:?} (the baseline window is its \
+         own default, {}x{})",
+        request.exit_after, request.width, request.height,
     )
 }
 
@@ -2339,21 +2486,6 @@ fn wait_for_presence(pid: u32, limit: Duration) -> ProcessPresence {
     }
 }
 
-/// The system paths of this environment, without creating anything.
-///
-/// Used by the readiness report for the "where would the host write" line; kept here rather than in
-/// [`check_directories`] so the environment question and the capability question stay separable.
-pub fn system_path_summary() -> Result<String, String> {
-    let paths = SystemPaths::from_environment().map_err(|error| error.message())?;
-    Ok(format!(
-        "home {}, config {}, cache {}, data {}",
-        paths.home().display(),
-        paths.config_dir().display(),
-        paths.cache_dir().display(),
-        paths.data_dir().display(),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Capability, CapabilityCheck, CheckStatus, ReadinessReport};
@@ -2499,20 +2631,5 @@ mod tests {
         let again = report.render_json();
         assert_eq!(json.len(), again.len());
         assert_eq!(json.lines().count(), again.lines().count());
-    }
-
-    #[test]
-    fn the_system_path_summary_names_all_four_directories_or_says_why_not() {
-        match super::system_path_summary() {
-            Ok(summary) => {
-                for name in ["home", "config", "cache", "data"] {
-                    assert!(summary.contains(name), "{summary}");
-                }
-            }
-            Err(reason) => assert!(
-                !reason.is_empty(),
-                "a missing environment must explain itself"
-            ),
-        }
     }
 }

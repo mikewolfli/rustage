@@ -407,7 +407,7 @@
     {
       "id": "probe-apis",
       "command": "cargo run -- --probe-apis target/probe",
-      "covers": "固定修订上的库契约探针；有缺口时退出码为 1",
+      "covers": "固定修订上的库契约探针；有缺口时退出码为 4（`ExitCode::Reported`，与 `--probe-host` 同一个码）",
       "mode": "manual",
       "reason": "缺口存在时该命令刻意失败，需人工判读",
       "owner": "T00.08 / CI 维护者"

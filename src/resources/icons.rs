@@ -33,8 +33,6 @@ use rust_widgets::core::Color;
 use rust_widgets::theme::{HighContrastMode, Theme};
 use rust_widgets::widget::{IconData, IconName, IconSource};
 
-pub use super::generated_host_icons::ICON_ROLE_NAMES;
-
 /// The contrast ratio an icon is expected to reach against the surface it is read on.
 ///
 /// 3.0 is WCAG 2.x's threshold for graphical objects and the ratio the pinned dependency uses for
@@ -322,10 +320,8 @@ mod tests {
     use rust_widgets::theme::{AppearanceMode, Theme};
     use rust_widgets::widget::{IconPaintOutcome, IconRef, IconSource, paint_icon, validate_icon};
 
-    use super::{
-        HostIconSource, ICON_MIN_CONTRAST, ICON_ROLE_NAMES, IconRole, icon, icons, resolve,
-        role_color,
-    };
+    use super::{HostIconSource, ICON_MIN_CONTRAST, IconRole, icon, icons, resolve, role_color};
+    use crate::resources::generated_host_icons::ICON_ROLE_NAMES;
 
     /// A colour as a comparable tuple, for the "did this change?" assertions.
     fn rgba(color: Color) -> (u8, u8, u8, u8) {

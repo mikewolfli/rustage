@@ -52,8 +52,13 @@ run under the version the recorded evidence was produced with:
 cargo fmt --check
 cargo test
 cargo run -- --help
-cargo run -- --probe-apis target/probe
+cargo run -- --probe-apis target/probe      # dependency contract probes; exits 4 while a probe reports a gap
 cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready
+cargo run --features linux-native -- --probe-host target/host   # the same, on a Linux desktop that has a display:
+                                                               # the default build's backend is a state layer
+                                                               # (`linux-state-backend`, mode `PreviewOrStub`),
+                                                               # which reports `startup-session` as not-verified,
+                                                               # while `gtk-native` opens a real window
 cargo run -- --project-check examples/demo-project/project.json   # project format; exits 4 when it refuses to write
 cargo run -- --new-project target/new-project --template application   # creates a project; exits 4 when refused
 cargo run -- --open-project target/new-project/project.json   # opens it read-only and prints what would be asked
@@ -125,8 +130,9 @@ contract probes (`--probe-apis`): layout geometry, mode 2 generation and its tar
 query, signal dispatch order, connection teardown, and the text editor's edit primitives, guarded
 `replace_range`, highlight state, graded scale, viewport coordinates and a cross-thread
 highlighter, each tied to the pinned revision by a lockfile drift test. The command writes
-`api-probes.json` under the directory you name and **exits non-zero while any probe reports a
-gap** — a gap is a recorded finding, not a pass, and the open ones are listed in
+`api-probes.json` under the directory you name and **exits 4 while any probe reports a
+gap** — the same code `--probe-host` exits with, meaning "a real finding was reported" rather than a
+defect in the host. A gap is a recorded finding, not a pass, and the open ones are listed in
 [`docs/rw-feedback/`](docs/rw-feedback/feedback-20261013.md).
 `--probe-host` checks the host's own services — whether a baseline session starts, whether pointer and
 keyboard input reaches a mounted control, the operating system's file chooser, the painted

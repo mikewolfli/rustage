@@ -43,7 +43,7 @@ use crate::project::format::{
     TargetProfile, format_version,
 };
 use crate::project::json::{self, Json, JsonKind, JsonObject};
-use crate::project::session::ToolchainState;
+use crate::project::session::{ToolUnavailable, ToolchainState};
 
 /// Where the answer to a need comes from.
 ///
@@ -516,12 +516,13 @@ fn needs_of_toolchain(toolchain: &ToolchainState) -> Vec<Need> {
                 role: role.clone(),
                 availability: match version {
                     Some(_) => Availability::Present,
+                    // The reason is the check's own typed finding, not a sentence written here: the
+                    // report knows whether the program is not installed, ran and said nothing, or
+                    // hung, and each of those is a different next step.
                     None => Availability::Missing {
                         reason: report
-                            .checks()
-                            .iter()
-                            .find(|check| check.starts_with(&format!("`{program}`")))
-                            .cloned()
+                            .unavailable(program)
+                            .map(ToolUnavailable::line)
                             .unwrap_or_else(|| {
                                 format!("`{program}` was run and reported no version")
                             }),
@@ -1317,7 +1318,9 @@ mod tests {
     use crate::host::network::{EnvironmentStore, UnavailableStore};
     use crate::host::permission::PermissionService;
     use crate::project::format::ProjectFile;
-    use crate::project::session::{NotChecked, ProjectSession, ToolchainReport, ToolchainState};
+    use crate::project::session::{
+        NotChecked, ProjectSession, ToolUnavailable, ToolchainReport, ToolchainState,
+    };
 
     struct TempDirectory(PathBuf);
 
@@ -1408,10 +1411,17 @@ mod tests {
         sandbox.write("demo/pages/main.json", "{}");
         let validation = validate(
             &file,
-            &ToolchainState::NotChecked(NotChecked::NotRunnable {
-                program: "cargo".to_owned(),
-                reason: "no such file or directory".to_owned(),
-            }),
+            &ToolchainState::Checked(ToolchainReport::from_checks(
+                Err(ToolUnavailable::NotInstalled {
+                    program: "cargo".to_owned(),
+                    reason: "No such file or directory (os error 2)".to_owned(),
+                }),
+                Err(ToolUnavailable::NotInstalled {
+                    program: "rustc".to_owned(),
+                    reason: "No such file or directory (os error 2)".to_owned(),
+                }),
+                vec!["cargo --version".to_owned(), "rustc --version".to_owned()],
+            )),
         );
         assert!(
             !validation.missing().is_empty(),
@@ -1491,16 +1501,25 @@ mod tests {
         );
         assert_eq!(untrusted.not_checked().len(), 1);
 
-        // A report where the program was run and did not answer is a missing SDK, and the reason is
-        // the check's own words rather than a sentence written here.
+        // A report where the program is not there is a missing SDK, and the reason is the check's
+        // own typed finding rather than a sentence written here.
         let checked = ToolchainState::Checked(ToolchainReport::from_checks(
-            None,
-            None,
+            Err(ToolUnavailable::NotInstalled {
+                program: "cargo".to_owned(),
+                reason: "No such file or directory (os error 2)".to_owned(),
+            }),
+            Err(ToolUnavailable::DidNotAnswer {
+                program: "rustc".to_owned(),
+                exit: "exit code 1".to_owned(),
+                said: "error: no version here".to_owned(),
+            }),
             vec![
                 "cargo --version".to_owned(),
                 "rustc --version".to_owned(),
-                "`cargo` could not be run: no such file or directory".to_owned(),
-                "`rustc` could not be run: no such file or directory".to_owned(),
+                "cargo: not installed (No such file or directory (os error 2))".to_owned(),
+                "rustc: ran and did not answer with a version (exit code 1; it said `error: no \
+                 version here`)"
+                    .to_owned(),
             ],
         ));
         let missing = validate(&file, &checked);
@@ -1511,13 +1530,16 @@ mod tests {
             .map(|need| need.subject())
             .collect();
         assert_eq!(sdk, vec!["cargo", "rustc"]);
+        // The two cases are told apart in the report a person reads, which is the whole point of
+        // the typed finding: one is a machine to fix, the other a wrapper to look at.
+        let report = missing.render().join("\n");
         assert!(
-            missing
-                .render()
-                .join("\n")
-                .contains("`cargo` could not be run: no such file or directory"),
-            "{:?}",
-            missing.render()
+            report.contains("cargo: not installed (No such file or directory (os error 2))"),
+            "{report}"
+        );
+        assert!(
+            report.contains("rustc: ran and did not answer with a version"),
+            "{report}"
         );
     }
 

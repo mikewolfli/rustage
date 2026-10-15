@@ -10,6 +10,20 @@ license = "MIT"
 # it here is the difference between "deliberately not for publication" and "someone forgot to set
 # `publish`", which is exactly how the bare `publish = false` reads.
 publish = false
+[features]
+# The pinned revision compiles a Linux desktop backend in two shapes, and the *name* it reports is
+# the same in both (`linux-state-backend` in the one that opens no window, `gtk` in the one that
+# does): `gtk-native` is what selects the shape with a real toolkit behind it, and without it a
+# Linux host answers `PreviewOrStub` and can only be run in a state backend. That is the difference
+# between "the baseline desktop session started" and "a stub ran a loop", which T01.01's acceptance
+# line exists to keep apart, so a Linux host that means to run on a desktop needs this feature.
+#
+# Off by default, and forwarded rather than renamed: `docs/plan/decisions.md` fixes the dependency
+# strategy as `default-features = false, features = ["desktop"]`, and a host that verified the
+# native path builds it explicitly (`cargo build --features linux-native`). Keeping the revision's
+# own feature name visible is what makes the two builds comparable by name in a record.
+linux-native = ["rust_widgets/gtk-native"]
+
 [dependencies]
 rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "c957fdec7f30cc1a526b7c898c0f44b458ef4a57", default-features = false, features = ["desktop"] }
 

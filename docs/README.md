@@ -39,6 +39,14 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [MS00 and MS01 acceptance review, a real Linux desktop session and a probe that ended its own
+  report](log/log-20261015-1.md): the per-task re-check of all twenty-nine MS00/MS01 tasks against
+  their acceptance lines, the six defects it found and fixed (the stage's own lint debt, the
+  toolchain report that merged "not installed" with "did not answer", the test directories the
+  network tests left in `/tmp`, the flattened `--help` block, two exit codes that meant two things
+  for one finding, and one evidence line whose geometry did not match the session it described), the
+  first run of the host probe in **native** GTK session (and the host defect it exposed: the probe
+  used to end its own report), and the two stage sign-offs with their boundaries.
 - [Resource structure and files](log/log-20261013-1.md): what was added, the commands that ran,
   and what remains unverified.
 - [Glyph design, theme contract and HarmonyOS packaging](log/log-20261013-2.md): the minimal
@@ -95,8 +103,11 @@ order they are being closed in. It is a work list, not a statement of implemente
   scenarios.
 
 Upstream findings raised against [rust-widgets](https://github.com/mikewolfli/rust-widgets) are kept
-in [`rw-feedback/`](rw-feedback/feedback-20261013.md); it records what was verified and what, if
-anything, was requested upstream.
+in [`rw-feedback/`](rw-feedback/feedback-20261013.md): the first file records what was verified and
+what, if anything, was requested upstream against the pinned revision; the second compares every one
+of those findings with the library's local `HEAD` (nine of them are already implemented there) and
+records the one new request — the GTK backend's `quit()` calls `gtk::main_quit()` with no
+thread check.
 
 ## Boundaries
 

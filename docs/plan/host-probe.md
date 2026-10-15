@@ -5,7 +5,8 @@
 > 逐行对照该文件校验，改一处而漏另一处会失败。
 > 依据：[项目原则](principle.md) #12/#22/#24/#25、[完整路线图](roadmap.md) T01.08、
 > [MS01 实施步骤](blue2.md) T01.08。
-> 状态：**Linux 一组真实结果；macOS 与 Windows 标为 `blocked`（缺测试机），没有测量。**
+> 状态：**Linux 一组真实结果（本轮有两种构建形状：默认构建为状态后端，`--features linux-native`
+> 为原生 GTK 会话）；macOS 与 Windows 标为 `blocked`（缺测试机），没有测量。**
 
 ## 这份记录回答什么
 
@@ -49,7 +50,7 @@
 
 | 宿主 | OS | 架构 | triple | 后端 | 本机 | 缺什么 |
 |---|---|---|---|---|---|---|
-| linux | linux | x86_64 | x86_64-unknown-linux-gnu | linux-state-backend (PreviewOrStub) | probed | — |
+| linux | linux | x86_64 | x86_64-unknown-linux-gnu | gtk (NativeInteractive)（以 `--features linux-native` 构建）；默认构建是 linux-state-backend (PreviewOrStub) | probed | — |
 | macos | macos | aarch64 | aarch64-apple-darwin | — | blocked | 没有可用的 macOS 测试机。log-20261013-4 的 macOS 证据来自 T01.01 的自身启动（后端 cocoa、模式 NativeInteractive），不是本探针的 14 项检查 |
 | windows | windows | x86_64 | x86_64-pc-windows-msvc | — | blocked | 没有可用的 Windows 测试机；本构建也未在 Windows 上编译过 |
 
@@ -57,7 +58,7 @@
 
 | 宿主 \ 组 | startup | input | process | file | platform | scope |
 |---|---|---|---|---|---|---|
-| linux | probed: not-verified | probed: ready | probed: ready | probed: gap | probed: not-verified | probed: ready |
+| linux | probed: ready | probed: ready | probed: ready | probed: gap | probed: not-verified | probed: ready |
 | macos | blocked | blocked | blocked | blocked | blocked | blocked |
 | windows | blocked | blocked | blocked | blocked | blocked | blocked |
 
@@ -69,7 +70,7 @@ macOS 或 Windows 测试机，本探针一次都没有在那里运行过。表�
 
 | 宿主 | 组 | 结果 | 证据 |
 |---|---|---|---|
-| linux | startup | not-verified | startup-session -> not-verified：本机后端 linux-state-backend 报 gui mode PreviewOrStub，窗口不会被合成，因此不声称会话已启动；host-directories -> ready：四个宿主目录逐个探测，config/cache/data 缺席而 temp 可用，并在临时根下逐个创建成功 |
+| linux | startup | ready | startup-session -> ready：以 `--features linux-native` 构建后，宿主协议把会话交给一个独立的 rustage 子进程（`--launch --log-level info --exit-after-ms 150`）；该子进程真的创建了窗口（window 6000285942072475648，1280x800）并进入 glib 主循环，到点按期限结束，父进程据此写出完整报告；同一台机器上用默认构建时本项为 not-verified（后端 linux-state-backend 报 PreviewOrStub，子进程以退出码 3 拒绝，写明窗口不会被合成）。host-directories -> ready：四个宿主目录逐个探测，config/cache/data 缺席而 temp 可用，并在临时根下逐个创建成功（两种构建相同） |
 | linux | input | ready | input-events -> ready：控件内部按下并抬起 -> clicked(1)；按下后在控件外抬起 -> clicked 仍为 1 且 canceled(1)（证明真的做了命中测试）；按 Return -> clicked(2) |
 | linux | process | ready | background-executor -> ready：提交在 8µs 返回而任务仍在跑，cancelling 可观察，配合的 job 被取消，无视 30ms 期限的 job 被记为 abandoned，关闭后拒绝新工作；process-trees -> ready：本会话启动的进程与其后代被整组清理，同名但本会话之外启动的进程存活 |
 | linux | file | gap | native-file-dialog -> gap：固定修订在这三个桌面后端上不创建文件对话框控件（create_file_dialog 返回 0），因此拿不到系统自己的选择器；chooser-frame -> ready：挂载、Return 选中真实路径、Escape 取消、无选择时返回被拒；directory-watch -> ready：目录内一次写入产生 1 个事件，监听不存在的目录被明确拒绝 |
@@ -94,7 +95,17 @@ macOS 或 Windows 测试机，本探针一次都没有在那里运行过。表�
 
 ```sh
 cargo run -- --probe-host target/host    # 写出 target/host/host-readiness.json；有检查未就绪时退出码 4
+
+# Linux 桌面宿主：默认构建的后端是 linux-state-backend（状态层，不合成窗口），因此 startup-session
+# 只能报 not-verified；转发上游 `gtk-native` 才会得到真实窗口（后端 gtk，模式 NativeInteractive）：
+cargo run --features linux-native -- --probe-host target/host
 ```
+
+**为什么 Linux 要写两种构建**：同一台机器、同一条命令，`startup-session` 的答案取决于构建里有没有
+原生后端（上游用 `gtk-native` 这个 feature 选择它），所以"Linux 一格"不足以表达这台机器上被测到的
+事实。两行的证据都写在上面：默认构建 `not-verified`（窗口不会被合成），`--features linux-native`
+为 `ready`（子进程真的创建了窗口）。`--probe-host` 现在就绪与否都要写出报告与产物，因此两种构建
+都能留下可复核的 JSON。
 
 在三台机器上跑同一条命令即可补齐本记录的对应列；把结果按同一组粒度抄进
 `host-probe.json`（`status` 改成 `probed`、`outcome` 抄检查的状态、`evidence` 抄检查的证据），

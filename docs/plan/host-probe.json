@@ -77,8 +77,8 @@
       "os": "linux",
       "arch": "x86_64",
       "triple": "x86_64-unknown-linux-gnu",
-      "backend": "linux-state-backend (PreviewOrStub)",
-      "environment": "Linux x86_64，后端 linux-state-backend，GUI 模式 PreviewOrStub（状态后端，无合成窗口）；rustc 1.98.1；证据见 docs/log/log-20261014-1.md §25",
+      "backend": "gtk (NativeInteractive)（以 `--features linux-native` 构建）；默认构建是 linux-state-backend (PreviewOrStub)",
+      "environment": "Linux x86_64，X11 会话（DISPLAY=:0）；本机以两种构建各测一次：默认构建为后端 linux-state-backend、GUI 模式 PreviewOrStub；`--features linux-native`（转发上游 `gtk-native`）为后端 gtk、模式 NativeInteractive。rustc 1.98.1；证据见 docs/log/log-20261014-1.md §25 与 docs/log/log-20261015-1.md §7/§8",
       "probedOn": true,
       "missing": null
     },
@@ -108,8 +108,8 @@
       "host": "linux",
       "group": "startup",
       "status": "probed",
-      "outcome": "not-verified",
-      "evidence": "startup-session -> not-verified：本机后端 linux-state-backend 报 gui mode PreviewOrStub，窗口不会被合成，因此不声称会话已启动；host-directories -> ready：四个宿主目录逐个探测，config/cache/data 缺席而 temp 可用，并在临时根下逐个创建成功"
+      "outcome": "ready",
+      "evidence": "startup-session -> ready：以 `--features linux-native` 构建后，宿主协议把会话交给一个独立的 rustage 子进程（`--launch --log-level info --exit-after-ms 150`）；该子进程真的创建了窗口（window 6000285942072475648，1280x800）并进入 glib 主循环，到点按期限结束，父进程据此写出完整报告；同一台机器上用默认构建时本项为 not-verified（后端 linux-state-backend 报 PreviewOrStub，子进程以退出码 3 拒绝，写明窗口不会被合成）。host-directories -> ready：四个宿主目录逐个探测，config/cache/data 缺席而 temp 可用，并在临时根下逐个创建成功（两种构建相同）"
     },
     {
       "host": "linux",

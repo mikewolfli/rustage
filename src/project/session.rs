@@ -22,17 +22,24 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::contracts::permission::Principal;
 use crate::contracts::revision::FormatVersion;
 use crate::host::paths::ProjectRoot;
 use crate::host::permission::{PermissionService, Scope, TrustPrompt};
-use crate::host::subprocess::{OwnedProcess, ProcessSpec};
+use crate::host::subprocess::{DEFAULT_GRACE, OwnedProcess, ProcessSpec};
 use crate::project::format::{
     PROJECT_FILE_NAME, ProjectContent, ProjectError, ProjectFile, ProjectWriteRefusal,
 };
 use crate::project::recent::RecentEntry;
+
+/// How long `cargo --version` and `rustc --version` are given before they are treated as hanging.
+///
+/// The same order of magnitude as the host's own process grace ([`DEFAULT_GRACE`]): both answer in
+/// milliseconds on any working machine, and the number is here to bound a program that never
+/// answers, not to accommodate a slow one.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What an opened project is, from the format's own point of view.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -268,6 +275,79 @@ impl ToolVersion {
     }
 }
 
+/// Why one program gave no version — the two facts worth telling apart.
+///
+/// The distinction is the point. "Not installed" is a machine to fix; "ran and did not answer" is a
+/// wrapper script or a broken install to look at; "did not finish" is a program that hung. One
+/// sentence covering all three ("not found or did not answer") told a person reading it neither of
+/// the first two — recorded as an open item in the fifth development record (§43.4 item 5) and fixed
+/// here, where the fact is known, rather than guessed at each of the three places that report it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ToolUnavailable {
+    /// Nothing ran: the program is not on `PATH`, or it would not start at all.
+    NotInstalled {
+        /// The program that could not be started.
+        program: String,
+        /// What the operating system said.
+        reason: String,
+    },
+    /// It ran and printed nothing a version can be read from.
+    DidNotAnswer {
+        /// The program that ran.
+        program: String,
+        /// How it ended.
+        exit: String,
+        /// What it printed, trimmed to one line's worth.
+        said: String,
+    },
+    /// It was still running when its limit expired, and was stopped.
+    DidNotFinish {
+        /// The program that hung.
+        program: String,
+        /// How long it was given.
+        limit: Duration,
+    },
+}
+
+impl ToolUnavailable {
+    /// The program this is about.
+    pub fn program(&self) -> &str {
+        match self {
+            Self::NotInstalled { program, .. }
+            | Self::DidNotAnswer { program, .. }
+            | Self::DidNotFinish { program, .. } => program,
+        }
+    }
+
+    /// One line naming the program and the fact, for a report or a diagnostic.
+    pub fn line(&self) -> String {
+        match self {
+            Self::NotInstalled { program, reason } => {
+                format!("{program}: not installed ({reason})")
+            }
+            Self::DidNotAnswer {
+                program,
+                exit,
+                said,
+            } if said.is_empty() => {
+                format!("{program}: ran and said nothing ({exit})")
+            }
+            Self::DidNotAnswer {
+                program,
+                exit,
+                said,
+            } => {
+                format!(
+                    "{program}: ran and did not answer with a version ({exit}; it said `{said}`)"
+                )
+            }
+            Self::DidNotFinish { program, limit } => {
+                format!("{program}: did not finish within {limit:?} and was stopped")
+            }
+        }
+    }
+}
+
 /// Why the toolchain was not read.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum NotChecked {
@@ -278,13 +358,6 @@ pub enum NotChecked {
     /// The permission table refused the command.
     Refused {
         /// Why, in the host's own words.
-        reason: String,
-    },
-    /// The program is not there, or would not start.
-    NotRunnable {
-        /// The program that could not be started.
-        program: String,
-        /// What the operating system said.
         reason: String,
     },
 }
@@ -299,9 +372,6 @@ impl NotChecked {
                     .to_owned()
             }
             Self::Refused { reason } => format!("not checked: {reason}"),
-            Self::NotRunnable { program, reason } => {
-                format!("`{program}` could not be run: {reason}")
-            }
         }
     }
 }
@@ -309,17 +379,17 @@ impl NotChecked {
 /// What the toolchain check found.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ToolchainReport {
-    cargo: Option<ToolVersion>,
-    rustc: Option<ToolVersion>,
+    cargo: Result<ToolVersion, ToolUnavailable>,
+    rustc: Result<ToolVersion, ToolUnavailable>,
     checks: Vec<String>,
 }
 
 impl ToolchainReport {
-    /// The report a toolchain check produced: what each program answered, and every command that was
-    /// run, which is what makes the report checkable.
+    /// The report a toolchain check produced: what each program answered or why it did not, and
+    /// every command that was run, which is what makes the report checkable.
     pub(crate) fn from_checks(
-        cargo: Option<ToolVersion>,
-        rustc: Option<ToolVersion>,
+        cargo: Result<ToolVersion, ToolUnavailable>,
+        rustc: Result<ToolVersion, ToolUnavailable>,
         checks: Vec<String>,
     ) -> Self {
         Self {
@@ -331,12 +401,24 @@ impl ToolchainReport {
 
     /// Cargo, when it answered.
     pub fn cargo(&self) -> Option<&ToolVersion> {
-        self.cargo.as_ref()
+        self.cargo.as_ref().ok()
     }
 
     /// Rustc, when it answered.
     pub fn rustc(&self) -> Option<&ToolVersion> {
-        self.rustc.as_ref()
+        self.rustc.as_ref().ok()
+    }
+
+    /// Why a program gave no version, when it did not.
+    ///
+    /// The one source for that fact: the rendered report, the validation needs and the kit's
+    /// findings all read it here, so none of them has to recover it from [`Self::checks`]' text or
+    /// write a sentence of its own.
+    pub fn unavailable(&self, program: &str) -> Option<&ToolUnavailable> {
+        [self.cargo.as_ref().err(), self.rustc.as_ref().err()]
+            .into_iter()
+            .flatten()
+            .find(|failure| failure.program() == program)
     }
 
     /// Every command that was run, which is what makes the report checkable.
@@ -346,23 +428,23 @@ impl ToolchainReport {
 
     /// Whether both programs answered.
     pub fn is_complete(&self) -> bool {
-        self.cargo.is_some() && self.rustc.is_some()
+        self.cargo.is_ok() && self.rustc.is_ok()
     }
 
-    /// One line per finding.
+    /// One line per finding: what each program answered, or which fact kept it from answering.
     pub fn render(&self) -> Vec<String> {
         let mut lines = Vec::new();
-        for version in [self.cargo.as_ref(), self.rustc.as_ref()]
+        for version in [self.cargo.as_ref().ok(), self.rustc.as_ref().ok()]
             .into_iter()
             .flatten()
         {
             lines.push(format!("{}: {}", version.program, version.version));
         }
-        if self.cargo.is_none() {
-            lines.push("cargo: not found or did not answer".to_owned());
-        }
-        if self.rustc.is_none() {
-            lines.push("rustc: not found or did not answer".to_owned());
+        for failure in [self.cargo.as_ref().err(), self.rustc.as_ref().err()]
+            .into_iter()
+            .flatten()
+        {
+            lines.push(failure.line());
         }
         lines
     }
@@ -554,49 +636,21 @@ impl ProjectSession {
             }
         };
         let mut checks = Vec::new();
-        let mut read = |program: &str| -> Result<ToolVersion, NotChecked> {
-            let spec = ProcessSpec::new(format!("{program} --version"), program).arg("--version");
-            checks.push(format!("{program} --version"));
-            let process =
-                OwnedProcess::spawn(spec, &permit).map_err(|error| NotChecked::NotRunnable {
-                    program: program.to_owned(),
-                    reason: error.to_string(),
-                })?;
-            let mut process = process;
-            let exit = process.wait();
-            let output = process.output_so_far();
-            let line = output
-                .stdout
-                .lines()
-                .chain(output.stderr.lines())
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_owned();
-            if !exit.is_success() || line.is_empty() {
-                return Err(NotChecked::NotRunnable {
-                    program: program.to_owned(),
-                    reason: format!("it ended with {} and said `{}`", exit.message(), line),
-                });
-            }
-            Ok(ToolVersion::from_line(program, &line))
+        let mut read = |program: &str| -> Result<ToolVersion, ToolUnavailable> {
+            read_tool_version(program, &permit, VERSION_TIMEOUT, &mut checks)
         };
 
         let cargo = read("cargo");
         let rustc = read("rustc");
-        // A program that would not start is a finding about the machine, and the report keeps it:
+        // A program that did not answer is a finding about the machine, and the report keeps it:
         // returning "not checked" here would throw away the one half that did answer.
         for failure in [cargo.as_ref().err(), rustc.as_ref().err()]
             .into_iter()
             .flatten()
         {
-            checks.push(failure.message());
+            checks.push(failure.line());
         }
-        let report = ToolchainReport::from_checks(
-            cargo.as_ref().ok().cloned(),
-            rustc.as_ref().ok().cloned(),
-            checks,
-        );
+        let report = ToolchainReport::from_checks(cargo, rustc, checks);
         self.toolchain = ToolchainState::Checked(report);
         &self.toolchain
     }
@@ -667,6 +721,60 @@ impl fmt::Display for RecentOpen {
     }
 }
 
+/// Asks one program for its version, with a deadline.
+///
+/// Split out of [`ProjectSession::diagnose_toolchain`] so the three ways this can come back empty
+/// are testable without a machine that is missing `cargo`: the program that is not there, the one
+/// that runs and says nothing a version can be read from, and the one that hangs. `limit` is a
+/// parameter rather than the constant so a test can watch a program that never answers without
+/// waiting [`VERSION_TIMEOUT`] for it.
+fn read_tool_version(
+    program: &str,
+    permit: &crate::host::permission::ExecutionPermit,
+    limit: Duration,
+    checks: &mut Vec<String>,
+) -> Result<ToolVersion, ToolUnavailable> {
+    let spec = ProcessSpec::new(format!("{program} --version"), program).arg("--version");
+    checks.push(format!("{program} --version"));
+    let mut process =
+        OwnedProcess::spawn(spec, permit).map_err(|error| ToolUnavailable::NotInstalled {
+            program: program.to_owned(),
+            reason: error.to_string(),
+        })?;
+    // Bounded, because a `cargo` that is a wrapper script hanging on a lock is a real machine
+    // (T01.04's timeout semantics, reused here rather than reinvented): without a limit, asking a
+    // project for its toolchain would block the host on that program forever, and "the host is
+    // stuck" is not a finding anybody can act on.
+    let Some(exit) = process.wait_for(limit) else {
+        let termination = process.terminate(DEFAULT_GRACE);
+        checks.push(format!(
+            "{program} --version: stopped after {limit:?} ({})",
+            termination.message(),
+        ));
+        return Err(ToolUnavailable::DidNotFinish {
+            program: program.to_owned(),
+            limit,
+        });
+    };
+    let output = process.output_so_far();
+    let line = output
+        .stdout
+        .lines()
+        .chain(output.stderr.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .to_owned();
+    if !exit.is_success() || line.is_empty() {
+        return Err(ToolUnavailable::DidNotAnswer {
+            program: program.to_owned(),
+            exit: exit.message(),
+            said: line,
+        });
+    }
+    Ok(ToolVersion::from_line(program, &line))
+}
+
 /// Whether the project's format is one this build reads, in one word, for a report.
 pub fn content_of(file: &ProjectFile) -> &'static str {
     match file.content() {
@@ -678,8 +786,8 @@ pub fn content_of(file: &ProjectFile) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotChecked, ProjectSession, RecentOpen, SessionState, ToolchainState, TrustDecision,
-        TrustQuestion,
+        NotChecked, ProjectSession, RecentOpen, SessionState, ToolUnavailable, ToolchainState,
+        TrustDecision, TrustQuestion, read_tool_version,
     };
     use crate::host::permission::PermissionService;
     use crate::project::recent::{RecentProjects, RepairRefusal};
@@ -724,6 +832,21 @@ mod tests {
             std::fs::create_dir_all(&directory).expect("a project directory");
             std::fs::write(directory.join("project.json"), text).expect("a project document");
             directory
+        }
+
+        /// An executable script, for the shapes a program can fail in.
+        ///
+        /// The same shape the host's own process tests use: a real program that really runs is the
+        /// only way to produce "ran and said nothing" and "ran and never answered".
+        #[cfg(unix)]
+        fn script(&self, name: &str, body: &str) -> PathBuf {
+            use std::os::unix::fs::PermissionsExt;
+
+            let path = self.root.join(name);
+            std::fs::write(&path, body).expect("a script");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the mode is settable");
+            path
         }
     }
 
@@ -957,6 +1080,103 @@ mod tests {
             assert!(rustc.version().contains('.'), "{}", rustc.version());
         }
         assert!(report.render().iter().any(|line| line.starts_with("cargo")));
+    }
+
+    /// A program that is not there, one that runs and says nothing useful, and one that hangs are
+    /// three different findings, and the report says which.
+    ///
+    /// This is the fix for the defect recorded in the fifth development record (§43.4 item 5): the
+    /// report used to merge all of them into "not found or did not answer", which told the person
+    /// reading it nothing about what to do next.
+    #[cfg(unix)]
+    #[test]
+    fn the_three_ways_a_toolchain_program_can_fail_are_told_apart() {
+        let sandbox = sandbox();
+        let permissions = PermissionService::new();
+        let permit = permissions
+            .permit(
+                crate::contracts::permission::EffectClass::Command,
+                crate::host::permission::Scope::Session,
+                crate::contracts::permission::Principal::Human,
+            )
+            .expect("the session may ask its own machine about a program");
+
+        let mut checks = Vec::new();
+        let missing = read_tool_version(
+            sandbox
+                .root
+                .join("no-such-program")
+                .to_str()
+                .expect("utf-8"),
+            &permit,
+            Duration::from_millis(500),
+            &mut checks,
+        )
+        .expect_err("a program that is not there cannot answer");
+        assert!(matches!(missing, ToolUnavailable::NotInstalled { .. }));
+        assert!(
+            missing.line().contains("not installed"),
+            "{}",
+            missing.line()
+        );
+
+        // A program that runs and prints nothing: the shape of a wrapper script whose own failure is
+        // the thing worth reporting.
+        let silent = sandbox.script("silent", "#!/bin/sh\nexit 3\n");
+        let mut checks = Vec::new();
+        let did_not_answer = read_tool_version(
+            silent.to_str().expect("utf-8"),
+            &permit,
+            Duration::from_millis(500),
+            &mut checks,
+        )
+        .expect_err("a program that says nothing did not answer");
+        assert!(matches!(
+            did_not_answer,
+            ToolUnavailable::DidNotAnswer { .. }
+        ));
+        assert!(
+            did_not_answer.line().contains("ran and said nothing"),
+            "{}",
+            did_not_answer.line()
+        );
+        assert!(
+            did_not_answer.line().contains("exit code 3"),
+            "how it ended belongs in the finding: {}",
+            did_not_answer.line()
+        );
+
+        // A program that never answers: without the deadline this call would block the host for as
+        // long as the program lives, so the assertion is that it comes back at all — and quickly.
+        let hanging = sandbox.script("hanging", "#!/bin/sh\nsleep 30\n");
+        let mut checks = Vec::new();
+        let began = std::time::Instant::now();
+        let did_not_finish = read_tool_version(
+            hanging.to_str().expect("utf-8"),
+            &permit,
+            Duration::from_millis(200),
+            &mut checks,
+        )
+        .expect_err("a program that hangs does not answer");
+        assert!(matches!(
+            did_not_finish,
+            ToolUnavailable::DidNotFinish { .. }
+        ));
+        assert!(
+            did_not_finish.line().contains("did not finish within"),
+            "{}",
+            did_not_finish.line()
+        );
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "the check has to bound a program that hangs, and took {:?}",
+            began.elapsed(),
+        );
+        // The commands it ran are recorded, including the stop, so the report stays evidence.
+        assert!(
+            checks.iter().any(|check| check.contains("stopped after")),
+            "{checks:?}"
+        );
     }
 
     #[test]

@@ -37,7 +37,7 @@ use crate::contracts::revision::FormatVersion;
 use crate::host::paths::ProjectRoot;
 use crate::project::format::{ProjectError, format_version};
 use crate::project::json::{self, Json, JsonKind, JsonObject};
-use crate::project::session::ToolchainState;
+use crate::project::session::{ToolUnavailable, ToolchainState};
 
 /// The document that says which tools a kit is made of.
 pub const KIT_FILE_NAME: &str = "kit.json";
@@ -977,8 +977,14 @@ impl Observed {
         for (program, version) in [("cargo", report.cargo()), ("rustc", report.rustc())] {
             let found = match version {
                 Some(version) => Found::Value(version.version().to_owned()),
+                // The check's own typed finding is the reason: it knows which of "not installed",
+                // "ran and said nothing" or "hung" happened, and a sentence written here would be a
+                // second, drifting answer to a question already answered (principle #54).
                 None => Found::Nothing {
-                    reason: format!("`{program}` was run and reported no version"),
+                    reason: report
+                        .unavailable(program)
+                        .map(ToolUnavailable::line)
+                        .unwrap_or_else(|| format!("`{program}` was run and reported no version")),
                 },
             };
             observed = observed.with(program, found);
@@ -1256,7 +1262,9 @@ mod tests {
         Found, KIT_MEMBERS, Kit, MEMBER_MEMBERS, Observed, Requirement, RequirementRefusal, Role,
         Serves, version_like,
     };
-    use crate::project::session::{NotChecked, ToolVersion, ToolchainReport, ToolchainState};
+    use crate::project::session::{
+        NotChecked, ToolUnavailable, ToolVersion, ToolchainReport, ToolchainState,
+    };
 
     struct TempDirectory(PathBuf);
 
@@ -1733,16 +1741,24 @@ mod tests {
     #[test]
     fn what_a_toolchain_check_found_is_translated_and_never_invented() {
         let report = ToolchainReport::from_checks(
-            Some(ToolVersion::from_line(
+            Ok(ToolVersion::from_line(
                 "cargo",
                 "cargo 1.99.0 (5f94df478 2026-08-27)",
             )),
-            None,
+            Err(ToolUnavailable::NotInstalled {
+                program: "rustc".to_owned(),
+                reason: "No such file or directory (os error 2)".to_owned(),
+            }),
             vec!["cargo --version".to_owned(), "rustc --version".to_owned()],
         );
         let observed = Observed::from_toolchain(&ToolchainState::Checked(report));
         assert_eq!(observed.of("cargo"), Found::Value("1.99.0".to_owned()));
-        assert!(matches!(observed.of("rustc"), Found::Nothing { .. }));
+        // The translation keeps the check's own finding rather than writing its own sentence: the
+        // reason a person reads here is the one the toolchain check produced.
+        assert!(matches!(
+            observed.of("rustc"),
+            Found::Nothing { reason } if reason.contains("not installed")
+        ));
 
         let unasked = Observed::from_toolchain(&ToolchainState::NotChecked(NotChecked::NotAsked));
         assert!(matches!(

@@ -1277,136 +1277,145 @@ where
 }
 
 pub fn help_text() -> &'static str {
-    "rustage - Rust desktop UI designer\n\n\
-     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n\
-            rustage [--render-icons <directory> | --probe-apis <directory>]\n\
-            rustage [--probe-host <directory> | --project-check <file>]\n\
-            rustage --new-project <directory> [--template <name>] [--name <name>]\n\
-            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n\
-            rustage [--project-tree <file>]\n\
-            rustage --drop-entry <file> --document <path> [--fix] [--trust]\n\
-            rustage --file-op <file> [--add <path> | --exclude <path> | --delete <path>]\n\
-                                 [--move <from> <to>] [--apply] [--trust]\n\n\
-            rustage --configuration <file> [--target <name>] [--override <key>=<value>]\n\
-                                  [--remember | --forget]\n\n\
-            rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n\
-            rustage --validate <file> [--diagnose] [--trust]\n\
-                                 [--record <file> | --rescan <file>]\n\
-            rustage --kit <file> [--diagnose] [--trust] [--triple <triple>]\n\
-            rustage --edit <page-document> [--batch <file>] [--root <directory>]\n\
-                                       [--apply] [--undo]\n\
-            rustage --document <page-document> [--root <directory>]\n\
-                                       [--set-text <text> | --set-text-file <file>]...\n\
-            rustage --history <page-document> [--root <directory>]\n\
-                                      [--text <text> | --text-file <file> |\n\
-                                       --batch <file> | --undo <n> | --redo <n>]...\n\
-                                      [--merge] [--only <text|model>]\n\
-            rustage --dependencies <directory> [--review <record> | --record <record>]\n\
-                                               [--allow-lockfile-change] [--allow-network]\n\
-                                               [--trust]\n\
-            rustage --new-workspace <directory> [--name <name>]\n\
-            rustage --workspace <file> [--add <name>=<root> | --remove <name> |\n\
-                                       --activate <name> | --file <member>:<path>]\n\
-                                      [--apply] [--trust]\n\n\
-     With no options, prints the current project status.\n\n\
-     Options:\n\
-       -h, --help                    Print this help message\n\
-       -V, --version                 Print the application version\n\
-       --launch                      Start the baseline desktop session, then leave it again\n\
-       --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n\
-       --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n\
-       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n\
-       --probe-host <directory>      Check the host platform services and write host-readiness.json\n\
-       --project-check <file>        Read a project file, report what is understood and what is\n\
-                                     kept, and write <file>.roundtrip.json as evidence\n\
-       --new-project <directory>     Create a project; --template empty|basic-page|application\n\
-                                     (default: basic-page), --name <name> (default: the directory)\n\
-       --open-project <file>         Open a project read-only, and print what would be asked\n\
-       --trust                       With --open-project, answer the question with yes\n\
-       --diagnose                    With --open-project, read the toolchain (runs two programs)\n\
-       --recent                      List the projects opened before, and where they are now\n\
-       --project-tree <file>         Show what the project has, classified, with what is on disk\n\
-       --drop-entry <file>           Remove the entry in --document; refuses while anything points\n\
-                                     at it unless --fix is given, which fixes those references\n\
-       --document <path>             With --drop-entry, the page document of the entry\n\
-       --fix                         With --drop-entry, fix the references instead of refusing\n\
-       --file-op <file>              Plan one file operation on the project; --add, --exclude,\n\
-                                     --delete <path> or --move <from> <to> says which. Prints\n\
-                                     what it would do unless --apply is given, which does it\n\
-       --apply                       With --file-op, do it: move the files, then write the\n\
-                                     document, putting the moves back if the write fails\n\n\
-       --configuration <file>        Show which target would build this project, what each\n\
-                                     value came from, and what this machine overrode\n\
-       --target <name>               With --configuration, resolve for this target\n\
-       --override <key>=<value>      With --configuration, set `profile` or `features` for this\n\
-                                     run; a list is comma-separated\n\
-       --remember                    With --configuration, record the target and the overrides\n\
-                                     for this project on this machine\n\
-       --forget                      With --configuration, forget everything recorded for it\n\n\
-       --import <file-or-directory>  Read an existing project, say what it is, and what an\n\
-                                     import would change; --apply migrates it, keeping the file\n\
-                                     that was read, and --check-backup reports what was kept\n\
-       --check-backup                With --import, report the files a past migration kept\n\
-       --validate <file>             Check what the project needs and whether it is there, and\n\
-                                     change nothing: the document is read, never written\n\
-       --diagnose                    With --validate or --open-project, read the toolchain, which\n\
-                                     runs two programs and needs the project to be trusted\n\
-       --record <file>               With --validate, write a scan of the project to <file>, so a\n\
-                                     later --rescan has something to compare against\n\
-       --rescan <file>               With --validate, compare the project with the scan recorded in\n\
-                                     <file> and name what appeared, vanished or changed\n\
-       --kit <file>                  Show which tools a kit is made of, and what this machine has\n\
-                                     of them; --diagnose asks it about each member (runs the\n\
-                                     programs the kit names), --triple says which output to ask about\n\
-       --triple <triple>             With --kit, the output triple to ask about: a kit never\n\
-                                     carries which profile is being built\n\
-       --edit <page-document>        Plan a batch of edits to a page document's model: what each\n\
-                                     operation would do, what cannot land, and what would undo it\n\
-       --batch <file>                With --edit, the batch document to run\n\
-       --apply                       With --edit, apply the batch to the model in memory (writing\n\
-                                     the file is T03.04's job)\n\
-       --undo                        With --edit --apply, apply the batch's inverse afterwards\n\
-       --document <page-document>    Show what a buffer over a page document is holding: the text,\n\
-                                     the last model that read it, and what happened to identity\n\
-       --root <directory>            With --document, the project root the file is read against\n\
-                                     (default: the nearest project above the file)\n\
-       --set-text <text>             With --document, replace the text with this text; repeatable,\n\
-                                     and the edits happen in the order they are given\n\
-       --set-text-file <file>        With --document, read this file's text and use it as an edit\n\
-       --history <page-document>     Replay a script of edits and moves against a page document:\n\
-                                     text and model edits are one history in two domains, so one\n\
-                                     drag is one thing to take back\n\
-       --text <text>                 With --history, replace the document's text with this text\n\
-       --text-file <file>            With --history, read this file's text and use it as the text\n\
-       --merge                       With --history, make every batch in the run one step (one\n\
-                                     drag is one thing to take back)\n\
-       --undo <n>                    With --history, take back n steps, here in the script\n\
-       --redo <n>                    With --history, put back n steps, here in the script\n\
-       --only <text|model>           With --history, require the moves to be in this domain; a\n\
-                                     step in the other domain is refused, not skipped over\n\
-       --dependencies <directory>    Resolve a Cargo workspace's dependencies and report the tree;\n\
-                                     nothing runs until the directory is trusted and each effect of\n\
-                                     the resolution has been authorized\n\
-       --review <record>             With --dependencies, compare the resolution with a record and\n\
-                                     name what was added, removed, re-versioned or re-featured\n\
-       --allow-lockfile-change       With --dependencies, let the resolution write Cargo.lock\n\
-                                     (offline: cargo resolves from what this machine has)\n\
-       --allow-network               With --dependencies, let the resolution reach the registry;\n\
-                                     without it the resolution is offline\n\
-       --new-workspace <directory>   Create a workspace document in a directory, with no members\n\
-                                     yet; --name <name> (default: the directory)\n\
-       --workspace <file>            Show a workspace: its members, what each holds, and its files\n\
-                                     qualified by the member that names them\n\
-       --add <name>=<root>           With --workspace, name a root that is already there as a\n\
-                                     member; without --apply this only plans it\n\
-       --remove <name>               With --workspace, take a member out of the document; its\n\
-                                     directory and everything in it stay where they are\n\
-       --activate <name>             With --workspace, record which member is active on this\n\
-                                     machine, which the document does not say\n\
-       --file <member>:<path>        With --workspace, show that one file: two members can each\n\
-                                     hold a path of the same name\n\
-     Global options:\n\
-       --log-level <level>           error | warn | info | debug | trace (default: info)\n"
+    concat!(
+        "rustage - Rust desktop UI designer\n",
+        "\n",
+        "     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n",
+        "            rustage [--render-icons <directory> | --probe-apis <directory>]\n",
+        "            rustage [--probe-host <directory> | --project-check <file>]\n",
+        "            rustage --new-project <directory> [--template <name>] [--name <name>]\n",
+        "            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n",
+        "            rustage [--project-tree <file>]\n",
+        "            rustage --drop-entry <file> --document <path> [--fix] [--trust]\n",
+        "            rustage --file-op <file> [--add <path> | --exclude <path> | --delete <path>]\n",
+        "                                 [--move <from> <to>] [--apply] [--trust]\n",
+        "\n",
+        "            rustage --configuration <file> [--target <name>] [--override <key>=<value>]\n",
+        "                                  [--remember | --forget]\n",
+        "\n",
+        "            rustage --import <file-or-directory> [--apply | --check-backup] [--trust]\n",
+        "            rustage --validate <file> [--diagnose] [--trust]\n",
+        "                                 [--record <file> | --rescan <file>]\n",
+        "            rustage --kit <file> [--diagnose] [--trust] [--triple <triple>]\n",
+        "            rustage --edit <page-document> [--batch <file>] [--root <directory>]\n",
+        "                                       [--apply] [--undo]\n",
+        "            rustage --document <page-document> [--root <directory>]\n",
+        "                                       [--set-text <text> | --set-text-file <file>]...\n",
+        "            rustage --history <page-document> [--root <directory>]\n",
+        "                                      [--text <text> | --text-file <file> |\n",
+        "                                       --batch <file> | --undo <n> | --redo <n>]...\n",
+        "                                      [--merge] [--only <text|model>]\n",
+        "            rustage --dependencies <directory> [--review <record> | --record <record>]\n",
+        "                                               [--allow-lockfile-change] [--allow-network]\n",
+        "                                               [--trust]\n",
+        "            rustage --new-workspace <directory> [--name <name>]\n",
+        "            rustage --workspace <file> [--add <name>=<root> | --remove <name> |\n",
+        "                                       --activate <name> | --file <member>:<path>]\n",
+        "                                      [--apply] [--trust]\n",
+        "\n",
+        "     With no options, prints the current project status.\n",
+        "\n",
+        "     Options:\n",
+        "       -h, --help                    Print this help message\n",
+        "       -V, --version                 Print the application version\n",
+        "       --launch                      Start the baseline desktop session, then leave it again\n",
+        "       --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n",
+        "       --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n",
+        "       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n",
+        "       --probe-host <directory>      Check the host platform services and write host-readiness.json\n",
+        "       --project-check <file>        Read a project file, report what is understood and what is\n",
+        "                                     kept, and write <file>.roundtrip.json as evidence\n",
+        "       --new-project <directory>     Create a project; --template empty|basic-page|application\n",
+        "                                     (default: basic-page), --name <name> (default: the directory)\n",
+        "       --open-project <file>         Open a project read-only, and print what would be asked\n",
+        "       --trust                       With --open-project, answer the question with yes\n",
+        "       --diagnose                    With --open-project, read the toolchain (runs two programs)\n",
+        "       --recent                      List the projects opened before, and where they are now\n",
+        "       --project-tree <file>         Show what the project has, classified, with what is on disk\n",
+        "       --drop-entry <file>           Remove the entry in --document; refuses while anything points\n",
+        "                                     at it unless --fix is given, which fixes those references\n",
+        "       --document <path>             With --drop-entry, the page document of the entry\n",
+        "       --fix                         With --drop-entry, fix the references instead of refusing\n",
+        "       --file-op <file>              Plan one file operation on the project; --add, --exclude,\n",
+        "                                     --delete <path> or --move <from> <to> says which. Prints\n",
+        "                                     what it would do unless --apply is given, which does it\n",
+        "       --apply                       With --file-op, do it: move the files, then write the\n",
+        "                                     document, putting the moves back if the write fails\n",
+        "\n",
+        "       --configuration <file>        Show which target would build this project, what each\n",
+        "                                     value came from, and what this machine overrode\n",
+        "       --target <name>               With --configuration, resolve for this target\n",
+        "       --override <key>=<value>      With --configuration, set `profile` or `features` for this\n",
+        "                                     run; a list is comma-separated\n",
+        "       --remember                    With --configuration, record the target and the overrides\n",
+        "                                     for this project on this machine\n",
+        "       --forget                      With --configuration, forget everything recorded for it\n",
+        "\n",
+        "       --import <file-or-directory>  Read an existing project, say what it is, and what an\n",
+        "                                     import would change; --apply migrates it, keeping the file\n",
+        "                                     that was read, and --check-backup reports what was kept\n",
+        "       --check-backup                With --import, report the files a past migration kept\n",
+        "       --validate <file>             Check what the project needs and whether it is there, and\n",
+        "                                     change nothing: the document is read, never written\n",
+        "       --diagnose                    With --validate or --open-project, read the toolchain, which\n",
+        "                                     runs two programs and needs the project to be trusted\n",
+        "       --record <file>               With --validate, write a scan of the project to <file>, so a\n",
+        "                                     later --rescan has something to compare against\n",
+        "       --rescan <file>               With --validate, compare the project with the scan recorded in\n",
+        "                                     <file> and name what appeared, vanished or changed\n",
+        "       --kit <file>                  Show which tools a kit is made of, and what this machine has\n",
+        "                                     of them; --diagnose asks it about each member (runs the\n",
+        "                                     programs the kit names), --triple says which output to ask about\n",
+        "       --triple <triple>             With --kit, the output triple to ask about: a kit never\n",
+        "                                     carries which profile is being built\n",
+        "       --edit <page-document>        Plan a batch of edits to a page document's model: what each\n",
+        "                                     operation would do, what cannot land, and what would undo it\n",
+        "       --batch <file>                With --edit, the batch document to run\n",
+        "       --apply                       With --edit, apply the batch to the model in memory (writing\n",
+        "                                     the file is T03.04's job)\n",
+        "       --undo                        With --edit --apply, apply the batch's inverse afterwards\n",
+        "       --document <page-document>    Show what a buffer over a page document is holding: the text,\n",
+        "                                     the last model that read it, and what happened to identity\n",
+        "       --root <directory>            With --document, the project root the file is read against\n",
+        "                                     (default: the nearest project above the file)\n",
+        "       --set-text <text>             With --document, replace the text with this text; repeatable,\n",
+        "                                     and the edits happen in the order they are given\n",
+        "       --set-text-file <file>        With --document, read this file's text and use it as an edit\n",
+        "       --history <page-document>     Replay a script of edits and moves against a page document:\n",
+        "                                     text and model edits are one history in two domains, so one\n",
+        "                                     drag is one thing to take back\n",
+        "       --text <text>                 With --history, replace the document's text with this text\n",
+        "       --text-file <file>            With --history, read this file's text and use it as the text\n",
+        "       --merge                       With --history, make every batch in the run one step (one\n",
+        "                                     drag is one thing to take back)\n",
+        "       --undo <n>                    With --history, take back n steps, here in the script\n",
+        "       --redo <n>                    With --history, put back n steps, here in the script\n",
+        "       --only <text|model>           With --history, require the moves to be in this domain; a\n",
+        "                                     step in the other domain is refused, not skipped over\n",
+        "       --dependencies <directory>    Resolve a Cargo workspace's dependencies and report the tree;\n",
+        "                                     nothing runs until the directory is trusted and each effect of\n",
+        "                                     the resolution has been authorized\n",
+        "       --review <record>             With --dependencies, compare the resolution with a record and\n",
+        "                                     name what was added, removed, re-versioned or re-featured\n",
+        "       --allow-lockfile-change       With --dependencies, let the resolution write Cargo.lock\n",
+        "                                     (offline: cargo resolves from what this machine has)\n",
+        "       --allow-network               With --dependencies, let the resolution reach the registry;\n",
+        "                                     without it the resolution is offline\n",
+        "       --new-workspace <directory>   Create a workspace document in a directory, with no members\n",
+        "                                     yet; --name <name> (default: the directory)\n",
+        "       --workspace <file>            Show a workspace: its members, what each holds, and its files\n",
+        "                                     qualified by the member that names them\n",
+        "       --add <name>=<root>           With --workspace, name a root that is already there as a\n",
+        "                                     member; without --apply this only plans it\n",
+        "       --remove <name>               With --workspace, take a member out of the document; its\n",
+        "                                     directory and everything in it stay where they are\n",
+        "       --activate <name>             With --workspace, record which member is active on this\n",
+        "                                     machine, which the document does not say\n",
+        "       --file <member>:<path>        With --workspace, show that one file: two members can each\n",
+        "                                     hold a path of the same name\n",
+        "     Global options:\n",
+        "       --log-level <level>           error | warn | info | debug | trace (default: info)\n",
+    )
 }
 
 #[cfg(test)]
@@ -1417,8 +1426,8 @@ mod tests {
         Command, ConfigurationOptions, DependenciesOptions, DocumentEdit, DocumentOptions,
         DropEntryOptions, EditOptions, FileOpOptions, HistoryDomain, HistoryEdit, HistoryOptions,
         ImportOptions, KitOptions, LaunchOptions, NewProjectOptions, NewWorkspaceOptions,
-        OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions, log_level_of,
-        parse,
+        OpenProjectOptions, ValidateOptions, WorkspaceAction, WorkspaceOptions, help_text,
+        log_level_of, parse,
     };
     use crate::host::log::Level;
     use crate::project::{configuration::SettingValue, create::Template, files::FileOperation};
@@ -1557,6 +1566,28 @@ mod tests {
         assert!(parse(["--project-tree"]).is_err());
         assert!(parse(["--drop-entry", "demo/project.json"]).is_err());
         assert!(parse(["--drop-entry", "demo/project.json", "--wat"]).is_err());
+    }
+
+    #[test]
+    fn the_usage_block_keeps_the_alignment_it_is_written_with() {
+        let text = help_text();
+
+        assert!(
+            text.contains("\n            rustage [--render-icons"),
+            "a usage continuation line has to stay under the command name:\n{text}"
+        );
+        assert!(
+            text.contains("\n                                 [--move <from> <to>]"),
+            "an option's continuation has to line up under the option:\n{text}"
+        );
+        assert!(
+            text.contains("\n       --log-level <level>"),
+            "the option column has to be indented:\n{text}"
+        );
+        assert!(
+            !text.contains("\nrustage [--render-icons"),
+            "the flattening this replaces put every line at the left margin:\n{text}"
+        );
     }
 
     #[test]

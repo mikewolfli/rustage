@@ -95,14 +95,19 @@ pub fn run(command: Command) {
                 print!("{}", report.render_text());
                 println!("{}", path.display());
                 if !report.is_clean() {
-                    // A gap is a finding, not a pass; say so in the exit status so a caller that
-                    // only checks the code cannot mistake one for success.
-                    std::process::exit(1);
+                    // A gap is a finding, not a pass; say so in the exit status so a caller that only
+                    // checks the code cannot mistake one for success. The code is the shared one for
+                    // "a real finding was reported", which is what `--probe-host` also exits with —
+                    // two probes whose findings meant two different numbers was a distinction nobody
+                    // could act on (recorded in the fifth development record §10.9).
+                    std::process::exit(crate::host::error::ExitCode::Reported.code());
                 }
             }
             Err(error) => {
                 eprintln!("rustage: could not write the probe report: {error}");
-                std::process::exit(1);
+                // Not `Reported`: the report could not be produced at all, so there is no finding
+                // for a caller to read.
+                std::process::exit(crate::host::error::ExitCode::Failed.code());
             }
         },
         Command::NewProject(options) => {

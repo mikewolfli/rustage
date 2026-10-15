@@ -56,7 +56,7 @@ T00.08 的最低验收是「无未归属需求，无依赖环，基线可复核�
 | rust-test | `cargo test` | Rust 单元测试、契约不变量与库层探针的断言 | manual | 需要 Rust 工具链与 git 依赖拉取，尚未在 CI 实测（T00.08 / CI 维护者） |
 | rust-fmt | `cargo fmt --check` | 格式 | manual | 同上（T00.08 / CI 维护者） |
 | rust-clippy | `cargo clippy --all-targets` | 静态检查；不得新增警告 | manual | 同上（T00.08 / CI 维护者） |
-| probe-apis | `cargo run -- --probe-apis target/probe` | 固定修订上的库契约探针；有缺口时退出码为 1 | manual | 缺口存在时该命令刻意失败，需人工判读（T00.08 / CI 维护者） |
+| probe-apis | `cargo run -- --probe-apis target/probe` | 固定修订上的库契约探针；有缺口时退出码为 4（`ExitCode::Reported`，与 `--probe-host` 同一个码） | manual | 缺口存在时该命令刻意失败，需人工判读（T00.08 / CI 维护者） |
 | check-docs-test | `node --test tools/check-docs.test.mjs` | 文档检查器自身的负例 | ci | — |
 | check-docs | `node tools/check-docs.mjs` | Markdown 链接/空白/必需文件/路线图依赖与计数 | ci | — |
 | resources-test | `node --test tools/resources/check-resources.test.mjs` | 资源检查器负例 | ci | — |

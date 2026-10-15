@@ -661,7 +661,8 @@ impl OwnedProcess {
                 exit,
                 reason: format!(
                     "this host knows no way to signal a process group on {}; the direct process was \
-                     killed and its descendants were not",
+                     killed at once and its descendants were not — the {grace:?} grace period applies \
+                     only where a group can be signalled",
                     std::env::consts::OS,
                 ),
             }
@@ -967,11 +968,17 @@ static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_GRACE, ExitInfo, OwnedProcess, ProcessPresence, ProcessSpec, SESSION_ENVIRONMENT,
-        SpawnError, Termination, presence, session_marker,
+        ExitInfo, OwnedProcess, ProcessPresence, ProcessSpec, SESSION_ENVIRONMENT, SpawnError,
+        Termination, presence, session_marker,
     };
     use crate::contracts::permission::{EffectClass, Principal};
     use crate::host::permission::{ExecutionPermit, PermissionService, Scope};
+    // The grace period, the executor the process trees are submitted to, and the tests that use
+    // them need a shell to drive the child: this host has one on unix only, so the imports follow
+    // those tests instead of warning on Windows.
+    #[cfg(unix)]
+    use super::DEFAULT_GRACE;
+    #[cfg(unix)]
     use crate::host::tasks::{
         CancelResult, Executor, ExecutorConfig, JobControl, JobOutcome, OwnerId, SubmitRequest,
         TaskOutcome,

@@ -52,7 +52,7 @@
 |---|---|---|---|---|---|---|
 | linux | linux | x86_64 | x86_64-unknown-linux-gnu | gtk (NativeInteractive)（以 `--features linux-native` 构建）；默认构建是 linux-state-backend (PreviewOrStub) | probed | — |
 | macos | macos | aarch64 | aarch64-apple-darwin | — | blocked | 没有可用的 macOS 测试机。log-20261013-4 的 macOS 证据来自 T01.01 的自身启动（后端 cocoa、模式 NativeInteractive），不是本探针的 14 项检查 |
-| windows | windows | x86_64 | x86_64-pc-windows-msvc | — | blocked | 没有可用的 Windows 测试机；本构建也未在 Windows 上编译过 |
+| windows | windows | x86_64 | x86_64-pc-windows-msvc | — | blocked | 没有可用的 Windows 测试机，本探针一次都没有在那里运行过。（本轮做了两件相邻的事，都不改变这一行：① cargo build --target x86_64-pc-windows-gnu 通过，产物在 Wine 9.0 下跑过 --probe-host，但那回答的是 Wine 的实现，按 support-matrix 规则 6 不计为实机证据；② 探针有 4 项检查（process-trees、project-trust、notifications、project-scope）需要一个 shell 作为受控程序，Windows 上没有 sh，因此那些格即使在真机上也需要先改造夹具。见 docs/log/log-20261015-2.md §3–§5） |
 
 ## 矩阵（宿主 × 组）
 

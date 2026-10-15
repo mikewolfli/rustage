@@ -786,9 +786,13 @@ pub fn content_of(file: &ProjectFile) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotChecked, ProjectSession, RecentOpen, SessionState, ToolUnavailable, ToolchainState,
-        TrustDecision, TrustQuestion, read_tool_version,
+        NotChecked, ProjectSession, RecentOpen, SessionState, ToolchainState, TrustDecision,
+        TrustQuestion,
     };
+    // The three ways a probe program can fail are exercised with real scripts, which this host only
+    // has on unix; the imports follow the test rather than being unused on Windows.
+    #[cfg(unix)]
+    use super::{ToolUnavailable, read_tool_version};
     use crate::host::permission::PermissionService;
     use crate::project::recent::{RecentProjects, RepairRefusal};
     use std::path::PathBuf;

@@ -47,6 +47,13 @@ order they are being closed in. It is a work list, not a statement of implemente
   for one finding, and one evidence line whose geometry did not match the session it described), the
   first run of the host probe in **native** GTK session (and the host defect it exposed: the probe
   used to end its own report), and the two stage sign-offs with their boundaries.
+- [Windows cross-build, a Wine run, and three cross-platform defects](log/log-20261015-2.md): what
+  "can Wine replace a real Windows machine?" resolves to — a real cross-build for
+  `x86_64-pc-windows-gnu` (the Windows host row is now `build-verified`), the same binary's
+  `--probe-host` run under Wine 9.0 (`9 ready / 4 gap / 2 not-verified`, and why those numbers are
+  about Wine rather than about Windows), the three defects the two runs exposed (`grace` unused off
+  unix, three unix-only test imports, and a `PATH` lookup that could not see `cmd.exe`), and the four
+  checks that still need a shell to drive their controlled process.
 - [Resource structure and files](log/log-20261013-1.md): what was added, the commands that ran,
   and what remains unverified.
 - [Glyph design, theme contract and HarmonyOS packaging](log/log-20261013-2.md): the minimal

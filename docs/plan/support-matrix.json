@@ -20,9 +20,9 @@
     },
     {
       "id": "windows",
-      "triple": "x86_64-pc-windows-msvc",
-      "designerHost": "unverified",
-      "reason": null
+      "triple": "x86_64-pc-windows-gnu（本轮构建证据）/ x86_64-pc-windows-msvc（未构建）",
+      "designerHost": "build-verified",
+      "reason": "cargo build --target x86_64-pc-windows-gnu 通过（mingw-w64 GCC 13，产出 rustage.exe）；cargo clippy --target x86_64-pc-windows-gnu --all-targets 亦通过，见 docs/log/log-20261015-2.md §2；运行证据仍缺（Wine 下的运行按规则 6 不计为实机证据）"
     },
     {
       "id": "linux",
@@ -74,20 +74,95 @@
     }
   ],
   "cells": [
-    { "host": "macos", "profile": "desktop", "status": "unverified", "reason": null },
-    { "host": "macos", "profile": "tablet", "status": "unverified", "reason": null },
-    { "host": "macos", "profile": "mobile", "status": "unverified", "reason": null },
-    { "host": "macos", "profile": "mini", "status": "unverified", "reason": null },
-    { "host": "macos", "profile": "embedded", "status": "unverified", "reason": null },
-    { "host": "windows", "profile": "desktop", "status": "unverified", "reason": null },
-    { "host": "windows", "profile": "tablet", "status": "unverified", "reason": null },
-    { "host": "windows", "profile": "mobile", "status": "unverified", "reason": null },
-    { "host": "windows", "profile": "mini", "status": "unverified", "reason": null },
-    { "host": "windows", "profile": "embedded", "status": "unverified", "reason": null },
-    { "host": "linux", "profile": "desktop", "status": "unverified", "reason": null },
-    { "host": "linux", "profile": "tablet", "status": "unverified", "reason": null },
-    { "host": "linux", "profile": "mobile", "status": "unverified", "reason": null },
-    { "host": "linux", "profile": "mini", "status": "unverified", "reason": null },
-    { "host": "linux", "profile": "embedded", "status": "unverified", "reason": null }
+    {
+      "host": "macos",
+      "profile": "desktop",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "profile": "tablet",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "profile": "mobile",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "profile": "mini",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "macos",
+      "profile": "embedded",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "profile": "desktop",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "profile": "tablet",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "profile": "mobile",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "profile": "mini",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "windows",
+      "profile": "embedded",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "linux",
+      "profile": "desktop",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "linux",
+      "profile": "tablet",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "linux",
+      "profile": "mobile",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "linux",
+      "profile": "mini",
+      "status": "unverified",
+      "reason": null
+    },
+    {
+      "host": "linux",
+      "profile": "embedded",
+      "status": "unverified",
+      "reason": null
+    }
   ]
 }

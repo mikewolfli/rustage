@@ -367,12 +367,52 @@ impl ProgramOpener {
         let Some(path) = std::env::var_os("PATH") else {
             return false;
         };
+        let names = candidate_names(
+            &self.program,
+            cfg!(windows),
+            std::env::var("PATHEXT").ok().as_deref(),
+        );
         std::env::split_paths(&path).any(|directory| {
-            let candidate = directory.join(&self.program);
-            candidate.is_file() && is_executable(&candidate)
+            names.iter().any(|name| {
+                let candidate = directory.join(name);
+                candidate.is_file() && is_executable(&candidate)
+            })
         })
     }
 }
+
+/// The names a program may have in a directory on `PATH`, in the order to try them.
+///
+/// On Windows a program is stored with an extension and the shell finds `cmd` through `PATHEXT`,
+/// which is why the bare name is not enough there. Searching only for the bare name made this
+/// report `` `cmd` is absent on PATH `` on a machine that has `C:\windows\system32\cmd.exe` — a
+/// **false gap**, and one that only ever appears on the platform the check exists for (measured
+/// under Wine, `docs/log/log-20261015-2.md` §3).
+///
+/// `windows` and `pathext` are parameters rather than `cfg!`/`env::var` reads inside, so the rule is
+/// testable on the machine that runs the tests: a `cfg!(windows)` branch could only ever be observed
+/// on Windows, which is exactly the platform this project has no machine for.
+fn candidate_names(program: &str, windows: bool, pathext: Option<&str>) -> Vec<String> {
+    let mut names = vec![program.to_owned()];
+    if !windows {
+        return names;
+    }
+    let extensions = pathext.unwrap_or(DEFAULT_PATHEXT);
+    for extension in extensions.split(';') {
+        let extension = extension.trim();
+        if !extension.is_empty() {
+            names.push(format!("{program}{extension}"));
+        }
+    }
+    names
+}
+
+/// What Windows searches when `PATHEXT` is not set.
+///
+/// The list the platform documents, in its own order: a program that exists as both a `.com` and an
+/// `.exe` is found through the `.com`, and a host that searched in a different order than the shell
+/// would report a different program than the one that would really run.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 
 /// Whether a path is executable on this host.
 ///
@@ -467,8 +507,8 @@ impl UrlOpener for ProgramOpener {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALLOWED_SCHEMES, OpenOutcome, OpenRefusal, OpenTarget, ProgramOpener, UrlOpener,
-        program_for,
+        ALLOWED_SCHEMES, DEFAULT_PATHEXT, OpenOutcome, OpenRefusal, OpenTarget, ProgramOpener,
+        UrlOpener, candidate_names, program_for,
     };
     use std::path::PathBuf;
     use std::time::Duration;
@@ -689,5 +729,46 @@ mod tests {
             ProgramOpener::for_this_platform(),
             Ok(_) | Err(OpenRefusal::UnsupportedPlatform { .. })
         ));
+    }
+
+    /// A program on Windows is found through `PATHEXT`, and the report has to know that.
+    ///
+    /// Found by running the Windows binary under Wine: `C:\windows\system32\cmd.exe` was there and
+    /// on `PATH`, and the check still reported `` `cmd` is absent on PATH `` because it looked for the
+    /// bare name — a false gap, on the only platform that check exists for. This test states the rule
+    /// where it can be read on any host, since a `cfg!(windows)` branch inside the lookup could only
+    /// be observed on Windows.
+    #[test]
+    fn the_windows_lookup_uses_pathext_and_the_unix_one_does_not() {
+        assert_eq!(
+            candidate_names("cmd", true, Some(".COM;.EXE")),
+            vec!["cmd".to_owned(), "cmd.COM".to_owned(), "cmd.EXE".to_owned(),]
+        );
+        // No `PATHEXT` in the environment: the platform's own default order, which is what a shell
+        // would search. Getting the order wrong would name a different program than the one that runs.
+        assert_eq!(
+            candidate_names("cmd", true, None),
+            vec![
+                "cmd".to_owned(),
+                "cmd.COM".to_owned(),
+                "cmd.EXE".to_owned(),
+                "cmd.BAT".to_owned(),
+                "cmd.CMD".to_owned(),
+            ]
+        );
+        assert!(
+            DEFAULT_PATHEXT.split(';').count() == 4,
+            "the default list is the platform's four extensions: {DEFAULT_PATHEXT}"
+        );
+        // Empty entries in `PATHEXT` are skipped rather than producing a name equal to the program.
+        assert_eq!(
+            candidate_names("cmd", true, Some(".EXE;;  ")),
+            vec!["cmd".to_owned(), "cmd.EXE".to_owned()]
+        );
+        // On unix the program's own name is the whole answer: an extension list would invent names.
+        assert_eq!(
+            candidate_names("xdg-open", false, Some(".EXE")),
+            vec!["xdg-open".to_owned()]
+        );
     }
 }

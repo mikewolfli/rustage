@@ -54,6 +54,12 @@ cargo test
 cargo run -- --help
 cargo run -- --probe-apis target/probe      # dependency contract probes; exits 4 while a probe reports a gap
 cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready
+# Windows: the host builds for x86_64-pc-windows-gnu with mingw-w64's C cross compiler, and the test
+# code type-checks there too. `cargo build --target` is the build evidence the support matrix's
+# windows row rests on; running it is what a Windows machine would add (Wine does not count, see
+# docs/plan/support-matrix.md rule 6).
+cargo build --target x86_64-pc-windows-gnu
+cargo clippy --target x86_64-pc-windows-gnu --all-targets
 cargo run --features linux-native -- --probe-host target/host   # the same, on a Linux desktop that has a display:
                                                                # the default build's backend is a state layer
                                                                # (`linux-state-backend`, mode `PreviewOrStub`),

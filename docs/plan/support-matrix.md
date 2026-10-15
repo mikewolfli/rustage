@@ -4,7 +4,9 @@
 > [`tools/support-matrix/check-support-matrix.mjs`](../../tools/support-matrix/check-support-matrix.mjs)
 > 逐行对照该文件校验，改一处而漏另一处会失败。
 > 依据：[项目原则](principle.md) #2/#11/#12/#24/#25、[完整路线图](roadmap.md) T00.03。
-> 状态：**矩阵已建立；除 macOS 宿主构建外，没有任何单元格有构建或运行证据。**
+> 状态：**矩阵已建立；宿主构建证据有两处——macOS（本机构建）与 Windows
+> （`x86_64-pc-windows-gnu` 交叉构建，见 [log-20261015-2.md](../log/log-20261015-2.md) §2）；
+> 15 个「宿主 × profile」格仍然一个都没有证据。**
 
 ## 这份矩阵回答什么
 
@@ -30,7 +32,7 @@
 | 宿主 | triple | 设计器宿主 | 理由 |
 |---|---|---|---|
 | macos | aarch64-apple-darwin | build-verified | cargo build（desktop profile）已记录，见 docs/log/log-20261013-4.md |
-| windows | x86_64-pc-windows-msvc | unverified | — |
+| windows | x86_64-pc-windows-gnu（本轮构建证据）/ x86_64-pc-windows-msvc（未构建） | build-verified | cargo build --target x86_64-pc-windows-gnu 通过（mingw-w64 GCC 13，产出 rustage.exe）；cargo clippy --target x86_64-pc-windows-gnu --all-targets 亦通过，见 docs/log/log-20261015-2.md §2；运行证据仍缺（Wine 下的运行按规则 6 不计为实机证据） |
 | linux | x86_64-unknown-linux-gnu | unverified | — |
 
 设计器宿主始终是桌面（原则 #2）；上表的"设计器宿主"指**设计器自身**能否在该 OS 上构建与运行，
@@ -76,3 +78,11 @@
 5. **单列范围外平台。** HarmonyOS 2in1 的打包资源不属于"三宿主"，其验收项单独跟踪于
    [`docs/issues/issue-20261013.md`](../issues/issue-20261013.md) 第 5、6 节，本矩阵不为它
    增设宿主行。
+6. **Wine 不是实机替代。** Wine 上跑 Windows 产物能证明的东西有三样：产物真的能启动、跨平台代码
+   路径在另一套 OS 接口下能走通、以及缺陷会被提前暴露（本项目就是这样抓到三处只在 Windows 上可见的
+   问题，见 [log-20261015-2.md](../log/log-20261015-2.md)）。它不能证明的是：该产物在其所指的 OS 上
+   如何运行——Wine 的剪贴板接的是 X11、IME/DPI/Job Object/系统对话框都是另一套实现，而它"返回成功
+   却没做"的桩函数正是原则 #22 要防的形状。因此 Wine 下的结果**既不进本矩阵的 `certified`**，
+   **也不进 [`host-probe.md`](host-probe.md) 的 `probed` 行**（那条记录要求恰好一台被测量的机器）：
+   它写进开发记录，并注明版本（本轮是 Wine 9.0、`WINEARCH=win64`）。判定一句"能不能用 Wine 顶替"
+   的准则是**先分清要证明的是构建还是运行**：构建可以用交叉编译真正地证明，运行不能。

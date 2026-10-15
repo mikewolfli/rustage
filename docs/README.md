@@ -116,6 +116,15 @@ of those findings with the library's local `HEAD` (nine of them are already impl
 records the one new request — the GTK backend's `quit()` calls `gtk::main_quit()` with no
 thread check.
 
+## Platform verification
+
+[Everything that needs a real machine or device](platform/verification.md) gathers the items that can
+only be settled on the platform itself — the three desktop hosts, the fifteen host-by-profile cells,
+the HarmonyOS 2in1 track, the performance baseline, and the upstream items that need re-checking after
+a re-pin — each with what is missing, the command to run, where the result goes, and a mark for the
+ones that already have real-machine evidence (the macOS baseline session, the Linux probes in both
+build shapes, both host builds, and the Windows cross-build).
+
 ## Boundaries
 
 Community documents and GitHub templates primarily use English.

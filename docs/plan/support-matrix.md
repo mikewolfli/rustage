@@ -4,6 +4,7 @@
 > [`tools/support-matrix/check-support-matrix.mjs`](../../tools/support-matrix/check-support-matrix.mjs)
 > 逐行对照该文件校验，改一处而漏另一处会失败。
 > 依据：[项目原则](principle.md) #2/#11/#12/#24/#25、[完整路线图](roadmap.md) T00.03。
+> 需要真机/真设备的项汇总（含已验证标记）：[`docs/platform/verification.md`](../platform/verification.md)。
 > 状态：**矩阵已建立；宿主构建证据有两处——macOS（本机构建）与 Windows
 > （`x86_64-pc-windows-gnu` 交叉构建，见 [log-20261015-2.md](../log/log-20261015-2.md) §2）；
 > 15 个「宿主 × profile」格仍然一个都没有证据。**

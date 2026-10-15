@@ -20,9 +20,11 @@ use std::{
 
 use crate::host::log::Level;
 use crate::project::{
+    closing::Decision,
     configuration::SettingValue,
     create::Template,
     files::FileOperation,
+    save::Verb,
     workspace::{WorkspaceFile, name_is_addressable},
 };
 
@@ -75,6 +77,32 @@ pub enum Command {
     Edit(EditOptions),
     /// Replays a session of edits against a page document, then undoes or redoes them (task T03.03).
     History(HistoryOptions),
+    /// Writes a document's text back to disk, or a set of them together (task T03.04).
+    Save(SaveOptions),
+    /// Decides what a document should do when the file changed outside the designer (task T03.05).
+    Conflict(ConflictOptions),
+    /// Keeps, offers and refuses recovery copies (task T03.06).
+    Recovery(RecoveryOptions),
+    /// Closes documents with a dirty-content decision (task T03.07).
+    Close(CloseOptions),
+    /// Resolves a typed command through the registry, or lists them (task T05.01).
+    Invoke(CommandOptions),
+    /// Resolves a key chord through the keymap, or lists the bindings (task T05.03).
+    Keys(KeysOptions),
+    /// Shows the menu tree and checks every implemented leaf against the registry (task T05.02).
+    Menu,
+    /// Searches the command palette, or shows one command's help (task T05.04).
+    Palette(PaletteOptions),
+    /// Shows the workbench and its panels, applying layout changes (tasks T04.01/T04.02).
+    Workbench(WorkbenchOptions),
+    /// Previews and carries out a batch operation on a selection (task T05.07).
+    Operation(OperationOptions),
+    /// Audits the command inventory: registry, menu tree and keymap against each other (task T05.08).
+    Audit,
+    /// Replays a script of document-tab operations (task T04.03).
+    Tabs(TabsOptions),
+    /// Routes a keypress, or shows a context menu and the toolbar (task T05.05).
+    Focus(FocusOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
 }
@@ -374,6 +402,388 @@ impl HistoryOptions {
             edits: Vec::new(),
             merge: false,
             only: None,
+        }
+    }
+}
+
+/// How to write one document, or a set of them, back to disk (task T03.04).
+///
+/// One file is a single atomic save; more than one is a set that is all committed or all left as it
+/// was, which is what "save all" and "commit a set of resources together" are. The verb says where
+/// the text goes: [`Verb::Save`] writes back over each file, and the other two write elsewhere (and
+/// so are only meaningful for a single file). `--plan` prints what would happen without writing.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SaveOptions {
+    /// The page documents to write, in order.
+    pub files: Vec<PathBuf>,
+    /// The edits to type into the single document before saving it, in order.
+    pub edits: Vec<DocumentEdit>,
+    /// The project root, when the caller names it; otherwise the nearest project above each file.
+    pub root: Option<PathBuf>,
+    /// Where the text goes.
+    pub verb: Verb,
+    /// Whether to print the plan and write nothing.
+    pub plan_only: bool,
+}
+
+impl SaveOptions {
+    /// Options that save files in place.
+    pub fn new(files: Vec<PathBuf>) -> Self {
+        Self {
+            files,
+            edits: Vec::new(),
+            root: None,
+            verb: Verb::Save,
+            plan_only: false,
+        }
+    }
+}
+
+/// How to decide what a document should do when the file changed outside the designer (task T03.05).
+///
+/// The three versions are the base (what the document read), `mine` (the text after any `--set-text`
+/// edits) and `theirs` (what is on disk now). Showing the decision writes nothing; `--recreate`
+/// writes the document's text when the file is gone, and `--accept` writes it when a merge landed.
+/// A conflict is never resolved by writing: it is reported, because picking a side silently is the
+/// data loss this task exists to prevent.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConflictOptions {
+    /// The page document.
+    pub file: PathBuf,
+    /// The project root, when the caller names it; otherwise the nearest project above the file.
+    pub root: Option<PathBuf>,
+    /// The bytes the document last agreed with the file, when the caller supplies them.
+    ///
+    /// A one-shot command reads the file and decides in the same breath, so the file is never out of
+    /// date with itself; `--base` is how a caller replays the sequence a real designer lives through
+    /// (read, somebody else changes the file, decide). Absent, the base is the file as it was read.
+    pub base: Option<PathBuf>,
+    /// The edits to type before deciding, in order.
+    pub edits: Vec<DocumentEdit>,
+    /// Whether to write the document's text back when the file has gone.
+    pub recreate: bool,
+    /// Whether to write the merged text when a merge landed.
+    pub accept: bool,
+}
+
+impl ConflictOptions {
+    /// Options that decide and write nothing.
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        Self {
+            file: file.into(),
+            root: None,
+            base: None,
+            edits: Vec::new(),
+            recreate: false,
+            accept: false,
+        }
+    }
+}
+
+/// What to do with the recovery store (task T03.06).
+///
+/// The store is a directory outside any project. `--record` keeps a copy of a document's text from a
+/// session; with no action the command lists a project's copies and how each stands next to the file
+/// now (the startup-recovery report); `--restore` prints the newest copy so a person can take it, and
+/// `--discard` is the "no" that removes the copies and never the document.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecoveryOptions {
+    /// The directory the recovery store lives in.
+    pub store: PathBuf,
+    /// The project root the copies belong to, when the caller names it.
+    pub root: Option<PathBuf>,
+    /// A document whose text should be copied into the store.
+    pub record: Option<PathBuf>,
+    /// A document whose newest copy should be printed.
+    pub restore: Option<PathBuf>,
+    /// A document whose copies should be refused (removed).
+    pub discard: Option<PathBuf>,
+    /// The session the copy is filed under; a timestamp when not named.
+    pub session: Option<String>,
+    /// Whether to plan a retention prune of the store.
+    pub prune: bool,
+    /// Whether to carry the prune out.
+    pub apply: bool,
+    /// How many copies to keep per document when pruning (default five).
+    pub keep: Option<usize>,
+}
+
+impl RecoveryOptions {
+    /// Options that list a store's copies and change nothing.
+    pub fn new(store: impl Into<PathBuf>) -> Self {
+        Self {
+            store: store.into(),
+            root: None,
+            record: None,
+            restore: None,
+            discard: None,
+            session: None,
+            prune: false,
+            apply: false,
+            keep: None,
+        }
+    }
+}
+
+/// How to close a set of open documents (task T03.07).
+///
+/// `--close` names documents that are as they are on disk; `--unsaved <document>=<buffer-file>` adds
+/// one whose buffer differs from its file, which is what makes the close need a decision. `--task`
+/// names the work that belongs to the closing, so "work stops only when the close happens" is
+/// observable. No `--decision` prints the plan and closes nothing; a decision carries it out.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CloseOptions {
+    /// Documents that have no unsaved changes.
+    pub files: Vec<PathBuf>,
+    /// The project root, when the caller names it; otherwise the nearest project above the first file.
+    pub root: Option<PathBuf>,
+    /// Documents with unsaved changes: their project-relative path and a file holding their buffer.
+    pub unsaved: Vec<(String, PathBuf)>,
+    /// The tasks that belong to the closing.
+    pub tasks: Vec<String>,
+    /// What the person chose; `None` prints the plan and closes nothing.
+    pub decision: Option<Decision>,
+}
+
+impl CloseOptions {
+    /// Options that plan a close and decide nothing.
+    pub fn new(files: Vec<PathBuf>) -> Self {
+        Self {
+            files,
+            root: None,
+            unsaved: Vec::new(),
+            tasks: Vec::new(),
+            decision: None,
+        }
+    }
+}
+
+/// How to resolve a command through the registry (task T05.01).
+///
+/// The id and arguments are what a menu item or a shortcut would produce; the rest describes the
+/// context the call happens in — where the keyboard is, whether the project is trusted, what effects
+/// are authorized and what tasks are already running — so a disabled command can say which of those
+/// it was, and an unauthorized one is a different answer from a disabled one.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CommandOptions {
+    /// The command to resolve; absent lists every registered command.
+    pub id: Option<String>,
+    /// The raw arguments, as a menu or a command line would supply them.
+    pub arguments: Vec<(String, String)>,
+    /// Where the keyboard is.
+    pub focus: String,
+    /// Whether the project is trusted.
+    pub trust: bool,
+    /// The effects that are authorized (names of [`EffectClass`](crate::contracts::permission::EffectClass)).
+    pub authorize: Vec<String>,
+    /// The tasks already running.
+    pub running: Vec<String>,
+}
+
+impl CommandOptions {
+    /// Options that list every command.
+    pub fn listing() -> Self {
+        Self {
+            id: None,
+            arguments: Vec::new(),
+            focus: "design".to_owned(),
+            trust: false,
+            authorize: Vec::new(),
+            running: Vec::new(),
+        }
+    }
+}
+
+/// How to resolve a key chord through the keymap (task T05.03).
+///
+/// The scene is what decides whether a bare key is a character or a command: with `--text-field` a
+/// bare character goes to the field, and with `--composing` the keys belong to the input method.
+#[derive(Debug, PartialEq, Eq)]
+pub struct KeysOptions {
+    /// The chord to press, as `Ctrl+K Ctrl+S`; absent lists the bindings.
+    pub press: Option<String>,
+    /// The mode the designer is in.
+    pub mode: String,
+    /// The focused panel, when one is.
+    pub panel: Option<String>,
+    /// Whether a text field has the keyboard.
+    pub text_field: bool,
+    /// Whether an input method is composing.
+    pub composing: bool,
+}
+
+impl KeysOptions {
+    /// Options that list the bindings.
+    pub fn listing() -> Self {
+        Self {
+            press: None,
+            mode: "design".to_owned(),
+            panel: None,
+            text_field: false,
+            composing: false,
+        }
+    }
+}
+
+/// How to search the command palette (task T05.04).
+#[derive(Debug, PartialEq, Eq)]
+pub struct PaletteOptions {
+    /// The query; an empty query lists every command.
+    pub query: String,
+    /// A command to show the help and parameters for, instead of searching.
+    pub help_for: Option<String>,
+    /// Where the keyboard is.
+    pub focus: String,
+    /// Whether the project is trusted.
+    pub trust: bool,
+    /// The authorized effects.
+    pub authorize: Vec<String>,
+    /// The tasks already running.
+    pub running: Vec<String>,
+    /// The recently run commands, most recent first.
+    pub recent: Vec<String>,
+}
+
+impl PaletteOptions {
+    /// Options that list every command.
+    pub fn listing() -> Self {
+        Self {
+            query: String::new(),
+            help_for: None,
+            focus: "design".to_owned(),
+            trust: false,
+            authorize: Vec::new(),
+            running: Vec::new(),
+            recent: Vec::new(),
+        }
+    }
+}
+
+/// How to show the workbench and its panels (tasks T04.01/T04.02).
+#[derive(Debug, PartialEq, Eq, Default)]
+pub struct WorkbenchOptions {
+    /// The mode to switch to.
+    pub mode: Option<String>,
+    /// The active project's name.
+    pub project: Option<String>,
+    /// The target the project would build for.
+    pub target: Option<String>,
+    /// The active document.
+    pub document: Option<String>,
+    /// Whether the document has unsaved changes.
+    pub dirty: bool,
+    /// A one-line status message.
+    pub message: Option<String>,
+    /// The services this host has, which decide which panels can be shown.
+    pub services: Vec<String>,
+    /// Panels to show.
+    pub show: Vec<String>,
+    /// Panels to hide.
+    pub hide: Vec<String>,
+    /// A panel to give the keyboard.
+    pub focus: Option<String>,
+    /// Panels to resize, as `(id, size)`.
+    pub resize: Vec<(String, u32)>,
+}
+
+impl WorkbenchOptions {
+    /// Options that show the workbench as it stands.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// How to preview and carry out a batch operation (task T05.07).
+///
+/// The selection is given as the items the operation applies to (`--select`) and the ones it does not
+/// (`--inapplicable id=reason`), so the preview a person sees is the classification itself. No
+/// `--choice` prints the preview and changes nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OperationOptions {
+    /// The operation's name.
+    pub name: String,
+    /// A note for the person.
+    pub note: Option<String>,
+    /// The external effects the operation has.
+    pub effects: Vec<String>,
+    /// The selected items the operation applies to.
+    pub select: Vec<String>,
+    /// The selected items it does not apply to, as `(id, reason)`.
+    pub inapplicable: Vec<(String, String)>,
+    /// The authorized effects.
+    pub authorize: Vec<String>,
+    /// What to do: `apply-all`, `apply-none` or `cancel`.
+    pub choice: Option<String>,
+}
+
+impl OperationOptions {
+    /// Options for an operation, changing nothing.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            note: None,
+            effects: Vec::new(),
+            select: Vec::new(),
+            inapplicable: Vec::new(),
+            authorize: Vec::new(),
+            choice: None,
+        }
+    }
+}
+
+/// A script of document-tab operations (task T04.03).
+///
+/// Each operation is `verb` or `verb:argument` (`move:from:to` takes two), in the order they happen,
+/// so a run is a story about one tab strip: a document previewed, another pinned, one view closed and
+/// the document itself closed.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TabsOptions {
+    /// How many tabs the strip shows before overflowing.
+    pub limit: usize,
+    /// The operations, in order.
+    pub ops: Vec<String>,
+}
+
+impl TabsOptions {
+    /// Options for an empty strip.
+    pub fn new() -> Self {
+        Self {
+            limit: 8,
+            ops: Vec::new(),
+        }
+    }
+}
+
+/// How to route a keypress and show the entry points that share one state (task T05.05).
+#[derive(Debug, PartialEq, Eq)]
+pub struct FocusOptions {
+    /// Where the keyboard is: a target name (canvas, outline, inspector, editor, tabs, status, welcome).
+    pub target: String,
+    /// The mode the designer is in.
+    pub mode: String,
+    /// The chord to press; absent shows the toolbar and the menu instead.
+    pub press: Option<String>,
+    /// A menu to show as a context menu, by title.
+    pub menu: Option<String>,
+    /// Whether the project is trusted.
+    pub trust: bool,
+    /// The authorized effects.
+    pub authorize: Vec<String>,
+    /// The tasks already running.
+    pub running: Vec<String>,
+}
+
+impl FocusOptions {
+    /// Options that show the toolbar for the canvas.
+    pub fn new(target: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+            mode: "design".to_owned(),
+            press: None,
+            menu: None,
+            trust: false,
+            authorize: Vec::new(),
+            running: Vec::new(),
         }
     }
 }
@@ -1027,6 +1437,575 @@ where
             }
             return Ok(Command::History(options));
         }
+        "--save" => {
+            let Some(first) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = SaveOptions::new(vec![PathBuf::from(&first)]);
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                // A bare path is another file in the set; every option starts with `--`.
+                if !flag.starts_with("--") {
+                    options.files.push(PathBuf::from(&argument));
+                    continue;
+                }
+                match flag {
+                    "--plan" => options.plan_only = true,
+                    "--set-text" | "--set-text-file" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(text) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.edits.push(if flag == "--set-text" {
+                            DocumentEdit::Text(text.to_owned())
+                        } else {
+                            DocumentEdit::File(PathBuf::from(text))
+                        });
+                    }
+                    "--save-as" | "--save-copy" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(to) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.verb = if flag == "--save-as" {
+                            Verb::SaveAs { to: to.to_owned() }
+                        } else {
+                            Verb::CopyTo { to: to.to_owned() }
+                        };
+                    }
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(path));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            if !matches!(options.verb, Verb::Save) && options.files.len() != 1 {
+                // Save-as and save-a-copy name one destination, so they are one file's business;
+                // writing several files elsewhere at once has no meaning. Refused here rather than
+                // in the parser so the message can say why, instead of "unexpected argument".
+                return Ok(Command::Save(options));
+            }
+            return Ok(Command::Save(options));
+        }
+        "--conflict" => {
+            let Some(path) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = ConflictOptions::new(PathBuf::from(path));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--recreate" => options.recreate = true,
+                    "--accept" => options.accept = true,
+                    "--base" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.base = Some(PathBuf::from(path));
+                    }
+                    "--set-text" | "--set-text-file" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(text) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.edits.push(if flag == "--set-text" {
+                            DocumentEdit::Text(text.to_owned())
+                        } else {
+                            DocumentEdit::File(PathBuf::from(text))
+                        });
+                    }
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(path));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Conflict(options));
+        }
+        "--recovery" => {
+            let Some(store) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = RecoveryOptions::new(PathBuf::from(store));
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--record" | "--restore" | "--discard" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        let path = PathBuf::from(path);
+                        match flag {
+                            "--record" => options.record = Some(path),
+                            "--restore" => options.restore = Some(path),
+                            _ => options.discard = Some(path),
+                        }
+                    }
+                    "--session" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.session = Some(name.to_owned());
+                    }
+                    "--prune" => options.prune = true,
+                    "--apply" => options.apply = true,
+                    "--keep" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(count) =
+                            value.to_str().and_then(|value| value.parse::<usize>().ok())
+                        else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.keep = Some(count);
+                    }
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(path));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Recovery(options));
+        }
+        "--close" => {
+            let Some(first) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let mut options = CloseOptions::new(vec![PathBuf::from(&first)]);
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                if !flag.starts_with("--") {
+                    options.files.push(PathBuf::from(&argument));
+                    continue;
+                }
+                match flag {
+                    "--unsaved" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        let Some((document, buffer)) = value.split_once('=') else {
+                            return Err(ParseError {
+                                argument: value.into(),
+                            });
+                        };
+                        options
+                            .unsaved
+                            .push((document.to_owned(), PathBuf::from(buffer)));
+                    }
+                    "--task" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.tasks.push(name.to_owned());
+                    }
+                    "--decision" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(decision) = value.to_str().and_then(Decision::from_name) else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.decision = Some(decision);
+                    }
+                    "--root" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(path) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.root = Some(PathBuf::from(path));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Close(options));
+        }
+        "--command" => {
+            let mut options = CommandOptions::listing();
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                if flag.starts_with("--") {
+                    match flag {
+                        "--arg" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(value) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            let Some((name, value)) = value.split_once('=') else {
+                                return Err(ParseError {
+                                    argument: value.into(),
+                                });
+                            };
+                            options.arguments.push((name.to_owned(), value.to_owned()));
+                        }
+                        "--focus" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(area) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            options.focus = area.to_owned();
+                        }
+                        "--trust" => options.trust = true,
+                        "--authorize" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(name) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            options.authorize.push(name.to_owned());
+                        }
+                        "--running" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(name) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            options.running.push(name.to_owned());
+                        }
+                        _ => return Err(ParseError { argument }),
+                    }
+                    continue;
+                }
+                if options.id.is_some() {
+                    return Err(ParseError { argument });
+                }
+                options.id = Some(flag.to_owned());
+            }
+            return Ok(Command::Invoke(options));
+        }
+        "--menu" => return Ok(Command::Menu),
+        "--audit" => return Ok(Command::Audit),
+        "--keys" => {
+            let mut options = KeysOptions::listing();
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--press" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(chord) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.press = Some(chord.to_owned());
+                    }
+                    "--mode" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(mode) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.mode = mode.to_owned();
+                    }
+                    "--panel" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(panel) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        options.panel = Some(panel.to_owned());
+                    }
+                    "--text-field" => options.text_field = true,
+                    "--composing" => options.composing = true,
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Keys(options));
+        }
+        "--palette" => {
+            let mut options = PaletteOptions::listing();
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                if flag.starts_with("--") {
+                    match flag {
+                        "--help-for" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(id) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            options.help_for = Some(id.to_owned());
+                        }
+                        "--focus" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(area) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            options.focus = area.to_owned();
+                        }
+                        "--trust" => options.trust = true,
+                        "--authorize" | "--running" | "--recent" => {
+                            let Some(value) = rest.next() else {
+                                return Err(ParseError { argument });
+                            };
+                            let Some(name) = value.to_str() else {
+                                return Err(ParseError { argument: value });
+                            };
+                            match flag {
+                                "--authorize" => options.authorize.push(name.to_owned()),
+                                "--running" => options.running.push(name.to_owned()),
+                                _ => options.recent.push(name.to_owned()),
+                            }
+                        }
+                        _ => return Err(ParseError { argument }),
+                    }
+                    continue;
+                }
+                if options.query.is_empty() {
+                    options.query = flag.to_owned();
+                } else {
+                    options.query.push(' ');
+                    options.query.push_str(flag);
+                }
+            }
+            return Ok(Command::Palette(options));
+        }
+        "--workbench" => {
+            let mut options = WorkbenchOptions::new();
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--dirty" => options.dirty = true,
+                    "--mode" | "--project" | "--target" | "--document" | "--message"
+                    | "--focus" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        match flag {
+                            "--mode" => options.mode = Some(value.to_owned()),
+                            "--project" => options.project = Some(value.to_owned()),
+                            "--target" => options.target = Some(value.to_owned()),
+                            "--document" => options.document = Some(value.to_owned()),
+                            "--focus" => options.focus = Some(value.to_owned()),
+                            _ => options.message = Some(value.to_owned()),
+                        }
+                    }
+                    "--service" | "--show" | "--hide" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(name) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        match flag {
+                            "--service" => options.services.push(name.to_owned()),
+                            "--show" => options.show.push(name.to_owned()),
+                            _ => options.hide.push(name.to_owned()),
+                        }
+                    }
+                    "--resize" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        let Some((id, size)) = value.split_once('=') else {
+                            return Err(ParseError {
+                                argument: value.into(),
+                            });
+                        };
+                        let Some(size) = size.parse::<u32>().ok() else {
+                            return Err(ParseError {
+                                argument: value.into(),
+                            });
+                        };
+                        options.resize.push((id.to_owned(), size));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Workbench(options));
+        }
+        "--operation" => {
+            let Some(name) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let Some(name) = name.to_str() else {
+                return Err(ParseError { argument: name });
+            };
+            let mut options = OperationOptions::new(name);
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--note" | "--choice" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if flag == "--note" {
+                            options.note = Some(value.to_owned());
+                        } else {
+                            options.choice = Some(value.to_owned());
+                        }
+                    }
+                    "--effect" | "--select" | "--authorize" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        match flag {
+                            "--effect" => options.effects.push(value.to_owned()),
+                            "--select" => options.select.push(value.to_owned()),
+                            _ => options.authorize.push(value.to_owned()),
+                        }
+                    }
+                    "--inapplicable" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        let Some((id, reason)) = value.split_once('=') else {
+                            return Err(ParseError {
+                                argument: value.into(),
+                            });
+                        };
+                        options
+                            .inapplicable
+                            .push((id.to_owned(), reason.to_owned()));
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Operation(options));
+        }
+        "--tabs" => {
+            let mut options = TabsOptions::new();
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let value = argument.to_str().unwrap_or_default();
+                if value == "--limit" {
+                    let Some(count) = rest.next() else {
+                        return Err(ParseError { argument });
+                    };
+                    let Some(count) = count.to_str().and_then(|value| value.parse::<usize>().ok())
+                    else {
+                        return Err(ParseError { argument: count });
+                    };
+                    options.limit = count;
+                    continue;
+                }
+                if value.starts_with("--") {
+                    return Err(ParseError { argument });
+                }
+                options.ops.push(value.to_owned());
+            }
+            return Ok(Command::Tabs(options));
+        }
+        "--focus" => {
+            let Some(target) = arguments.next() else {
+                return Err(ParseError { argument });
+            };
+            let Some(target) = target.to_str() else {
+                return Err(ParseError { argument: target });
+            };
+            let mut options = FocusOptions::new(target);
+            let mut rest = arguments;
+            while let Some(argument) = rest.next() {
+                let flag = argument.to_str().unwrap_or_default();
+                match flag {
+                    "--trust" => options.trust = true,
+                    "--mode" | "--press" | "--menu" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        match flag {
+                            "--mode" => options.mode = value.to_owned(),
+                            "--press" => options.press = Some(value.to_owned()),
+                            _ => options.menu = Some(value.to_owned()),
+                        }
+                    }
+                    "--authorize" | "--running" => {
+                        let Some(value) = rest.next() else {
+                            return Err(ParseError { argument });
+                        };
+                        let Some(value) = value.to_str() else {
+                            return Err(ParseError { argument: value });
+                        };
+                        if flag == "--authorize" {
+                            options.authorize.push(value.to_owned());
+                        } else {
+                            options.running.push(value.to_owned());
+                        }
+                    }
+                    _ => return Err(ParseError { argument }),
+                }
+            }
+            return Ok(Command::Focus(options));
+        }
         "--document" => {
             let Some(path) = arguments.next() else {
                 return Err(ParseError { argument });
@@ -1392,6 +2371,100 @@ pub fn help_text() -> &'static str {
         "       --redo <n>                    With --history, put back n steps, here in the script\n",
         "       --only <text|model>           With --history, require the moves to be in this domain; a\n",
         "                                     step in the other domain is refused, not skipped over\n",
+        "       --save <page-document>...     Write each document's text back to disk: through a\n",
+        "                                     temporary and a rename, so a failed write leaves the\n",
+        "                                     original exactly as it was; more than one file is one set,\n",
+        "                                     all committed or all left as they were\n",
+        "       --set-text <text>             With --save (one file), type this text into the buffer\n",
+        "                                     before saving; repeatable, in the order given\n",
+        "       --set-text-file <file>        With --save (one file), read this file's text and type it\n",
+        "       --save-as <path>              With --save, write the text to this project-relative path\n",
+        "                                     and make it the document's file\n",
+        "       --save-copy <path>            With --save, write a copy there, leaving the document's own\n",
+        "                                     file alone\n",
+        "       --plan                        With --save, print what would be written and write nothing\n",
+        "       --conflict <page-document>    Decide what a document should do when the file changed\n",
+        "                                     outside the designer: report the base/mine/theirs verdict\n",
+        "                                     and never pick a side silently\n",
+        "       --set-text <text>             With --conflict, type this text as the document's own\n",
+        "                                     before deciding; repeatable, in the order given\n",
+        "       --set-text-file <file>        With --conflict, read this file's text as an edit\n",
+        "       --base <file>                 With --conflict, the bytes the document last agreed with\n",
+        "                                     the file (replays the sequence a one-shot run cannot show)\n",
+        "       --accept                      With --conflict, write the merged text when a merge landed\n",
+        "       --recreate                    With --conflict, write the document's text back when the\n",
+        "                                     file has gone\n",
+        "       --recovery <store-dir>        Keep, offer and refuse recovery copies, which live outside\n",
+        "                                     any project; with no action, list a project's copies and\n",
+        "                                     how each stands next to the file now\n",
+        "       --record <page-document>      With --recovery, keep a copy of this document's text\n",
+        "       --restore <page-document>     With --recovery, print the newest copy for this document\n",
+        "       --discard <page-document>     With --recovery, refuse: remove this document's copies\n",
+        "                                     (the document itself is never touched)\n",
+        "       --session <name>              With --recovery, the session a copy is filed under\n",
+        "       --prune                       With --recovery, plan a retention prune: keep the newest\n",
+        "                                     copies per document, and never offer a project file\n",
+        "       --keep <n>                    With --recovery --prune, how many copies to keep (default 5)\n",
+        "       --apply                       With --recovery --prune, carry the prune out\n",
+        "       --close <page-document>...   Plan and carry out closing: a dirty document needs a\n",
+        "                                     decision (save all, discard all or cancel), and cancelling\n",
+        "                                     keeps every document and task as it was\n",
+        "       --unsaved <document>=<file>  With --close, a document whose buffer differs from its file;\n",
+        "                                     the file holds the buffer's text\n",
+        "       --task <name>                With --close, work that belongs to the closing\n",
+        "       --decision <what>            With --close, save-all, discard-all or cancel\n",
+        "       --command [<id>]              Resolve a typed command through the registry, or list\n",
+        "                                     every registered command; a disabled or unauthorized\n",
+        "                                     command is refused and says which it was\n",
+        "       --arg <name>=<value>          With --command, one raw argument\n",
+        "       --focus <area>                With --command, where the keyboard is (a mode or panel id)\n",
+        "       --authorize <effect>          With --command, an authorized effect (command, file-write,\n",
+        "                                     network, deploy)\n",
+        "       --running <task>              With --command, a task that is already running\n",
+        "       --keys [--press <chord>]      Resolve a key chord through the keymap, or list the\n",
+        "                                     bindings; with --text-field a typed character goes to the\n",
+        "                                     field, and with --composing the keys belong to the input method\n",
+        "       --press <chord>               With --keys, the chord to press, as `Ctrl+K Ctrl+S`\n",
+        "       --mode <mode>                 With --keys, the mode the designer is in\n",
+        "       --panel <panel>               With --keys, the focused panel\n",
+        "       --text-field                  With --keys, a text field has the keyboard\n",
+        "       --composing                   With --keys, an input method is composing\n",
+        "       --menu                        Show the menu tree and check every implemented leaf\n",
+        "                                     against the registry\n",
+        "       --palette [<query>]           Search the command palette (fuzzy, on the registry), or\n",
+        "                                     list every command; a disabled command shows its reason\n",
+        "       --help-for <command-id>       With --palette, show one command's help and parameters\n",
+        "       --recent <command-id>         With --palette, a recently run command (repeatable; first\n",
+        "                                     is most recent)\n",
+        "       --workbench                   Show the workbench (title, regions, status) and its panels;\n",
+        "                                     a panel whose service is missing is not shown\n",
+        "       --mode <mode>                 With --workbench, switch to a mode\n",
+        "       --project <name>              With --workbench, the active project's name\n",
+        "       --target <name>               With --workbench, the target the project would build for\n",
+        "       --document <path>             With --workbench, the active document\n",
+        "       --dirty                       With --workbench, mark the document as having unsaved changes\n",
+        "       --message <text>              With --workbench, a one-line status message\n",
+        "       --service <name>              With --workbench, a service this host has (repeatable)\n",
+        "       --show <panel>                With --workbench, show a panel (repeatable)\n",
+        "       --hide <panel>                With --workbench, hide a panel (repeatable)\n",
+        "       --focus <panel>               With --workbench, give a panel the keyboard\n",
+        "       --resize <panel>=<n>          With --workbench, resize a panel\n",
+        "       --operation <name>            Preview a batch operation on a selection, and carry it\n",
+        "                                     out; an inapplicable item is never skipped silently\n",
+        "       --select <id>                 With --operation, a selected item the operation applies to\n",
+        "       --inapplicable <id>=<reason>  With --operation, a selected item it does not apply to\n",
+        "       --effect <effect>             With --operation, an external effect it has\n",
+        "       --note <text>                 With --operation, a note for the person\n",
+        "       --choice <what>               With --operation, apply-all, apply-none or cancel\n",
+        "       --audit                       Check the whole command inventory: every menu leaf and key\n",
+        "                                     binding names a registered command\n",
+        "       --tabs [--limit <n>] <op>...  Replay document-tab operations; each op is `verb[:arg]`,\n",
+        "                                     as in preview:pages/home.json or close-view:0\n",
+        "       --focus <target>              Route a keypress, or show a context menu and the toolbar;\n",
+        "                                     every entry point reads one state\n",
+        "       --press <chord>               With --focus, the chord to press\n",
+        "       --menu <title>                With --focus, show a menu as a context menu\n",
+        "       --mode <mode>                 With --focus, the mode the designer is in\n",
         "       --dependencies <directory>    Resolve a Cargo workspace's dependencies and report the tree;\n",
         "                                     nothing runs until the directory is trusted and each effect of\n",
         "                                     the resolution has been authorized\n",

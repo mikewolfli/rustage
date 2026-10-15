@@ -428,6 +428,12 @@ pub struct Buffer {
     typed: TextVersion,
     read: u64,
     state: State,
+    /// The bytes the file held when this buffer read it, when it was opened from a file.
+    ///
+    /// It is what makes an external change detectable: a save compares the file against this, so a
+    /// change somebody else made is refused rather than silently overwritten (T03.05's guard). A
+    /// buffer built from text alone (a paste, a test) has no file it agreed with, and holds `None`.
+    on_disk: Option<Vec<u8>>,
     /// The kind each live id had, which is what makes a re-labelling visible.
     kinds: BTreeMap<NodeId, NodeKind>,
     /// The ids this buffer has seen, in the order it first saw them.
@@ -452,10 +458,10 @@ impl Buffer {
         let bytes = std::fs::read(&path).map_err(|error| Refusal::Unreadable {
             reason: error.to_string(),
         })?;
-        let text = String::from_utf8(bytes).map_err(|error| Refusal::NotText {
+        let text = String::from_utf8(bytes.clone()).map_err(|error| Refusal::NotText {
             reason: error.to_string(),
         })?;
-        Ok(Self::of_text(root, path, text))
+        Ok(Self::of_text(root, path, text).remembering(bytes))
     }
 
     /// A buffer over text that was already obtained.
@@ -477,6 +483,7 @@ impl Buffer {
                 model: None,
                 text: TextVersion::FIRST,
             },
+            on_disk: None,
             kinds: BTreeMap::new(),
             seen: BTreeSet::new(),
             identities: Identities::default(),
@@ -505,6 +512,21 @@ impl Buffer {
         }
         buffer.text = text;
         buffer
+    }
+
+    /// The bytes this buffer last agreed with the file, when it was opened from one.
+    ///
+    /// A save compares the file against these before it writes, so an edit made outside the
+    /// designer is refused rather than overwritten — the guard T03.05 asks for, kept next to the
+    /// text it belongs to rather than in a second place that could drift.
+    pub fn on_disk(&self) -> Option<&[u8]> {
+        self.on_disk.as_deref()
+    }
+
+    /// Records the bytes the file held, which is what an external change is measured against.
+    fn remembering(mut self, bytes: Vec<u8>) -> Self {
+        self.on_disk = Some(bytes);
+        self
     }
 
     /// The file this buffer is over.

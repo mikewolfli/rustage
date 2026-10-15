@@ -39,6 +39,44 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [MS03 continues: the command palette, the workbench, panels and batch operations](log/log-20261015-8.md):
+  `app::palette` (fuzzy search over the registry, so a disabled hit carries the registry's own reason
+  and recents nudge without hiding anything new), `app::workbench` (the title derived from the active
+  document, project and target, so the three identities cannot disagree with the state, with the mode
+  deciding the regions), `app::panels` (a registered panel whose service is missing is not shown at
+  all, and hiding and showing restores its size and focus), and `app::operations` (a batch operation
+  whose inapplicable items are refused rather than skipped, with the skip a recorded choice and the
+  permission explained before it is checked), and `app::audit` (the registry, menu tree and keymap
+  walked against each other, so nothing dangling is reachable and a new area re-verifies through the
+  same walk), `app::tabs` (a tab is a view and a document is what it shows, so closing one and closing
+  the other are different operations), and `app::focus` (one keypress produces one route that is claimed
+  unless nothing was bound, and the menu, toolbar and context menu all read the registry so they cannot
+  disagree) — 56 new tests (632 total).
+- [MS03 begins: a typed command registry, the menu tree and shortcuts](log/log-20261015-7.md): `app::command`
+  (every command described once, with an `Invocation` that has no public constructor, so an unauthorized
+  or badly-parameterised command cannot bypass the menu and run), `app::menu` (the §3 tree bound to the
+  registry, where an implemented leaf must name a registered command, no two leaves may share one id, and
+  a leaf marked "planned" must not hide a command that works), and `app::shortcuts` (scopes, two-key
+  chords, conflict detection that reports rather than orders, and a user keymap that round trips) — with
+  the text-input guarantee that a typed character, or an input-method composition, never fires a global
+  command, 28 new tests (576 total).
+- [MS02's tail: a three-way conflict, recovery copies, the close decision and a retention
+  policy](log/log-20261015-6.md): `project::conflict` (a line-level diff3 merge that never picks a
+  side silently, read-only status, and a deleted file), `project::recovery` (copies kept outside the
+  project, each carrying its own provenance, offered at startup and refusable), `project::closing` (a
+  dirty-content decision whose cancel and failed write both give the state back unchanged), and
+  `project::retention` (a prune that may only ever touch the store, and never a document's only
+  version) — with the MS02 per-task review and sign-off, 26 new tests (548 total), and one real
+  defect fixed (second-resolution timestamps could not order copies written in the same second).
+- [The first macOS build, saving a document through a temporary, and three macOS
+  findings](log/log-20261015-5.md): the dependency re-pinned from `58012c05` to `8178d048` because the
+  pinned revision does not compile on macOS (an `i32`/`bool` cast in its file picker, already fixed
+  upstream), `project::save` implemented (task T03.04: save/save-as/save-a-copy and a set committed
+  whole, through a temporary and a rename, with the disk-full/permission/interruption paths pinned by
+  tests), the external-modification guard T03.05 asks for added to the save path, and the three macOS
+  findings — the cocoa event loop never ticks so a bounded `--launch` session never ends, FSEvents
+  reports a deletion as `Modified`, and two concurrent runs of the host-readiness report deadlock (the
+  test suite's own fix) — with the first two filed as upstream requests.
 - [Two host-side workarounds migrated, `open_url` kept with a written reason, and one new upstream
   request](log/log-20261015-4.md): `host::watch` moved onto the library's `ChangeKind` so a deletion
   and a rename are observable (closing the input T03.05 needs, pinned by a test that could not have

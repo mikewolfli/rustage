@@ -22,9 +22,11 @@
 //! * **The change is classified in the dependency's own vocabulary.** The dependency reports each
 //!   change as a [`ChangeKind`] — `Created`, `Modified`, `Removed` or `Renamed` — and this adapter
 //!   carries that value through instead of re-spelling it as text (principle #35: one definition per
-//!   concept). A deletion and a rename are therefore observable, which is exactly what T03.05's
-//!   external-modification detection needs; before the re-pin this adapter could not promise a
-//!   `Removed` case because the dependency dropped deletions.
+//!   concept). Which kinds a backend *produces* is the backend's answer, not this adapter's: inotify
+//!   (Linux) reports a removal as `Removed`, while macOS's FSEvents backend reports the same deletion
+//!   as `Modified`, so `Removed` and `Renamed` are promised only where the OS backend distinguishes
+//!   them. That macOS gap is recorded upstream (`docs/rw-feedback/feedback-20261015.md`), and the
+//!   watch test states the platform scope rather than claiming a kind the OS did not send.
 //!
 //! **What this adapter still cannot see.** *Which* process made a change, and whether a change came
 //! from this designer or from outside it: the dependency reports a path and a kind, not an author.
@@ -356,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn a_deletion_is_observable_and_classified_as_removed() {
+    fn a_deletion_is_observable_and_classified_as_the_backend_reports_it() {
         let sandbox = Sandbox::new("removed");
         let watch = DirectoryWatch::start(sandbox.path(), false, |_| true).expect("watchable");
         let file = sandbox.path().join("doomed.txt");
@@ -369,26 +371,42 @@ mod tests {
 
         std::fs::remove_file(&file).expect("removable");
 
-        // Poll until the removal is reported. Before the re-pin this adapter could never answer
-        // `Removed`, because the dependency dropped deletion events; that is the gap this test
-        // now closes.
+        // Poll until the removal is observable. The *kind* is the OS backend's answer and the
+        // backends disagree, so this test pins the two things that are this adapter's own: a
+        // deletion is never silently dropped, and the kind it carries is the dependency's own
+        // vocabulary rather than a re-spelling. On Linux inotify reports the removal, so the strong
+        // `Removed` assertion holds there; macOS's FSEvents backend reports it as `Modified`, and
+        // that gap is recorded upstream rather than papered over here (principle #25).
         let deadline = Instant::now() + EVENT_DEADLINE;
+        let mut observed: Vec<WatchEvent> = Vec::new();
         let mut saw_removed = false;
         while Instant::now() < deadline && !saw_removed {
-            saw_removed = watch.poll().iter().any(|event| {
+            let batch = watch.poll();
+            saw_removed = batch.iter().any(|event| {
                 matches!(
                     event,
                     WatchEvent::Changed { path, kind: ChangeKind::Removed } if path == &file
                 )
             });
+            observed.extend(batch);
             if !saw_removed {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
         assert!(
-            saw_removed,
-            "a deleted file must be reported as Removed, not silently dropped",
+            observed.iter().any(|event| matches!(
+                event,
+                WatchEvent::Changed { path, .. } if path == &file
+            )),
+            "a deleted file must be observable, not silently dropped; observed {observed:?}",
         );
+        #[cfg(target_os = "linux")]
+        assert!(
+            saw_removed,
+            "on Linux a deletion is classified as Removed; observed {observed:?}",
+        );
+        #[cfg(not(target_os = "linux"))]
+        let _ = saw_removed;
     }
 
     #[test]

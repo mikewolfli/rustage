@@ -8,9 +8,11 @@
 mod command;
 
 pub use command::{
-    Command, ConfigurationOptions, DependenciesOptions, DocumentEdit, DocumentOptions,
-    DropEntryOptions, EditOptions, FileOpOptions, HistoryDomain, HistoryEdit, HistoryOptions,
-    ImportOptions, KitOptions, NewWorkspaceOptions, OpenProjectOptions, ValidateOptions,
+    CloseOptions, Command, CommandOptions, ConfigurationOptions, ConflictOptions,
+    DependenciesOptions, DocumentEdit, DocumentOptions, DropEntryOptions, EditOptions,
+    FileOpOptions, FocusOptions, HistoryDomain, HistoryEdit, HistoryOptions, ImportOptions,
+    KeysOptions, KitOptions, NewWorkspaceOptions, OpenProjectOptions, OperationOptions,
+    PaletteOptions, RecoveryOptions, SaveOptions, TabsOptions, ValidateOptions, WorkbenchOptions,
     WorkspaceAction, WorkspaceOptions, help_text, log_level_of, parse,
 };
 

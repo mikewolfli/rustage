@@ -42,7 +42,7 @@ pub const DEPENDENCY_VERSION: &str = "2.8.6";
 ///
 /// Kept in step with the lockfile by a drift test in [`crate::probe::report`], which re-reads
 /// `Cargo.lock` and fails if the two disagree.
-pub const DEPENDENCY_REVISION: &str = "58012c0508b2a4eb095e7623e685f5c9889e9835";
+pub const DEPENDENCY_REVISION: &str = "8178d04865731ad06d11d6d15129d889bf0ae327";
 
 /// The API families on the designer's critical path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -23,7 +23,9 @@
 #![allow(dead_code)]
 
 pub mod batch;
+pub mod closing;
 pub mod configuration;
+pub mod conflict;
 pub mod create;
 pub mod dependencies;
 pub mod document;
@@ -36,6 +38,9 @@ pub mod json;
 pub mod kit;
 pub mod page;
 pub mod recent;
+pub mod recovery;
+pub mod retention;
+pub mod save;
 pub mod session;
 pub mod validate;
 pub mod workspace;

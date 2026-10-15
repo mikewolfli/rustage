@@ -2508,6 +2508,23 @@ fn wait_for_presence(pid: u32, limit: Duration) -> ProcessPresence {
 #[cfg(test)]
 mod tests {
     use super::{Capability, CapabilityCheck, CheckStatus, ReadinessReport};
+    use std::sync::Mutex;
+
+    /// Serializes the tests that run the whole report.
+    ///
+    /// [`ReadinessReport::run`] exercises OS-level singletons — a native window session and the
+    /// user's clipboard — and on macOS two concurrent runs deadlock on the window server, so the
+    /// suite would hang instead of failing. The report is the same either way, and only one is ever
+    /// needed at a time, so these tests take a lock. This is a property of the *checks* (they are
+    /// one-shot probes, not designed to run two at once), which is why the fix is here and not in
+    /// the checks themselves.
+    static FULL_REPORT: Mutex<()> = Mutex::new(());
+
+    fn one_report_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        FULL_REPORT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     /// A check whose evidence spans lines must not break the table it is printed in.
     ///
@@ -2562,6 +2579,7 @@ mod tests {
 
     #[test]
     fn the_report_covers_every_capability_exactly_once() {
+        let _only = one_report_at_a_time();
         let report = ReadinessReport::run();
 
         assert_eq!(report.checks.len(), Capability::ALL.len());
@@ -2614,6 +2632,7 @@ mod tests {
 
     #[test]
     fn both_renderings_name_every_capability_and_stay_well_shaped() {
+        let _only = one_report_at_a_time();
         let report = ReadinessReport::run();
         let text = report.render_text();
 

@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "58012c0508b2a4eb095e7623e685f5c9889e9835",
+    "revision": "8178d04865731ad06d11d6d15129d889bf0ae327",
     "profile": "desktop"
   },
   "levels": {

@@ -171,6 +171,84 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Save(options) => {
+            if !save(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Conflict(options) => {
+            if !conflict(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Recovery(options) => {
+            if !recovery(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Close(options) => {
+            if !close(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Invoke(options) => {
+            if !resolve_command(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Keys(options) => {
+            if !keys(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Menu => {
+            if !menu() {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Palette(options) => {
+            if !palette(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Workbench(options) => {
+            if !workbench(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Operation(options) => {
+            if !operation(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Audit => {
+            if !audit() {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Tabs(options) => {
+            if !tabs(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Focus(options) => {
+            if !focus(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Dependencies(options) => {
             if !dependencies(&options) {
                 crate::host::log::flush();
@@ -731,18 +809,23 @@ fn relative_to(
     root: &crate::host::paths::ProjectRoot,
     file: &std::path::Path,
 ) -> std::path::PathBuf {
-    if let Ok(relative) = file.strip_prefix(root.as_path()) {
+    // A relative argument is resolved against the working directory first, because the root is
+    // canonical and a relative path cannot be compared with it. The file need not exist: a deleted
+    // document is exactly the case `--conflict` has to name, and canonicalizing would fail there.
+    let absolute = if file.is_absolute() {
+        file.to_path_buf()
+    } else {
+        std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf())
+    };
+    if let Ok(relative) = absolute.strip_prefix(root.as_path()) {
         return relative.to_path_buf();
     }
-    file.canonicalize()
-        .ok()
-        .and_then(|absolute| {
-            absolute
-                .strip_prefix(root.as_path())
-                .ok()
-                .map(std::path::Path::to_path_buf)
-        })
-        .unwrap_or_else(|| file.to_path_buf())
+    if let Ok(canonical) = absolute.canonicalize()
+        && let Ok(relative) = canonical.strip_prefix(root.as_path())
+    {
+        return relative.to_path_buf();
+    }
+    file.to_path_buf()
 }
 
 /// Shows what a buffer over a page document is holding (task T03.01).
@@ -1099,6 +1182,1273 @@ fn close_merge(state: crate::project::history::MergeState) -> String {
             domain.name()
         ),
     }
+}
+
+/// Writes a document's text back to disk, or a set of them together (task T03.04).
+///
+/// One file is the whole of T03.04 in one run: the text is read (with any `--set-text` edits typed
+/// into a buffer first, so the buffer and the save are one loop), written into a temporary beside
+/// the target and renamed over it. More than one file is a set, staged whole before anything is
+/// renamed, so the set is all committed or all left as it was. `--plan` prints what would be written
+/// and writes nothing.
+///
+/// The exit code is the report's own: a save that did not happen (a refusal, or a write the disk
+/// refused) is a finding, and the report says whether the original is still exactly what it was.
+fn save(options: &crate::cli::SaveOptions) -> bool {
+    use crate::host::paths::ProjectRoot;
+    use crate::project::document::{Buffer, root_of};
+    use crate::project::save::{Commit, Saving, Verb};
+
+    let root = match options.root.as_ref() {
+        Some(directory) => match ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        None => match root_of(&options.files[0]) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+    };
+
+    let mut documents: Vec<String> = Vec::new();
+    for file in &options.files {
+        let relative = relative_to(&root, file);
+        match relative.to_str() {
+            Some(name) => documents.push(name.to_owned()),
+            None => {
+                println!(
+                    "rustage: {} is not a path this build can name",
+                    file.display()
+                );
+                return false;
+            }
+        }
+    }
+
+    // A single file goes through a buffer, so the text that is saved is the text somebody typed, not
+    // the file re-read. A set is the files as they now stand, and takes no edits — the point of a set
+    // is that the commit is one transaction, not that it edits several files at once.
+    if documents.len() != 1 && !matches!(options.verb, Verb::Save) {
+        println!(
+            "rustage: {} names one destination, so it writes one file; {} files were given",
+            options.verb.name(),
+            documents.len()
+        );
+        return false;
+    }
+    if documents.len() == 1 {
+        let mut buffer = match Buffer::open(&root, &documents[0]) {
+            Ok(buffer) => buffer,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        };
+        for edit in &options.edits {
+            let text = match edit {
+                crate::cli::DocumentEdit::Text(text) => text.clone(),
+                crate::cli::DocumentEdit::File(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        println!("rustage: {} could not be read: {error}", path.display());
+                        return false;
+                    }
+                },
+            };
+            buffer.set_text(&root, text);
+        }
+        // The external-modification guard (T03.05) only applies to writing back over the same file:
+        // for save-as and save-a-copy the destination is a different file, and the document's own
+        // bytes say nothing about it.
+        let agreed = match options.verb {
+            Verb::Save => buffer.on_disk(),
+            _ => None,
+        };
+        let saving = match Saving::plan_guarded(
+            &root,
+            &documents[0],
+            buffer.text(),
+            options.verb.clone(),
+            agreed,
+        ) {
+            Ok(saving) => saving,
+            Err(problem) => {
+                println!("rustage: {}", problem.message());
+                return false;
+            }
+        };
+        println!("{}: {}", saving.target().display(), options.verb.name());
+        if saving.is_unchanged() {
+            println!("- the target already holds exactly this text, so there is nothing to write");
+            return true;
+        }
+        println!(
+            "- {} byte(s) would go through {}",
+            saving.text().len(),
+            saving.temporary().display()
+        );
+        if options.plan_only {
+            println!("planned only: nothing was written");
+            return true;
+        }
+        return match saving.execute() {
+            Ok(committed) => {
+                println!(
+                    "- wrote {} ({} byte(s){})",
+                    committed.target().display(),
+                    committed.bytes(),
+                    if committed.created() {
+                        ", it did not exist before"
+                    } else {
+                        ""
+                    }
+                );
+                true
+            }
+            Err(failure) => {
+                println!("rustage: {}", failure.message());
+                false
+            }
+        };
+    }
+
+    if !options.edits.is_empty() {
+        println!(
+            "rustage: --set-text is one file's business; a set of {} file(s) is written back as it \
+             stands",
+            documents.len()
+        );
+        return false;
+    }
+    if !matches!(options.verb, Verb::Save) {
+        println!(
+            "rustage: {} names one destination, so it is one file's business",
+            options.verb.name()
+        );
+        return false;
+    }
+
+    // The set is written back from each file's own current bytes, so nothing changes: the point of
+    // this path is the transaction, and the test suite injects the failure that exercises it.
+    let entries = match read_each(&root, &documents) {
+        Ok(entries) => entries,
+        Err(reason) => {
+            println!("rustage: {reason}");
+            return false;
+        }
+    };
+    let commit = match Commit::plan(&root, entries) {
+        Ok(commit) => commit,
+        Err(problem) => {
+            println!("rustage: {}", problem.message());
+            return false;
+        }
+    };
+    for target in commit.targets() {
+        println!("would write {}", target.display());
+    }
+    if options.plan_only || commit.is_unchanged() {
+        println!("nothing was written");
+        return true;
+    }
+    match commit.execute() {
+        Ok(committed) => {
+            println!("committed {} file(s) as one set", committed.targets().len());
+            true
+        }
+        Err(failure) => {
+            println!("rustage: {}", failure.message());
+            false
+        }
+    }
+}
+
+/// Decides what a document should do when the file changed outside the designer (task T03.05).
+///
+/// The three versions are read here and named in the report: the base is what the buffer read, `mine`
+/// is the text after any `--set-text` edits, and `theirs` is the file as it is now. Showing the
+/// decision writes nothing; `--recreate` answers a deleted file by writing the document's text back,
+/// and `--accept` writes a merge that landed. A conflict is reported and never resolved by writing:
+/// picking a side silently is the data loss this task exists to prevent.
+fn conflict(options: &crate::cli::ConflictOptions) -> bool {
+    use crate::host::paths::ProjectRoot;
+    use crate::project::conflict::{OnDisk, Verdict, decide, writability};
+    use crate::project::document::{Buffer, root_of};
+    use crate::project::save::Verb;
+
+    let root = match options.root.as_ref() {
+        Some(directory) => match ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        None => match root_of(&options.file) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+    };
+    let relative = relative_to(&root, &options.file);
+    let Some(document) = relative.to_str().map(str::to_owned) else {
+        println!(
+            "rustage: {} is not a path this build can name",
+            options.file.display()
+        );
+        return false;
+    };
+
+    // A deleted file is exactly one of the states this command decides about, so a buffer that
+    // cannot be opened is not a failure here: the document's text comes from the edits instead.
+    let mut buffer = Buffer::open(&root, &document).ok();
+    if let Some(buffer) = buffer.as_mut() {
+        for edit in &options.edits {
+            let text = match edit {
+                crate::cli::DocumentEdit::Text(text) => text.clone(),
+                crate::cli::DocumentEdit::File(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        println!("rustage: {} could not be read: {error}", path.display());
+                        return false;
+                    }
+                },
+            };
+            buffer.set_text(&root, text);
+        }
+    }
+
+    let path = match root.resolve_for_creation(&document) {
+        Ok(path) => path,
+        Err(error) => {
+            println!("rustage: {}", error.message());
+            return false;
+        }
+    };
+    // `mine` is the text the document holds: the buffer's, when a file could be read, and otherwise
+    // the last `--set-text`/`--set-text-file` edit, so a deleted document can still be answered.
+    let mine = match buffer.as_ref() {
+        Some(buffer) => buffer.text().to_owned(),
+        None => match options.edits.last() {
+            Some(crate::cli::DocumentEdit::Text(text)) => text.clone(),
+            Some(crate::cli::DocumentEdit::File(path)) => match std::fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(error) => {
+                    println!("rustage: {} could not be read: {error}", path.display());
+                    return false;
+                }
+            },
+            None => String::new(),
+        },
+    };
+    let base = match &options.base {
+        Some(base_path) => match std::fs::read(base_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                println!(
+                    "rustage: {} could not be read: {error}",
+                    base_path.display()
+                );
+                return false;
+            }
+        },
+        None => std::fs::read(&path).ok(),
+    };
+    let on_disk = OnDisk::inspect(&path, base.as_deref());
+    let verdict = decide(base.as_deref(), &mine, &on_disk);
+
+    println!("document: {}", path.display());
+    println!("base: {} byte(s)", base.as_ref().map(Vec::len).unwrap_or(0));
+    println!("mine: {} byte(s)", mine.len());
+    println!(
+        "on disk: {}",
+        match &on_disk {
+            OnDisk::Same { bytes } => format!("unchanged ({} byte(s))", bytes.len()),
+            OnDisk::Changed { bytes } => format!("changed ({} byte(s))", bytes.len()),
+            OnDisk::Gone => "gone".to_owned(),
+            OnDisk::NotAFile { reason } => format!("not a readable file: {reason}"),
+        }
+    );
+    println!("verdict: {}", verdict.message());
+    if !matches!(on_disk, OnDisk::Gone) {
+        println!("{}", writability(&path).message());
+    }
+
+    match &verdict {
+        Verdict::Conflicted { regions } => {
+            for region in regions {
+                println!("- {}", region.describe());
+                println!(
+                    "    the document has: {}",
+                    region.mine().concat().trim_end()
+                );
+                println!(
+                    "    the file has:     {}",
+                    region.theirs().concat().trim_end()
+                );
+            }
+            println!("a conflict is reported, not resolved: choose which side to keep");
+            false
+        }
+        Verdict::Merged { text } => {
+            println!("merged text ({} byte(s)):", text.len());
+            print!("{text}");
+            if !text.ends_with('\n') {
+                println!();
+            }
+            if options.accept {
+                // The merge was computed against what is on disk *now*, so that is the base the
+                // write has to agree with — not the older bytes the document read.
+                let agreed = match &on_disk {
+                    OnDisk::Same { bytes } | OnDisk::Changed { bytes } => Some(bytes.as_slice()),
+                    _ => None,
+                };
+                write_text(&root, &document, text, Verb::Save, agreed)
+            } else {
+                println!("nothing was written; pass --accept to write the merged text");
+                true
+            }
+        }
+        Verdict::Gone => {
+            if options.recreate {
+                // There is no file to write back over, so re-creating is `SaveAs`: the same atomic
+                // write, with the path resolved as one that is going to be created.
+                let verb = Verb::SaveAs {
+                    to: document.clone(),
+                };
+                write_text(&root, &document, &mine, verb, None)
+            } else {
+                println!(
+                    "nothing was written; pass --recreate to write the document's text back, or let \
+                     the file go"
+                );
+                true
+            }
+        }
+        Verdict::DiskOnly => {
+            println!("the file changed and the document has no edit of its own");
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Writes `text` over a document through the save path, with a guard when there is a base.
+fn write_text(
+    root: &crate::host::paths::ProjectRoot,
+    document: &str,
+    text: &str,
+    verb: crate::project::save::Verb,
+    agreed: Option<&[u8]>,
+) -> bool {
+    use crate::project::save::Saving;
+
+    match Saving::plan_guarded(root, document, text, verb, agreed) {
+        Ok(saving) => match saving.execute() {
+            Ok(committed) => {
+                println!(
+                    "wrote {} ({} byte(s))",
+                    committed.target().display(),
+                    committed.bytes()
+                );
+                true
+            }
+            Err(failure) => {
+                println!("rustage: {}", failure.message());
+                false
+            }
+        },
+        Err(problem) => {
+            println!("rustage: {}", problem.message());
+            false
+        }
+    }
+}
+
+/// Keeps, offers and refuses recovery copies (task T03.06).
+///
+/// `--record` writes a copy of a document's text into a store that lives outside any project; with no
+/// action the command is the **startup recovery** report — every copy for a project, newest first,
+/// each saying how it stands next to the file now. `--restore` prints the newest copy so a person can
+/// take it, and `--discard` is the refusal. Nothing adopts a copy on its own: a recovery that
+/// silently replaced a file saved afterwards would be worse than none.
+fn recovery(options: &crate::cli::RecoveryOptions) -> bool {
+    use crate::host::paths::ProjectRoot;
+    use crate::project::recovery::RecoveryStore;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let store = RecoveryStore::new(&options.store);
+    let target = options
+        .record
+        .as_ref()
+        .or(options.restore.as_ref())
+        .or(options.discard.as_ref());
+
+    // The project root: named, or found above the document this action names.
+    let root = match (&options.root, target) {
+        (Some(directory), _) => match ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        (None, Some(file)) => match crate::project::document::root_of(file) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+        (None, None) => {
+            println!(
+                "rustage: --root names the project whose copies to list (there is no document to read it from)"
+            );
+            return false;
+        }
+    };
+
+    let session = options.session.clone().unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs().to_string())
+            .unwrap_or_else(|_| "session".to_owned())
+    });
+
+    if let Some(file) = &options.record {
+        let relative = relative_to(&root, file);
+        let Some(document) = relative.to_str().map(str::to_owned) else {
+            println!(
+                "rustage: {} is not a path this build can name",
+                file.display()
+            );
+            return false;
+        };
+        let path = match root.resolve(&document) {
+            Ok(path) => path,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                println!("rustage: {} could not be read: {error}", file.display());
+                return false;
+            }
+        };
+        return match store.record(
+            &session,
+            root.as_path(),
+            &document,
+            &text,
+            SystemTime::now(),
+        ) {
+            Ok(recorded) => {
+                println!("{}", recorded.message());
+                true
+            }
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                false
+            }
+        };
+    }
+
+    if let Some(file) = &options.restore {
+        let relative = relative_to(&root, file);
+        let Some(document) = relative.to_str().map(str::to_owned) else {
+            println!(
+                "rustage: {} is not a path this build can name",
+                file.display()
+            );
+            return false;
+        };
+        return match store.newest(root.as_path(), &document) {
+            Some(copy) => {
+                for line in copy.render() {
+                    println!("{line}");
+                }
+                print!("{}", copy.text());
+                if !copy.text().ends_with('\n') {
+                    println!();
+                }
+                println!("nothing was written: taking the copy is the caller's decision");
+                true
+            }
+            None => {
+                println!("rustage: there is no recovery copy for {document}");
+                false
+            }
+        };
+    }
+
+    if let Some(file) = &options.discard {
+        let relative = relative_to(&root, file);
+        let Some(document) = relative.to_str().map(str::to_owned) else {
+            println!(
+                "rustage: {} is not a path this build can name",
+                file.display()
+            );
+            return false;
+        };
+        let removed = store.discard(root.as_path(), &document);
+        println!(
+            "refused {removed} recovery copy/copies of {document}; the document itself was not touched"
+        );
+        return true;
+    }
+
+    if options.prune {
+        let policy = crate::project::retention::Policy::new(options.keep.unwrap_or(5));
+        let plan = crate::project::retention::plan(&store, policy);
+        for line in plan.render() {
+            println!("{line}");
+        }
+        if !options.apply {
+            println!("nothing was removed; pass --apply to carry the prune out");
+            return true;
+        }
+        let pruned = crate::project::retention::apply(&plan);
+        println!("{}", pruned.message());
+        return true;
+    }
+
+    let copies = store.for_project(root.as_path());
+    if copies.is_empty() {
+        println!("no recovery copies for {}", root.as_path().display());
+        return true;
+    }
+    println!(
+        "{} recovery copy/copies for {} (newest first):",
+        copies.len(),
+        root.as_path().display()
+    );
+    for copy in &copies {
+        for line in copy.render() {
+            println!("{line}");
+        }
+    }
+    println!(
+        "--restore <document> prints one so a person can take it; --discard <document> refuses it"
+    );
+    true
+}
+
+/// Plans and carries out closing documents with a dirty-content decision (task T03.07).
+///
+/// The plan is always printed: which documents have unsaved changes and how much work would stop. A
+/// decision then carries it out, and the outcome names what happened — a cancel and a failing write
+/// both leave every document and task as they were, because the state is taken and given back rather
+/// than acted on in place.
+fn close(options: &crate::cli::CloseOptions) -> bool {
+    use crate::host::paths::ProjectRoot;
+    use crate::project::closing::{Closing, Document, Task};
+
+    let first = match options.files.first().or(options.root.as_ref()) {
+        Some(path) => path,
+        None => {
+            println!("rustage: --close names at least one document");
+            return false;
+        }
+    };
+    let root = match options.root.as_ref() {
+        Some(directory) => match ProjectRoot::new(directory) {
+            Ok(root) => root,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        },
+        None => match crate::project::document::root_of(first) {
+            Ok(root) => root,
+            Err(refusal) => {
+                println!("rustage: {}", refusal.message());
+                return false;
+            }
+        },
+    };
+
+    let mut documents = Vec::new();
+    for file in &options.files {
+        let relative = relative_to(&root, file);
+        let Some(name) = relative.to_str() else {
+            println!(
+                "rustage: {} is not a path this build can name",
+                file.display()
+            );
+            return false;
+        };
+        match Document::clean(&root, name) {
+            Ok(document) => documents.push(document),
+            Err(reason) => {
+                println!("rustage: {reason}");
+                return false;
+            }
+        }
+    }
+    for (document, buffer) in &options.unsaved {
+        let text = match std::fs::read_to_string(buffer) {
+            Ok(text) => text,
+            Err(error) => {
+                println!("rustage: {} could not be read: {error}", buffer.display());
+                return false;
+            }
+        };
+        match Document::unsaved(&root, document, text) {
+            Ok(document) => documents.push(document),
+            Err(reason) => {
+                println!("rustage: {reason}");
+                return false;
+            }
+        }
+    }
+    let tasks: Vec<Task> = options.tasks.iter().cloned().map(Task::running).collect();
+
+    let closing = Closing::new(root, documents, tasks);
+    println!("close plan: {}", closing.plan().message());
+    let Some(decision) = options.decision else {
+        println!("nothing was closed; pass --decision to carry it out");
+        return true;
+    };
+    let (after, outcome) = closing.close(decision);
+    println!(
+        "{} ({}): {}",
+        decision.name(),
+        outcome.message(),
+        after.tasks().len()
+    );
+    match outcome {
+        crate::project::closing::Outcome::Closed { .. } => true,
+        crate::project::closing::Outcome::Cancelled => true,
+        crate::project::closing::Outcome::Blocked { .. } => false,
+    }
+}
+
+/// Resolves a command through the typed registry (task T05.01).
+///
+/// The registry is the only door: a [`Call`](crate::app::command::Call) becomes an
+/// [`Invocation`](crate::app::command::Invocation) only through `Registry::resolve`, which checks that
+/// the command is known, available in this context, authorized, and given valid arguments — in that
+/// order, because "not available" is a more useful answer than "one argument would have been wrong"
+/// for a command that was never going to run. With no id, every registered command is listed.
+fn resolve_command(options: &crate::cli::CommandOptions) -> bool {
+    use crate::app::command::{Call, Context};
+    use crate::contracts::permission::EffectClass;
+
+    let registry = crate::app::command::built_in();
+
+    let Some(id) = &options.id else {
+        println!("{} command(s):", registry.len());
+        for command in registry.commands() {
+            let params = command
+                .params()
+                .iter()
+                .map(|param| format!("{}: {}", param.name(), param.kind().name()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "  {:<18} {:<10} {:<14} undo {}{}",
+                command.id().to_string(),
+                command.category(),
+                command.title(),
+                command.undo().name(),
+                if params.is_empty() {
+                    String::new()
+                } else {
+                    format!("  arguments: {params}")
+                }
+            );
+            if !command.help().is_empty() {
+                println!("      {}", command.help());
+            }
+        }
+        return true;
+    };
+
+    let effects: Vec<EffectClass> = options
+        .authorize
+        .iter()
+        .filter_map(|name| {
+            EffectClass::ALL
+                .iter()
+                .find(|effect| effect.name() == name)
+                .copied()
+        })
+        .collect();
+    let mut context = Context::in_area(&options.focus);
+    if options.trust {
+        context = context.trusted();
+    }
+    for effect in effects {
+        context = context.authorizing(effect);
+    }
+    for task in &options.running {
+        context = context.running(task.clone());
+    }
+
+    let mut call = Call::to(id.clone());
+    for (name, value) in &options.arguments {
+        call = call.with(name.clone(), value.clone());
+    }
+
+    println!(
+        "context: focus {}, trusted {}",
+        options.focus,
+        yes_no(options.trust)
+    );
+    match registry.resolve(&call, &context) {
+        Ok(invocation) => {
+            println!("resolved: {}", invocation.describe());
+            println!("title: {}", invocation.title());
+            if let Some(task) = invocation.task() {
+                println!("runs as task: {task}");
+            }
+            true
+        }
+        Err(refusal) => {
+            println!("refused: {}", refusal.message());
+            false
+        }
+    }
+}
+
+/// Resolves a key chord through the keymap (task T05.03).
+///
+/// The scene decides whether a bare key is a character or a command: with `--text-field` a bare
+/// character goes to the field, and with `--composing` the keys belong to the input method. A chord
+/// resolves to a command, waits for more keys, is suppressed, or is unbound — and each is reported as
+/// itself rather than as a success.
+fn keys(options: &crate::cli::KeysOptions) -> bool {
+    use crate::app::shortcuts::{Chord, Key, Resolution, Scene};
+
+    let keymap = crate::app::shortcuts::built_in();
+    let Some(press) = &options.press else {
+        println!("{} binding(s):", keymap.len());
+        for binding in keymap.bindings() {
+            println!(
+                "  {:<14} {:<18} {}",
+                binding.chord().to_string(),
+                binding.command(),
+                binding.scope().render()
+            );
+        }
+        return true;
+    };
+
+    let chord = match Chord::parse(press) {
+        Ok(chord) => chord,
+        Err(reason) => {
+            println!("rustage: {reason}");
+            return false;
+        }
+    };
+    let mut scene = Scene::in_mode(&options.mode, options.panel.clone());
+    if options.text_field {
+        scene = Scene::text_field(&options.mode);
+    }
+    if options.composing {
+        scene = scene.composing();
+    }
+
+    let pressed: Vec<Key> = chord.keys().to_vec();
+    println!(
+        "scene: mode {}, panel {}, text field {}, composing {}",
+        options.mode,
+        options.panel.as_deref().unwrap_or("(none)"),
+        yes_no(options.text_field),
+        yes_no(options.composing)
+    );
+    match keymap.resolve(&pressed, &scene) {
+        Resolution::Triggered { command } => {
+            println!("pressed {chord}: runs {command}");
+            true
+        }
+        Resolution::Pending {
+            pressed,
+            candidates,
+        } => {
+            let so_far: Vec<String> = pressed.iter().map(Key::to_string).collect();
+            println!(
+                "pressed {}: waiting for more keys (could be {})",
+                so_far.join(" "),
+                candidates.join(", ")
+            );
+            true
+        }
+        Resolution::Suppressed { reason } => {
+            println!("pressed {chord}: no command ({reason})");
+            true
+        }
+        Resolution::Nothing => {
+            println!("pressed {chord}: nothing is bound to it");
+            false
+        }
+    }
+}
+
+/// Shows the menu tree and checks every implemented leaf against the registry (task T05.02).
+///
+/// The check is the acceptance line: an implemented leaf must bind a command the registry knows, no
+/// two leaves may share an id, and a leaf marked planned must not name one that works. A problem is
+/// printed with the menu path, so a report points at the item rather than at the file.
+fn menu() -> bool {
+    let registry = crate::app::command::built_in();
+    let menus = crate::app::menu::built_in();
+    let mut problems = Vec::new();
+    for menu in &menus {
+        for line in menu.render() {
+            println!("{line}");
+        }
+        problems.extend(menu.problems(&registry));
+    }
+    if problems.is_empty() {
+        println!("every implemented menu leaf binds one registered command");
+        true
+    } else {
+        for problem in problems {
+            println!("problem: {problem}");
+        }
+        false
+    }
+}
+
+/// Searches the command palette, or shows one command's help (task T05.04).
+///
+/// Every hit is a registry command with the registry's own verdict, so a disabled command shows its
+/// reason rather than a grey row. An empty query lists every command, which is what makes a new
+/// command discoverable from the keyboard; a non-empty query that matches nothing is a finding.
+fn palette(options: &crate::cli::PaletteOptions) -> bool {
+    use crate::app::command::Context;
+    use crate::app::palette::{Recents, help_for, search};
+    use crate::contracts::permission::EffectClass;
+
+    let registry = crate::app::command::built_in();
+
+    if let Some(id) = &options.help_for {
+        return match help_for(&registry, id) {
+            Ok(help) => {
+                for line in help.render() {
+                    println!("{line}");
+                }
+                true
+            }
+            Err(reason) => {
+                println!("rustage: {reason}");
+                false
+            }
+        };
+    }
+
+    let mut context = Context::in_area(&options.focus);
+    if options.trust {
+        context = context.trusted();
+    }
+    for name in &options.authorize {
+        if let Some(effect) = EffectClass::ALL.iter().find(|effect| effect.name() == name) {
+            context = context.authorizing(*effect);
+        }
+    }
+    for task in &options.running {
+        context = context.running(task.clone());
+    }
+
+    let mut recents = Recents::new(20);
+    // The list is given most-recent-first, so recording in reverse yields the same order.
+    for id in options.recent.iter().rev() {
+        recents.record(id.clone());
+    }
+
+    let hits = search(&registry, &context, &options.query, &recents);
+    println!(
+        "{} hit(s) for {:?} (focus {}, trusted {})",
+        hits.len(),
+        options.query,
+        options.focus,
+        yes_no(options.trust)
+    );
+    for entry in &hits {
+        println!("  {}", entry.render());
+    }
+    !(hits.is_empty() && !options.query.is_empty())
+}
+
+/// Shows the workbench and its panels (tasks T04.01/T04.02).
+///
+/// The workbench's title, regions and status are derived from the identities given here, so the report
+/// cannot say one thing while the state says another. The panels are the registered set with the
+/// layout changes applied: a panel whose service this host does not have is never shown, and hiding
+/// and showing a panel restores the size and focus it had.
+fn workbench(options: &crate::cli::WorkbenchOptions) -> bool {
+    use crate::app::panels::{PanelError, built_in as panels_built_in};
+    use crate::app::workbench::{Mode, Workbench};
+    use std::collections::BTreeSet;
+
+    let mut workbench = Workbench::new();
+    if let Some(name) = &options.mode {
+        match Mode::from_name(name) {
+            Some(mode) => workbench.set_mode(mode),
+            None => {
+                println!("rustage: {name:?} is not a mode");
+                return false;
+            }
+        }
+    }
+    if let Some(project) = &options.project {
+        workbench.open_project(project.clone());
+    }
+    if let Some(target) = &options.target {
+        workbench.set_target(target.clone());
+    }
+    if let Some(document) = &options.document {
+        workbench.open_document(document.clone());
+    }
+    if options.dirty {
+        workbench.mark_dirty();
+    }
+    if let Some(message) = &options.message {
+        workbench.set_message(message.clone());
+    }
+    for line in workbench.render() {
+        println!("{line}");
+    }
+
+    let services: BTreeSet<String> = options.services.iter().cloned().collect();
+    let mut panels = panels_built_in();
+    let mut problem: Option<PanelError> = None;
+    for id in &options.show {
+        problem = problem.or_else(|| panels.show(id).err());
+    }
+    for id in &options.hide {
+        problem = problem.or_else(|| panels.hide(id).err());
+    }
+    for (id, size) in &options.resize {
+        problem = problem.or_else(|| panels.resize(id, *size).err());
+    }
+    if let Some(id) = &options.focus {
+        problem = problem.or_else(|| panels.focus(id).err());
+    }
+    println!();
+    for line in panels.render(&services) {
+        println!("{line}");
+    }
+    if let Some(problem) = problem {
+        println!("rustage: {}", problem.message());
+        return false;
+    }
+    true
+}
+
+/// Previews and carries out a batch operation on a selection (task T05.07).
+///
+/// The preview classifies every selected item before anything happens, and the permission is explained
+/// before it is checked. `apply-all` over a selection with an inapplicable item is **refused**, naming
+/// them: skipping one is `apply-none`, a choice, and it is recorded in the history so a later "why is
+/// this one missing" has an answer.
+fn operation(options: &crate::cli::OperationOptions) -> bool {
+    use crate::app::operations::{BatchPreview, Choice, History, Operation, Verdict};
+    use crate::contracts::permission::EffectClass;
+    use std::collections::BTreeSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let mut operation = Operation::new(options.name.clone());
+    if let Some(note) = &options.note {
+        operation = operation.noted(note.clone());
+    }
+    for name in &options.effects {
+        match EffectClass::ALL.iter().find(|effect| effect.name() == name) {
+            Some(effect) => operation = operation.with_effect(*effect),
+            None => {
+                println!("rustage: {name:?} is not an effect");
+                return false;
+            }
+        }
+    }
+    let authorized: BTreeSet<EffectClass> = options
+        .authorize
+        .iter()
+        .filter_map(|name| {
+            EffectClass::ALL
+                .iter()
+                .find(|effect| effect.name() == name)
+                .copied()
+        })
+        .collect();
+
+    let mut items: Vec<(String, Verdict)> = options
+        .select
+        .iter()
+        .map(|id| (id.clone(), Verdict::Applies))
+        .collect();
+    for (id, reason) in &options.inapplicable {
+        items.push((id.clone(), Verdict::inapplicable(reason.clone())));
+    }
+    let preview = BatchPreview::of(operation, items);
+    for line in preview.render(&authorized) {
+        println!("{line}");
+    }
+
+    let Some(choice) = &options.choice else {
+        println!("nothing was changed; pass --choice to carry it out");
+        return true;
+    };
+    let Some(choice) = Choice::from_name(choice) else {
+        println!("rustage: {choice:?} is not a choice (apply-all, apply-none, cancel)");
+        return false;
+    };
+    match preview.apply(choice, &authorized) {
+        Ok(outcome) => {
+            println!("{}: {}", choice.name(), outcome.message());
+            let mut history = History::new(20);
+            let at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos() as u64)
+                .unwrap_or(0);
+            if history.record(preview.operation().name(), &outcome, at) {
+                for entry in history.entries() {
+                    println!("history: {}", entry.render());
+                }
+            }
+            true
+        }
+        Err(refusal) => {
+            println!("refused: {}", refusal.message());
+            false
+        }
+    }
+}
+
+/// Audits the command inventory (task T05.08).
+///
+/// The registry, the menu tree and the keymap are walked against each other: every menu leaf and every
+/// key binding must name a registered command, and a registered command that nothing reaches is a note
+/// (the palette searches the registry itself). A new area re-verifies by being added to one of the
+/// three tables — there is no per-area checklist to remember.
+fn audit() -> bool {
+    let registry = crate::app::command::built_in();
+    let menus = crate::app::menu::built_in();
+    let keymap = crate::app::shortcuts::built_in();
+    let report = crate::app::audit::audit(&registry, &menus, &keymap);
+    for line in report.render() {
+        println!("{line}");
+    }
+    println!(
+        "{} command(s), {} menu(s), {} binding(s)",
+        registry.len(),
+        menus.len(),
+        keymap.len()
+    );
+    report.is_clean()
+}
+
+/// Replays a script of document-tab operations (task T04.03).
+///
+/// The script is a story about one tab strip: a document previewed, another pinned, a view closed and
+/// the document itself closed. Every operation is applied in order; an operation that names a tab
+/// that is not there is reported and stops the run, so a script cannot silently do nothing.
+fn tabs(options: &crate::cli::TabsOptions) -> bool {
+    use crate::app::tabs::Tabs;
+
+    let mut tabs = Tabs::new(options.limit);
+    for op in &options.ops {
+        let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
+        let result: Result<String, String> = match verb {
+            "preview" => {
+                tabs.preview(argument);
+                Ok(format!("preview {argument}"))
+            }
+            "pin" => {
+                tabs.pin(argument);
+                Ok(format!("pin {argument}"))
+            }
+            "view" => {
+                tabs.another_view(argument);
+                Ok(format!("another view of {argument}"))
+            }
+            "dirty" => {
+                tabs.mark_dirty(argument, true);
+                Ok(format!("{argument} has unsaved changes"))
+            }
+            "activate" | "close-view" | "close-others" | "close-right" => {
+                match argument.parse::<usize>() {
+                    Ok(index) => match verb {
+                        "activate" => tabs.activate(index).map(|()| format!("activate {index}")),
+                        "close-view" => tabs
+                            .close_view(index)
+                            .map(|tab| format!("closed the view of {}", tab.document())),
+                        "close-others" => tabs
+                            .close_others(index)
+                            .map(|closed| format!("closed {closed} other(s)")),
+                        _ => tabs
+                            .close_to_the_right(index)
+                            .map(|closed| format!("closed {closed} to the right")),
+                    },
+                    Err(_) => Err(format!("{op:?}: {argument:?} is not a tab index")),
+                }
+            }
+            "close-doc" => {
+                let closed = tabs.close_document(argument);
+                Ok(format!("closed {closed} view(s) of {argument}"))
+            }
+            "move" => {
+                let Some((from, to)) = argument.split_once(':') else {
+                    return tabs_fail(&tabs, &format!("{op:?}: move takes `from:to`"));
+                };
+                match (from.parse::<usize>(), to.parse::<usize>()) {
+                    (Ok(from), Ok(to)) => tabs
+                        .reorder(from, to)
+                        .map(|()| format!("moved {from} to {to}")),
+                    _ => Err(format!("{op:?}: {argument:?} is not a move")),
+                }
+            }
+            other => Err(format!("{other:?} is not a tab operation")),
+        };
+        match result {
+            Ok(note) => println!("{note}"),
+            Err(reason) => return tabs_fail(&tabs, &reason),
+        }
+    }
+    for line in tabs.render() {
+        println!("{line}");
+    }
+    true
+}
+
+/// Prints the strip as it stands and reports why the script stopped.
+fn tabs_fail(tabs: &crate::app::tabs::Tabs, reason: &str) -> bool {
+    println!("rustage: {reason}");
+    for line in tabs.render() {
+        println!("{line}");
+    }
+    false
+}
+
+/// Routes a keypress, or shows a context menu and the toolbar (task T05.05).
+///
+/// One keypress produces one route, and it is claimed unless nothing was bound: a refused command does
+/// not fall through, which is what keeps one press from running two things. The context menu and the
+/// toolbar both ask the registry, so they grey the same items with the same reasons.
+fn focus(options: &crate::cli::FocusOptions) -> bool {
+    use crate::app::command::Context;
+    use crate::app::focus::{Target, menu_entries, press, toolbar_entries};
+    use crate::app::shortcuts::Chord;
+    use crate::contracts::permission::EffectClass;
+
+    let registry = crate::app::command::built_in();
+    let keymap = crate::app::shortcuts::built_in();
+    let target = match options.target.as_str() {
+        "welcome" => Target::Welcome,
+        "canvas" => Target::Canvas,
+        "outline" => Target::Outline,
+        "inspector" => Target::Inspector,
+        "editor" => Target::Editor,
+        "tabs" => Target::Tabs,
+        "status" => Target::Status,
+        other => {
+            println!("rustage: {other:?} is not a focus target");
+            return false;
+        }
+    };
+
+    let mut context = Context::in_area(target.area());
+    if options.trust {
+        context = context.trusted();
+    }
+    for name in &options.authorize {
+        if let Some(effect) = EffectClass::ALL.iter().find(|effect| effect.name() == name) {
+            context = context.authorizing(*effect);
+        }
+    }
+    for task in &options.running {
+        context = context.running(task.clone());
+    }
+    println!(
+        "focus {} (area {}), mode {}, trusted {}",
+        options.target,
+        target.area(),
+        options.mode,
+        yes_no(options.trust)
+    );
+
+    if let Some(chord) = &options.press {
+        let Ok(chord) = Chord::parse(chord) else {
+            println!("rustage: {chord:?} is not a chord");
+            return false;
+        };
+        let route = press(
+            &keymap,
+            &registry,
+            &context,
+            &target,
+            &options.mode,
+            chord.keys(),
+        );
+        println!(
+            "{} [{}]",
+            route.message(),
+            if route.is_claimed() {
+                "the key is claimed"
+            } else {
+                "the key is not claimed"
+            }
+        );
+        // A refusal is a finding (the convention `--command` also uses); a consumed key is not.
+        return matches!(
+            route,
+            crate::app::focus::Route::Ran { .. }
+                | crate::app::focus::Route::Suppressed { .. }
+                | crate::app::focus::Route::Pending { .. }
+        );
+    }
+
+    let entries = match &options.menu {
+        Some(title) => match crate::app::menu::built_in()
+            .into_iter()
+            .find(|menu| menu.title() == title)
+        {
+            Some(menu) => {
+                println!("context menu {title}:");
+                menu_entries(&registry, &menu, &context)
+            }
+            None => {
+                println!("rustage: there is no {title:?} menu");
+                return false;
+            }
+        },
+        None => {
+            println!("toolbar:");
+            toolbar_entries(&registry, &crate::app::focus::built_in_toolbar(), &context)
+        }
+    };
+    let ok = entries.iter().all(|entry| entry.is_enabled()) || entries.is_empty();
+    for entry in &entries {
+        println!("  {}", entry.render());
+    }
+    ok
+}
+
+/// Reads each document's own text, so a set can be written back as it stands.
+fn read_each(
+    root: &crate::host::paths::ProjectRoot,
+    documents: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let mut entries = Vec::new();
+    for document in documents {
+        let path = root.resolve(document).map_err(|error| error.message())?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("{} could not be read: {error}", path.display()))?;
+        entries.push((document.clone(), text));
+    }
+    Ok(entries)
 }
 
 /// Resolves a workspace's dependencies, and says exactly what it did (task T02.11).

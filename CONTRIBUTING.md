@@ -124,8 +124,8 @@ git diff --check
 
 `--launch` opens the baseline desktop session and leaves it again. It refuses to report a session
 when the dependency reports a non-interactive backend, and it says in the log how the session ended
-(`LoopEnd::WindowClosed` for a window close, `LoopEnd::HostEnded` when the host had to end its own
-process because the pinned revision's `quit()` only works on the thread that owns the GUI toolkit).
+(`LoopEnd::WindowClosed` for a window close, `LoopEnd::HostEnded` when the host asked the loop to
+stop at its `--exit-after-ms` deadline through the dependency's `quit()`).
 On a machine without a desktop session it exits with code 3 and a reason; that is a refusal, not a
 failure, and not a success. Rust checks cover the command line, the icon seam and the icon strip: the semantic icon table
 resolves in the pinned dependency, the host glyphs clear the dependency's contour budget and draw
@@ -134,11 +134,13 @@ appearances, a theme switch reaches the controls, and the committed baselines un
 `tests/baselines/icons/` still match what a real control renders. They also cover the dependency
 contract probes (`--probe-apis`): layout geometry, mode 2 generation and its target-capability
 query, signal dispatch order, connection teardown, and the text editor's edit primitives, guarded
-`replace_range`, highlight state, graded scale, viewport coordinates and a cross-thread
-highlighter, each tied to the pinned revision by a lockfile drift test. The command writes
-`api-probes.json` under the directory you name and **exits 4 while any probe reports a
+`replace_range`, highlight state (including the `line_state_is_known`/`resolve_line_state` pair that
+separates "not lexed yet" from "genuinely clean"), graded scale, viewport coordinates and a
+cross-thread highlighter, each tied to the pinned revision by a lockfile drift test. The command
+writes `api-probes.json` under the directory you name and **exits 4 while any probe reports a
 gap** — the same code `--probe-host` exits with, meaning "a real finding was reported" rather than a
-defect in the host. A gap is a recorded finding, not a pass, and the open ones are listed in
+defect in the host. A gap is a recorded finding, not a pass; against the revision this project now
+pins, no API probe reports one, and the host probe's own remaining gaps are listed in
 [`docs/rw-feedback/`](docs/rw-feedback/feedback-20261013.md).
 `--probe-host` checks the host's own services — whether a baseline session starts, whether pointer and
 keyboard input reaches a mounted control, the operating system's file chooser, the painted

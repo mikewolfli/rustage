@@ -16,7 +16,7 @@
 //!   open the user's browser, a server session has no screen). Also not a pass.
 //!
 //! The split is what keeps "we support file dialogs" from being written on the strength of a
-//! `create_file_dialog` that returned `0`.
+//! backend that advertised a picker it could not actually present.
 //!
 //! **Where the boundary with `crate::probe` is.** That module exercises the *dependency's API
 //! contracts* (layout, generation, events, teardown, editing) against the pinned revision; this one
@@ -788,26 +788,38 @@ fn check_input_events() -> CapabilityCheck {
     )
 }
 
-/// Whether the operating system's own chooser can be opened.
+/// Whether the operating system's own chooser is available here.
+///
+/// The revision answers this **before** the call: `platform::capabilities().file_dialog` says whether
+/// this backend has a picker of its own, and it is the same fact `choose_path`/`open_path`/`save_path`
+/// pair with (`PathPickerError::Unsupported` when it is `false`). So the check reports the advertised
+/// capability instead of inferring one from a control id — and it never *presents* the picker: the
+/// call is modal and needs a person at the screen, the same boundary `url-handover` records.
 fn check_native_dialog() -> CapabilityCheck {
-    let id = rust_widgets::create_file_dialog(0, 0, 0, 640, 420);
-    if id == 0 {
+    let advertised = rust_widgets::platform::capabilities().file_dialog;
+    if !advertised {
         return CapabilityCheck::new(
             Capability::NativeFileDialog,
             CheckStatus::Gap {
                 reason:
-                    "the pinned revision creates no file-dialog control on this backend, so the \
-                         operating system's own chooser cannot be opened through it"
+                    "this backend reports no native picker, so the operating system's own chooser \
+                         cannot be presented here; the library's painted dialog is the fallback and \
+                         is checked separately (chooser-frame)"
                         .to_owned(),
             },
-            "rust_widgets::create_file_dialog(0, 0, 0, 640, 420) -> 0",
+            "rust_widgets::platform::capabilities().file_dialog -> false",
         );
     }
-    runtime::unregister(id);
     CapabilityCheck::new(
         Capability::NativeFileDialog,
-        CheckStatus::Ready,
-        format!("rust_widgets::create_file_dialog(..) -> {id}"),
+        CheckStatus::NotVerified {
+            reason:
+                "this backend advertises a native picker, but presenting it is modal and needs a \
+                     person at the screen, so the probe records the capability rather than opening a \
+                     window"
+                    .to_owned(),
+        },
+        "rust_widgets::platform::capabilities().file_dialog -> true",
     )
 }
 
@@ -935,7 +947,7 @@ fn answer(
 /// Whether the clipboard survives a write and a read, and is left as it was found.
 fn check_clipboard() -> CapabilityCheck {
     let backend = NativeClipboard::new();
-    let before = rust_widgets::get_clipboard_text();
+    let before = rust_widgets::clipboard_text();
     let marker = "rustage clipboard readiness — 剪贴板 ✓";
 
     let evidence = match backend.write_text(marker) {
@@ -981,29 +993,31 @@ fn check_clipboard() -> CapabilityCheck {
         },
     };
 
-    // The clipboard belongs to the user, not to this probe. Whatever was there is put back, and a
-    // restore that failed is reported rather than assumed.
-    if before.is_empty() {
-        let _ = rust_widgets::set_clipboard_text("");
-    } else if rust_widgets::set_clipboard_text(&before) {
-        return CapabilityCheck::new(Capability::Clipboard, CheckStatus::Ready, evidence);
-    } else {
-        return CapabilityCheck::new(
-            Capability::Clipboard,
-            CheckStatus::NotVerified {
-                reason:
-                    "the probe wrote to the clipboard and the platform refused to restore what \
+    // The clipboard belongs to the user, not to this probe. Whatever text was there is put back,
+    // and a restore that failed is reported rather than assumed. `clipboard_text()` returning
+    // `None` is the honest "there was no text to preserve", so the probe clears its own marker
+    // rather than pretending it restored something it never saw.
+    if let Some(text) = before.as_deref().filter(|text| !text.is_empty()) {
+        if !rust_widgets::set_clipboard_text(text) {
+            return CapabilityCheck::new(
+                Capability::Clipboard,
+                CheckStatus::NotVerified {
+                    reason:
+                        "the probe wrote to the clipboard and the platform refused to restore what \
                          it found"
-                        .to_owned(),
-            },
-            evidence,
-        );
+                            .to_owned(),
+                },
+                evidence,
+            );
+        }
+        return CapabilityCheck::new(Capability::Clipboard, CheckStatus::Ready, evidence);
     }
 
+    let _ = rust_widgets::set_clipboard_text("");
     CapabilityCheck::new(
         Capability::Clipboard,
         CheckStatus::Ready,
-        format!("{evidence}; the clipboard was empty and is empty again"),
+        format!("{evidence}; the clipboard held no text and is empty again"),
     )
 }
 
@@ -1265,16 +1279,21 @@ fn check_watch() -> CapabilityCheck {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    let saw_change = reported
-        .iter()
-        .any(|event| matches!(event, WatchEvent::Changed { path, .. } if path == &changed));
+    let saw_change = reported.iter().find_map(|event| match event {
+        WatchEvent::Changed { path, kind } if path == &changed => Some(*kind),
+        _ => None,
+    });
 
     let missing = DirectoryWatch::start(scratch.path().join("not-there"), false, |_| true);
     let refused_missing = missing.is_err();
 
     let evidence = format!(
-        "a write in the watched directory produced {} event(s); watching a missing directory was {}",
+        "a write in the watched directory produced {} event(s){}; watching a missing directory was {}",
         reported.len(),
+        match saw_change {
+            Some(kind) => format!(", the file classified as {kind:?}"),
+            None => String::new(),
+        },
         if refused_missing {
             "refused"
         } else {
@@ -1282,7 +1301,7 @@ fn check_watch() -> CapabilityCheck {
         },
     );
 
-    if !saw_change {
+    if saw_change.is_none() {
         return CapabilityCheck::new(
             Capability::DirectoryWatch,
             CheckStatus::Gap {

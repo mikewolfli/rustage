@@ -39,6 +39,21 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [Two host-side workarounds migrated, `open_url` kept with a written reason, and one new upstream
+  request](log/log-20261015-4.md): `host::watch` moved onto the library's `ChangeKind` so a deletion
+  and a rename are observable (closing the input T03.05 needs, pinned by a test that could not have
+  passed before the re-pin), `host::clipboard` moved onto `clipboard_text() -> Option<String>`, and
+  `host::open_url` deliberately **kept** — the library's `open_external` is fire-and-forget and
+  exposes no handler-availability query, so adopting it would trade two verified probe facts for
+  nothing (principles #38/#45); the missing query is filed as an upstream request.
+- [The dependency re-pin, a closed editor gap, and a bounded session that now stops
+  itself](log/log-20261015-3.md): the dependency raised from `c957fdec` to `58012c05` — the revision
+  that implements every finding in `rw-feedback/` — with the build and all 510 tests passing
+  unchanged, the last `--probe-apis` gap closed by asserting the library's
+  `line_state_is_known`/`resolve_line_state` pair, the host probe's file-dialog check moved onto the
+  `capabilities().file_dialog` query, the bounded `--launch` session migrated from
+  `std::process::exit` onto the library's own `quit()`, and the five host-side workarounds the new
+  revision obsoletes registered as follow-up work rather than half-migrated.
 - [MS00 and MS01 acceptance review, a real Linux desktop session and a probe that ended its own
   report](log/log-20261015-1.md): the per-task re-check of all twenty-nine MS00/MS01 tasks against
   their acceptance lines, the six defects it found and fixed (the stage's own lint debt, the
@@ -111,19 +126,21 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 Upstream findings raised against [rust-widgets](https://github.com/mikewolfli/rust-widgets) are kept
 in [`rw-feedback/`](rw-feedback/feedback-20261013.md): the first file records what was verified and
-what, if anything, was requested upstream against the pinned revision; the second compares every one
-of those findings with the library's local `HEAD` (nine of them are already implemented there) and
-records the one new request — the GTK backend's `quit()` calls `gtk::main_quit()` with no
-thread check.
+what, if anything, was requested upstream against the pinned revision, and now carries a per-section
+status after the re-pin; the second compares every one of those findings with the library's local
+`HEAD` (all of them are implemented there, and the one new request — the GTK backend's `quit()`
+calling `gtk::main_quit()` with no thread check — is implemented too) and records which of them the
+2026-10-15 re-pin closed.
 
 ## Platform verification
 
 [Everything that needs a real machine or device](platform/verification.md) gathers the items that can
 only be settled on the platform itself — the three desktop hosts, the fifteen host-by-profile cells,
-the HarmonyOS 2in1 track, the performance baseline, and the upstream items that need re-checking after
-a re-pin — each with what is missing, the command to run, where the result goes, and a mark for the
-ones that already have real-machine evidence (the macOS baseline session, the Linux probes in both
-build shapes, both host builds, and the Windows cross-build).
+the HarmonyOS 2in1 track, the performance baseline, and the upstream items that needed re-checking
+after the 2026-10-15 re-pin (which has since been done, so what remains is the five host-side
+workarounds the new revision obsoletes) — each with what is missing, the command to run, where the
+result goes, and a mark for the ones that already have real-machine evidence (the macOS baseline
+session, the Linux probes in both build shapes, both host builds, and the Windows cross-build).
 
 ## Boundaries
 

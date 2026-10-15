@@ -9,11 +9,12 @@
 //! * **A write that did not happen is not a success.** `set_clipboard_text` returns `false` when
 //!   the platform could not take the text, and that is mapped to [`ClipboardWrite::Refused`] with
 //!   the reason named — never to a silent no-op (principle #22).
-//! * **An empty read is not the same as a failed read.** The library's `get_clipboard_text`
-//!   answers with an empty string both when the clipboard is empty and when it holds something
-//!   that is not text, so this module asks the *rich* backend first and only falls back to the
-//!   text accessor when there is no rich backend. [`ClipboardRead`] therefore keeps `Text`,
-//!   `NotText`, `Empty` and `Unavailable` apart instead of flattening all four into `""`.
+//! * **An empty read is not the same as a failed read.** The dependency's plain text accessor
+//!   answers with `None` both when the clipboard is empty and when it holds something that is not
+//!   text — it does not separate those two — so this module asks the *rich* backend first, which
+//!   can, and only falls back to the text accessor when there is no rich backend. [`ClipboardRead`]
+//!   therefore keeps `Text`, `NotText`, `Empty` and `Unavailable` apart wherever the backend lets it
+//!   instead of flattening every one of them into `""`.
 //!
 //! Reading is not a failure when the clipboard is empty: an empty clipboard is a fact about the
 //! user's session, not a defect. A read that *could not ask* the platform is
@@ -103,12 +104,13 @@ impl ClipboardHost for NativeClipboard {
                 },
                 None => ClipboardRead::Empty,
             },
-            // No rich backend: the text accessor is all there is. It cannot distinguish "no text"
-            // from "not text", so the two collapse into `Empty` — and this is where the collapsed
-            // answer came from, which the reason says rather than leaving the caller to guess.
-            None => match rust_widgets::get_clipboard_text() {
-                text if text.is_empty() => ClipboardRead::Empty,
-                text => ClipboardRead::Text(text),
+            // No rich backend: the text accessor is all there is. It answers `None` for "no text"
+            // and for "not text" alike, so those two collapse into `Empty` — and the accessor's
+            // `Option` says so, rather than the empty string a `String` accessor would have made
+            // indistinguishable from a genuine empty read.
+            None => match rust_widgets::clipboard_text() {
+                Some(text) => ClipboardRead::Text(text),
+                None => ClipboardRead::Empty,
             },
         }
     }

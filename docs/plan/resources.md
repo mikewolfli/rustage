@@ -100,16 +100,24 @@ ICO 与 SVG 解决不同问题。SVG 适合作为可编辑的矢量母版；ICO 
 工具栏小样已建立（详见 §7.5、§9.1、§16.2），因此**不能再把本文的核验事实读成"当前仍未接入"**；
 升级依赖修订后必须重新核验下表。
 
-本次读取的 rust-widgets 工作树干净，提交为：
+首次核验（2026-10-13）时读取的 rust-widgets 工作树干净，提交为：
 
 ```text
 c957fdec7f30cc1a526b7c898c0f44b458ef4a57
 ```
 
 以下源码路径均相对于 `rust-widgets` 仓库根目录。
-固定版本的在线证据入口：
-[rust-widgets 核验提交](https://github.com/mikewolfli/rust-widgets/tree/c957fdec7f30cc1a526b7c898c0f44b458ef4a57)。
+当前固定修订（2026-10-15 re-pin 后）的在线证据入口：
+[rust-widgets 核验提交](https://github.com/mikewolfli/rust-widgets/tree/58012c0508b2a4eb095e7623e685f5c9889e9835)。
 升级 GUI 库后必须重新核验，不以注释、历史白皮书或默认分支代替实际实现。
+
+**2026-10-15 re-pin 复核**：依赖从 `c957fdec` 升到 `58012c05`（见
+[第三次开发记录](../log/log-20261015-3.md)）。本次按同一入口复核两张快照的来源：token 契约源
+（上游 `tools/icon_tokens.txt`）与 Material Symbols 许可副本（上游 `tools/material_symbols/LICENSE`）
+的 sha256 与快照记录**逐字节一致**（`f28fbd03…` / `58d1e17f…`），且这两个修订之间的 8 个提交没有
+改动上游 `tools/` 目录，因此 token 集合与许可副本内容无需变更，只把修订字段
+（`upstream-tokens.json`、`host/icons/manifest.json`、`licenses/manifest.json` 与 `ATTRIBUTION.md`）
+更新到新修订。
 
 | 已核验事实 | 源码位置 | 对方案的影响 |
 |---|---|---|

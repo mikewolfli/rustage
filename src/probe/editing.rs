@@ -286,59 +286,72 @@ fn highlight_state() -> ProbeResult {
     )
 }
 
-/// The multi-line half of the highlight state, which is where the public surface stops answering.
+/// The multi-line half of the highlight state: the distinction the public surface used to merge.
 ///
 /// # What is observed
 ///
 /// `CodeEditor` keeps a per-line entry-state cache and fills it from the **paint** path
-/// (`prepare_visible_line_cache`), which walks the document with a real lexer and records how far
-/// it has proven the chain. Every public accessor reads that cache, and a line the walk has not
-/// reached reads back as [`LineState::Clean`] — the `Default` — rather than as "not computed".
+/// (`prepare_visible_line_cache`). [`CodeEditor::line_state`] reads that cache, and a line the walk
+/// has not reached reads back as [`LineState::Clean`] — the `Default` — which is the same value a
+/// genuinely clean line gives.
 ///
-/// `tokens_on_line` and `token_kind_at` are documented as demand-computed, but they seed the lexer
-/// with that same unproven entry state, so a line *inside* an open construct tokenizes as if the
-/// construct were not open.
+/// The pinned revision restores the missing distinction without changing the value type:
+/// [`CodeEditor::line_state_is_known`] reports whether the walk has **proven** the line, and
+/// [`CodeEditor::resolve_line_state`] advances the chain so the answer is real (paying a walk
+/// bounded by the distance from the last proven line, not by the document).
 ///
-/// # Why this is a gap and not a boundary
+/// # Why this is verified rather than a gap
 ///
-/// The library documents the precondition on `line_state` ("if the lexer has reached it"), so the
-/// accessor is not lying by its own contract. The gap is that the type cannot express the third
-/// fact: `LineState` has no "unknown", and no predicate asks whether a line was reached, so a host
-/// cannot tell "this line is not in a comment" from "this line has not been lexed". That is the
-/// success-shaped default principle #22 forbids, and the designer needs the answer for arbitrary
-/// lines — folding, indentation and an outline all ask about lines that are not on screen.
+/// The two facts a host must tell apart — "this line starts outside any construct" and "this line
+/// has not been lexed" — used to share one representation, the success-shaped default principle #22
+/// forbids. With the predicate and the resolver both present and answering correctly, a host can ask
+/// about any line, on screen or off, and get a dependable state; the designer's workaround (confine
+/// highlight queries to lines the paint path covered) is no longer needed.
 ///
-/// The host-side workaround is recorded with the finding: read highlight state only for lines the
-/// paint path has covered, or accept that off-screen answers are unproven.
+/// Filed as `feedback-20261013.md` §3 and closed by the revision this probe now runs against.
 fn multiline_highlight_state() -> ProbeResult {
-    const API: &str = "code_editor::CodeEditor::line_state (multi-line state)";
+    const API: &str = "code_editor::CodeEditor::line_state/line_state_is_known/resolve_line_state";
     let mut editor = CodeEditor::new(geometry());
     editor.set_language(LanguageId::Rust);
     editor.set_text("/* open\nstill\n*/\nfn x() {}\n");
 
-    let reported = editor.line_state(1);
-    let tokens = editor.tokens_on_line(1);
-    let carries_block_comment = tokens
-        .iter()
-        .any(|span| span.kind == TokenKind::BlockComment);
+    // An un-walked line still reads back the `Default`, but the predicate now says so rather than
+    // letting the two facts share one answer.
+    let unproven = editor.line_state(1);
+    let known_before = editor.line_state_is_known(1);
     require!(
-        reported == LineState::Clean && !carries_block_comment,
+        unproven == LineState::Clean && !known_before,
         FAMILY,
         API,
         format!(
-            "the observed limitation no longer holds: line 1 (inside `/* … */`) reported {reported:?} \
-             with tokens {tokens:?}; the designer's workaround and the upstream note must be revisited"
+            "line 1 (inside `/* … */`) has not been walked; expected the Clean default with an \
+             unknown predicate, got state {unproven:?} with line_state_is_known = {known_before}"
         )
     );
 
-    ProbeResult::gap(
+    // The dependable answer is reachable without the paint path reaching the line first.
+    let resolved = editor.resolve_line_state(1);
+    require!(
+        resolved == LineState::BlockComment && editor.line_state_is_known(1),
         FAMILY,
         API,
-        "an un-lexed line reads back as LineState::Clean and tokenizes without the multi-line state \
-         inherited from the lines above it; LineState has no \"unknown\", so a host cannot tell \
-         \"not computed\" from \"genuinely clean\". Library-layer gap: the host must confine \
-         highlight queries to lines the paint path has covered (or accept unproven answers). \
-         Filed in docs/rw-feedback/feedback-20261013.md",
+        format!(
+            "resolving line 1 inside `/* … */` should report BlockComment and prove the state, got \
+             {resolved:?} with line_state_is_known = {}",
+            editor.line_state_is_known(1)
+        )
+    );
+
+    ProbeResult::verified(
+        FAMILY,
+        API,
+        vec![
+            format!(
+                "an un-walked line reads {unproven:?} with line_state_is_known = {known_before}"
+            ),
+            "resolve_line_state(1) proves the state and reports BlockComment".to_string(),
+            "\"not computed\" and \"genuinely clean\" are now distinguishable".to_string(),
+        ],
     )
 }
 
@@ -523,28 +536,15 @@ mod tests {
     use super::probes;
     use crate::probe::ProbeOutcome;
 
-    /// The one known library-layer gap this family records.
+    /// Every editing probe is verified against the pinned revision.
     ///
-    /// Pinned by name so that closing it upstream (or changing it) fails this test and forces the
-    /// host workaround and the upstream note to be revisited, rather than the report quietly
-    /// keeping a stale finding.
-    const KNOWN_GAP: &str = "code_editor::CodeEditor::line_state (multi-line state)";
-
+    /// This family used to carry one library-layer gap: `line_state`'s multi-line state merged "not
+    /// lexed" with "genuinely clean". The revision this project now pins answers it
+    /// (`line_state_is_known` + `resolve_line_state`), so the probe asserts the distinction instead
+    /// of recording its absence. A regression that re-merged the two facts would fail here.
     #[test]
-    fn probes_are_verified_except_the_recorded_gap() {
-        let probes = probes();
-        let gaps: Vec<&str> = probes
-            .iter()
-            .filter(|probe| !probe.outcome.is_verified())
-            .map(|probe| probe.api)
-            .collect();
-        assert_eq!(
-            gaps,
-            vec![KNOWN_GAP],
-            "the set of open editing gaps changed"
-        );
-
-        for probe in probes.iter().filter(|probe| probe.api != KNOWN_GAP) {
+    fn every_editing_probe_is_verified() {
+        for probe in probes() {
             assert!(
                 matches!(probe.outcome, ProbeOutcome::Verified),
                 "editing probe {} was {:?}",

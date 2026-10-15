@@ -6,10 +6,15 @@
 //! T01.02 asks for file dialogs. What the pinned dependency offers, checked rather than assumed
 //! (`cargo run -- --probe-host`):
 //!
-//! * `rust_widgets::create_file_dialog` returns `0` — the address that means "no control was
-//!   created" — on every desktop backend of the pinned revision: the native choosers were removed
-//!   and the library paints every kind instead. A host cannot open the OS's own chooser.
-//! * `AssetWatcher`-style browsing does not exist either: the painted `FileDialog` is a **frame** —
+//! * The pinned revision now exposes the operating system's own chooser through
+//!   `rust_widgets::choose_path` (and the `open_path`/`save_path`/`select_directory` vocabulary it
+//!   fronts), and reports whether this backend has one **before** the call through
+//!   `platform::capabilities().file_dialog` (`false` on a state backend, `true` where a real toolkit
+//!   is behind it); the legacy `create_file_dialog` still returns `0` because the library now paints
+//!   every kind itself. This host has not yet adopted the native picker — it drives the painted
+//!   frame below, where the designer owns the list — so where a backend advertises one, presenting
+//!   it is registered as follow-up work rather than opened here.
+//! * The painted `FileDialog` is a **frame** —
 //!   title, mode, start directory, name filters, and the `accepted` / `rejected` /
 //!   `files_selected` signals — with no file list of its own. A host that owns a list reports
 //!   selection through `set_current_file`, and the dialog's own documentation says so.

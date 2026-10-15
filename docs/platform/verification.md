@@ -8,7 +8,8 @@
 > [支持矩阵](../plan/support-matrix.md)、[探针记录](../plan/host-probe.md)、
 > [基准环境](../plan/benchmark.md)、[资源与鸿蒙打包问题](../issues/issue-20261013.md)、
 > [第七次开发记录](../log/log-20261015-1.md)（MS00/MS01 验收复核）、
-> [第八次开发记录](../log/log-20261015-2.md)（Windows 交叉构建与 Wine 实测）。
+> [第八次开发记录](../log/log-20261015-2.md)（Windows 交叉构建与 Wine 实测）、
+> [第九次开发记录](../log/log-20261015-3.md)（依赖 re-pin 与两处探针更新）。
 
 ## 0. 状态词汇与三条口径
 
@@ -47,7 +48,7 @@
 | A1 | macOS 基线会话真实启动 | 一台 macOS + 图形会话 | `cargo run -- --launch --exit-after-ms 600` | ✅ 已验证 | [log-20261013-4 §16](../log/log-20261013-4.md)：后端 `cocoa`、模式 `NativeInteractive`、窗口 id 与几何为运行时返回值 |
 | A2 | 窗口真的**出现在屏幕上并接受输入**（三桌面各一次） | 人在屏幕前 | `cargo run -- --launch`，用鼠标点窗口、关窗口，记录 `run()` 返回与日志 | ⏳ 待真机 | 本机 Linux 与 macOS 都只到"窗口被创建、循环进入"；合成与输入无人确认（[log-20261015-1 §12.1](../log/log-20261015-1.md)） |
 | A3 | Linux 默认构建的 15 项探针 | 一台 Linux + 任意会话 | `cargo run -- --probe-host target/host` | ✅ 已验证 | [host-probe.md](../plan/host-probe.md) linux 六组 `probed`；`12 ready / 1 gap / 2 not-verified` |
-| A4 | Linux **原生** GTK 会话 | Linux + X11（本机有） | `cargo run --features linux-native -- --probe-host target/host` | ✅ 已验证 | [log-20261015-1 §7](../log/log-20261015-1.md)：后端 `gtk`、模式 `NativeInteractive`、窗口创建成功；`13 ready / 1 gap / 1 not-verified` |
+| A4 | Linux **原生** GTK 会话 | Linux + X11（本机有） | `cargo run --features linux-native -- --probe-host target/host` | ✅ 已验证 | [log-20261015-1 §7](../log/log-20261015-1.md)：后端 `gtk`、模式 `NativeInteractive`、窗口创建成功；re-pin 后重跑为 `13 ready / 0 gap / 2 not-verified`（[log-20261015-3](../log/log-20261015-3.md)） |
 | A5 | Linux **Wayland** 原生会话 | Wayland 会话（本机 `WAYLAND_DISPLAY` 为空） | 在 Wayland 桌面里用上游 `wayland-native` feature 重跑探针 | ⏳ 待真机 | 上游用 `wayland-native` 选择该后端；本机没有 Wayland 合成器 |
 | A6 | macOS 的 15 项探针 | 一台 macOS | `cargo run -- --probe-host target/host` | ⏳ 待真机 | [host-probe.md](../plan/host-probe.md) macOS 列全 `blocked` |
 | A7 | Windows 的 15 项探针 | 一台 Windows | `cargo run -- --probe-host target/host` | ⏳ 待真机 | 同上；Wine 下的结果不计（[规则 6](../plan/support-matrix.md)） |
@@ -105,12 +106,13 @@ profile 的交叉构建或设备运行。逐格补法是"在某一宿主上为�
 ## 5. 上游修好后必须用真机复核的条目
 
 本地 HEAD 已经实现了 [`feedback-20261015.md`](../rw-feedback/feedback-20261015.md) 第二节的全部条目；
-re-pin 之后，下列**只有在真机上才能确认**：
+re-pin 已于 2026-10-15 完成（依赖升到 `58012c05`，见 [log-20261015-3](../log/log-20261015-3.md)），
+因此下列项的"等 re-pin"前提已解除，剩下的只是**真机确认**：
 
 | # | 项 | 真机上要确认什么 | 状态 |
 |---|---|---|---|
-| E1 | 系统文件对话框（`choose_path`/`open_path`/`save_path`） | 三桌面上真的弹出系统选择器并能取消 | ⛔ 阻塞（等 re-pin + 真机）；固定修订上 `create_file_dialog` 在**每个桌面后端**都返回 0 |
-| E2 | `quit()` 跨线程停止 | 三桌面上从 watcher 线程结束会话，进程干净退出（不再是"到点强杀"） | ⛔ 阻塞（等 re-pin + 真机） |
+| E1 | 系统文件对话框（`choose_path`/`open_path`/`save_path`） | 三桌面上真的弹出系统选择器并能取消；探针现在读 `capabilities().file_dialog`（状态后端 false、原生后端 true） | ⏳ 待真机（re-pin 已完成） |
+| E2 | `quit()` 跨线程停止 | 三桌面上从 watcher 线程结束会话、进程干净退出：`--launch --exit-after-ms` 在原生会话上已实测 `LoopEnd::HostEnded` + 退出码 0（[log-20261015-3](../log/log-20261015-3.md)），macOS/Windows 待真机 | ⏳ 待真机（Linux 已验，macOS/Windows 待真机） |
 | E3 | 掩码输入的复制 | 真机剪贴板里拿到的是掩码而不是明文（Linux 剪贴板已可测，Windows/macOS 需真机） | ⏳ 待真机 |
 | E4 | 树的层级与就地改名 | 在真实窗口里展开/折叠、就地改名、滚动跟随 | ⏳ 待真机（还依赖 T04 的工作台） |
 | E5 | watcher 的删除/重命名事件 | 在真实文件系统（含网络盘/挂载点）上触发删除与改名 | ⏳ 待真机 |

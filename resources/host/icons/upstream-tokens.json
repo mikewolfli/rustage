@@ -2,7 +2,7 @@
   "schema_version": 1,
   "provider": "rust-widgets",
   "repository": "https://github.com/mikewolfli/rust-widgets",
-  "revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+  "revision": "58012c0508b2a4eb095e7623e685f5c9889e9835",
   "source": {
     "path": "tools/icon_tokens.txt",
     "sha256": "f28fbd03af556f408373251a9afc2d7bac0058964fd49c8c041a06cc15e9ea0d"

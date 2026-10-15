@@ -9,9 +9,10 @@
 //! pinned revision by `cargo run -- --probe-apis`, which reports the revision it ran against.
 //!
 //! **The event loop ends by itself here.** A window that only closes when a person clicks it cannot
-//! be evidence in a terminal session, so `run_loop` arms a quit request for `exit_after` before it
-//! enters the loop. That is a real end of a real loop — the alternative, skipping `run_loop` and
-//! printing "started", is the placeholder success this task forbids.
+//! be evidence in a terminal session, so `run_loop` asks the dependency to stop its own loop at
+//! `exit_after` — from the watcher thread, which the dependency's `quit()` accepts — before the loop
+//! ends. That is a real end of a real loop, not a process kill: the alternative, skipping `run_loop`
+//! and printing "started", is the placeholder success this task forbids.
 //!
 //! **What is not proven here.** Whether a window is composited, whether it accepts input, and how
 //! it behaves under a real display server or a remote session are host-platform facts that need a
@@ -25,7 +26,7 @@ use rust_widgets::platform::{RuntimeGuiMode, backend_name, runtime_gui_mode};
 use rust_widgets::widget::Window;
 use rust_widgets::widget::runtime;
 
-use super::error::{ExitCode, HostError, HostResult};
+use super::error::{HostError, HostResult};
 use super::log::{Level, emit, flush};
 use super::startup::{LoopEnd, StartupPlatform, StartupRequest};
 
@@ -79,24 +80,29 @@ impl StartupPlatform for NativePlatform {
             return Ok(LoopEnd::WindowClosed);
         }
 
-        // The bounded session cannot ask the loop to stop. The pinned revision documents that
-        // `quit()` only works on the thread that owns the GUI toolkit — off it, the call is
-        // skipped — and `[NSApplication run]` returns only when the application stops. So the
-        // deadline ends this process instead, and says so, rather than reporting a shutdown the
-        // toolkit never performed. The interactive path (no deadline) is the clean one.
+        // The revision can be asked to stop its loop from another thread: `quit()` records the
+        // request, and the loop's own frame tick performs the toolkit stop *on the loop thread*
+        // (the dependency's `platform::stop`). So the deadline is a real end of a real loop — the
+        // difference between a session that stopped and a process that was torn down — and the
+        // request is honoured on every backend, macOS included, because recording it is one atomic
+        // store and no toolkit call crosses a thread.
         let exit_after = request.exit_after;
         let _watcher = thread::spawn(move || {
             thread::sleep(exit_after);
+            let reader = rust_widgets::quit();
             emit(
-                Level::Warn,
+                Level::Info,
                 "host::platform",
                 &format!(
-                    "session deadline {exit_after:?} reached; ending the process because the pinned \
-                     revision's quit() is main-thread-only",
+                    "session deadline {exit_after:?} reached; asked the loop to stop ({})",
+                    if reader {
+                        "a loop is running and stops at its next frame"
+                    } else {
+                        "no loop had ticked yet; the request is recorded for the next loop"
+                    }
                 ),
             );
             flush();
-            std::process::exit(ExitCode::Ok.code());
         });
 
         emit(
@@ -105,7 +111,7 @@ impl StartupPlatform for NativePlatform {
             "entering the event loop for a bounded session",
         );
         rust_widgets::run();
-        Ok(LoopEnd::WindowClosed)
+        Ok(LoopEnd::HostEnded)
     }
 
     fn close_window(&mut self, window: u64) -> HostResult<()> {

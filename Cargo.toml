@@ -25,7 +25,7 @@ publish = false
 linux-native = ["rust_widgets/gtk-native"]
 
 [dependencies]
-rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "c957fdec7f30cc1a526b7c898c0f44b458ef4a57", default-features = false, features = ["desktop"] }
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "58012c0508b2a4eb095e7623e685f5c9889e9835", default-features = false, features = ["desktop"] }
 
 # The process tree cleanup T01.04 needs: signalling a *process group* and asking whether a pid is
 # alive are `kill(2)`, which the standard library does not expose. Declared for the targets that have

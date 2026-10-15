@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+    "revision": "58012c0508b2a4eb095e7623e685f5c9889e9835",
     "profile": "desktop"
   },
   "command": "cargo run -- --probe-host target/host",
@@ -130,7 +130,7 @@
       "group": "file",
       "status": "probed",
       "outcome": "gap",
-      "evidence": "native-file-dialog -> gap：固定修订在这三个桌面后端上不创建文件对话框控件（create_file_dialog 返回 0），因此拿不到系统自己的选择器；chooser-frame -> ready：挂载、Return 选中真实路径、Escape 取消、无选择时返回被拒；directory-watch -> ready：目录内一次写入产生 1 个事件，监听不存在的目录被明确拒绝"
+      "evidence": "native-file-dialog -> gap（默认构建）：探针不再调用旧的 create_file_dialog，而是问 `platform::capabilities().file_dialog`；状态后端报 false，因此本后端没有原生选择器、系统自己的选择器无法呈现，记 gap（同一条检查在 `--features linux-native` 构建上报 not-verified：原生后端报 true，选择器存在但为模态、需要人在屏幕前，探针不打开它）；chooser-frame -> ready：挂载、Return 选中真实路径、Escape 取消、无选择时返回被拒；directory-watch -> ready：目录内一次写入产生 1 个事件（该文件被归类为 Modified，取自依赖自己的 ChangeKind，删除与改名也因此可观察），监听不存在的目录被明确拒绝"
     },
     {
       "host": "linux",

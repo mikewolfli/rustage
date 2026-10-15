@@ -2,7 +2,7 @@
   "schema_version": 1,
   "upstream": {
     "name": "rust-widgets",
-    "revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+    "revision": "58012c0508b2a4eb095e7623e685f5c9889e9835",
     "token_contract": "upstream-tokens.json"
   },
   "note": "Host icon semantics for the designer. Icons either reference a pinned built-in token of the dependency or a monochrome source in custom/. The command-group and panel lists are checked against docs/plan/roadmap.md, so every entry of the roadmap ledger carries an explicit icon or no-icon decision.",

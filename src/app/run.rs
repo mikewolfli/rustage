@@ -62,8 +62,9 @@ pub fn run(command: Command) {
                 ..StartupRequest::default()
             };
             if !options.exit_after.is_zero() {
-                // Say what will happen before it does: a bounded session ends the process from a
-                // watcher thread, because the pinned revision cannot be asked to stop its loop.
+                // Say what will happen before it does: a bounded session asks the dependency to stop
+                // its own loop at the deadline (from a watcher thread; the dependency's `quit()`
+                // records the request and the loop stops at its next frame).
                 println!(
                     "launching the baseline session; it will end itself after {} ms",
                     options.exit_after.as_millis(),

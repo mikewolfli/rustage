@@ -8,7 +8,7 @@ Material Symbols, by Google LLC.
 * Upstream revision: `bd8cb85bd4bad964fe6918f79665bb40c3a8efef` (master, 2026-09-25)
 * License of the outline data: Apache License 2.0 (`LICENSE` in this directory)
 * Received through: [mikewolfli/rust-widgets](https://github.com/mikewolfli/rust-widgets)
-  at revision `c957fdec7f30cc1a526b7c898c0f44b458ef4a57` (`tools/material_symbols/`)
+  at revision `58012c0508b2a4eb095e7623e685f5c9889e9835` (`tools/material_symbols/`)
 
 The upstream repository ships no separate `NOTICE` file for this material
 (`tools/material_symbols/UPSTREAM_HAS_NO_NOTICE`), so the attribution above is recorded here and

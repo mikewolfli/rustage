@@ -101,7 +101,7 @@ pub trait StartupPlatform {
 pub enum LoopEnd {
     /// The loop returned because the window was closed: a clean end.
     WindowClosed,
-    /// The host ended the session itself at its deadline, because it cannot ask the loop to stop.
+    /// The host ended the session itself at its deadline, by asking the loop to stop.
     HostEnded,
 }
 

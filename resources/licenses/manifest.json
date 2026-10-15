@@ -12,7 +12,7 @@
         "repository": "https://github.com/google/material-design-icons",
         "revision": "bd8cb85bd4bad964fe6918f79665bb40c3a8efef",
         "received_through": "https://github.com/mikewolfli/rust-widgets",
-        "received_revision": "c957fdec7f30cc1a526b7c898c0f44b458ef4a57",
+        "received_revision": "58012c0508b2a4eb095e7623e685f5c9889e9835",
         "path": "tools/material_symbols/LICENSE",
         "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
       },

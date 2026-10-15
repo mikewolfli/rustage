@@ -19,21 +19,23 @@
 //!   coalesces per path within one [`DirectoryWatch::poll`], which makes "the same file may be
 //!   reported once per poll" the contract a consumer can rely on. It deliberately does **not**
 //!   deduplicate across polls: dropping the second of two genuine modifications would hide an edit.
-//! * **The OS's classification is passed through verbatim.** The dependency's event carries
-//!   `notify::EventKind` but does not re-export `notify`, so a host cannot match on it without
-//!   taking the `notify` crate as a second, drifting source of truth (principle #35). The spelling
-//!   is carried as text for diagnostics, and no `Created`/`Modified` distinction is invented.
+//! * **The change is classified in the dependency's own vocabulary.** The dependency reports each
+//!   change as a [`ChangeKind`] — `Created`, `Modified`, `Removed` or `Renamed` — and this adapter
+//!   carries that value through instead of re-spelling it as text (principle #35: one definition per
+//!   concept). A deletion and a rename are therefore observable, which is exactly what T03.05's
+//!   external-modification detection needs; before the re-pin this adapter could not promise a
+//!   `Removed` case because the dependency dropped deletions.
 //!
-//! **What this adapter cannot see.** The dependency emits events only for `Create` and `Modify`;
-//! deletions are dropped upstream, so "the file was deleted" and "the file was replaced" are not
-//! observable here. That gap is recorded in `docs/rw-feedback/feedback-20261013.md` and is why
-//! [`WatchEvent`] has no `Removed` variant to promise.
+//! **What this adapter still cannot see.** *Which* process made a change, and whether a change came
+//! from this designer or from outside it: the dependency reports a path and a kind, not an author.
+//! Attributing a change to a source is the host's policy (T03.05), and it is deliberately not baked
+//! into this adapter.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use rust_widgets::asset::{AssetEvent, AssetWatcher};
+use rust_widgets::asset::{AssetEvent, AssetWatcher, ChangeKind};
 
 /// Why a watch could not be started.
 #[derive(Debug)]
@@ -67,12 +69,12 @@ impl std::error::Error for WatchError {}
 /// One change the watcher reported.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum WatchEvent {
-    /// A watched path was created or modified.
+    /// A watched path changed.
     Changed {
         /// The absolute path the OS reported.
         path: PathBuf,
-        /// The OS's own classification, verbatim. Not interpreted — see the module documentation.
-        os_kind: String,
+        /// What happened to the path, in the dependency's own [`ChangeKind`] vocabulary.
+        kind: ChangeKind,
     },
     /// The watcher itself reported a problem. Delivered as an event because a watch that silently
     /// stops working is the failure this whole module exists to make visible.
@@ -137,12 +139,12 @@ impl DirectoryWatch {
     /// applies inside one callback, applied across the batch. Errors are reported in addition to
     /// changes and never replace one.
     pub fn poll(&self) -> Vec<WatchEvent> {
-        let mut changes: BTreeMap<PathBuf, String> = BTreeMap::new();
+        let mut changes: BTreeMap<PathBuf, ChangeKind> = BTreeMap::new();
         let mut errors: Vec<WatchEvent> = Vec::new();
         for event in self.watcher.poll_events() {
             match event {
                 AssetEvent::FileChanged { path, kind, .. } => {
-                    changes.insert(path, format!("{kind:?}"));
+                    changes.insert(path, kind);
                 }
                 AssetEvent::WatchError { error, path } => {
                     errors.push(WatchEvent::Error {
@@ -157,7 +159,7 @@ impl DirectoryWatch {
         }
         let mut events: Vec<WatchEvent> = changes
             .into_iter()
-            .map(|(path, os_kind)| WatchEvent::Changed { path, os_kind })
+            .map(|(path, kind)| WatchEvent::Changed { path, kind })
             .collect();
         events.append(&mut errors);
         events
@@ -177,6 +179,7 @@ impl fmt::Debug for DirectoryWatch {
 #[cfg(test)]
 mod tests {
     use super::{DirectoryWatch, WatchError, WatchEvent};
+    use rust_widgets::asset::ChangeKind;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -326,6 +329,65 @@ mod tests {
         assert_eq!(
             for_file, 1,
             "two writes before one poll must coalesce into one event, got {events:?}",
+        );
+    }
+
+    #[test]
+    fn a_creation_carries_a_kind_from_the_dependency_vocabulary() {
+        let sandbox = Sandbox::new("created");
+        let watch = DirectoryWatch::start(sandbox.path(), false, |_| true).expect("watchable");
+        let file = sandbox.path().join("new.json");
+
+        std::fs::write(&file, "{}").expect("writable");
+
+        let events = poll_until(&watch);
+        let kind = events.iter().find_map(|event| match event {
+            WatchEvent::Changed { path, kind } if path == &file => Some(*kind),
+            _ => None,
+        });
+        // A file that did not exist and now does is Created; a filesystem that also reports the
+        // write that followed it may classify that as Modified. Both are real answers. What this
+        // pins is that a genuine ChangeKind arrives rather than a blank, unclassified event.
+        assert!(
+            matches!(kind, Some(ChangeKind::Created | ChangeKind::Modified)),
+            "expected Created or Modified for {}, got {events:?}",
+            file.display(),
+        );
+    }
+
+    #[test]
+    fn a_deletion_is_observable_and_classified_as_removed() {
+        let sandbox = Sandbox::new("removed");
+        let watch = DirectoryWatch::start(sandbox.path(), false, |_| true).expect("watchable");
+        let file = sandbox.path().join("doomed.txt");
+
+        std::fs::write(&file, "here").expect("writable");
+        // Let the creation land first, so the removal below is its own batch rather than a
+        // classification the creation's own coalescing keeps.
+        let _ = poll_until(&watch);
+        std::thread::sleep(Duration::from_millis(150));
+
+        std::fs::remove_file(&file).expect("removable");
+
+        // Poll until the removal is reported. Before the re-pin this adapter could never answer
+        // `Removed`, because the dependency dropped deletion events; that is the gap this test
+        // now closes.
+        let deadline = Instant::now() + EVENT_DEADLINE;
+        let mut saw_removed = false;
+        while Instant::now() < deadline && !saw_removed {
+            saw_removed = watch.poll().iter().any(|event| {
+                matches!(
+                    event,
+                    WatchEvent::Changed { path, kind: ChangeKind::Removed } if path == &file
+                )
+            });
+            if !saw_removed {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        assert!(
+            saw_removed,
+            "a deleted file must be reported as Removed, not silently dropped",
         );
     }
 

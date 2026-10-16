@@ -134,9 +134,9 @@ pub(super) fn drop_entry(options: &crate::cli::DropEntryOptions) -> bool {
     };
 
     let resolution = if options.fix {
-        crate::project::format::Resolution::FixReferences
+        crate::project::record::format::Resolution::FixReferences
     } else {
-        crate::project::format::Resolution::Block
+        crate::project::record::format::Resolution::Block
     };
     let (removed, fixed) = match document.remove_entry(index, resolution) {
         Ok(outcome) => outcome,
@@ -291,9 +291,9 @@ pub(super) fn file_op(options: &crate::cli::FileOpOptions) -> bool {
 /// T03.04's subject, and the report says so.
 pub(super) fn edit(options: &crate::cli::EditOptions) -> bool {
     use crate::contracts::permission::PermissionGate;
-    use crate::project::batch::{Batch, Fingerprint, Plan, apply, store_of};
-    use crate::project::document::root_of;
-    use crate::project::page::PageDocument;
+    use crate::project::document::batch::{Batch, Fingerprint, Plan, apply, store_of};
+    use crate::project::document::buffer::root_of;
+    use crate::project::record::page::PageDocument;
 
     let root = match options.root.as_ref() {
         Some(directory) => match crate::host::paths::ProjectRoot::new(directory) {
@@ -444,11 +444,11 @@ pub(super) fn dependencies(options: &crate::cli::DependenciesOptions) -> bool {
     use crate::host::paths::ProjectRoot;
     use crate::host::permission::Scope;
     use crate::host::subprocess::{OwnedProcess, ProcessSpec};
-    use crate::project::dependencies::{
+    use crate::project::build::dependencies::{
         Digest, LOCKFILE_FILE_NAME, Lockfile, Resolution, Review, failure_reason,
         is_a_lockfile_disagreement, manifest_of, may_record_at,
     };
-    use crate::project::session::{TrustDecision, TrustQuestion};
+    use crate::project::lifecycle::session::{TrustDecision, TrustQuestion};
 
     if let Err(refusal) = manifest_of(&options.directory) {
         println!("rustage: {}", refusal.message());
@@ -474,7 +474,7 @@ pub(super) fn dependencies(options: &crate::cli::DependenciesOptions) -> bool {
     let permissions = PermissionService::new();
     let question = TrustQuestion::read(&root);
     println!("{}", question.ask());
-    let outcome = crate::project::session::answer(
+    let outcome = crate::project::lifecycle::session::answer(
         &question,
         &permissions,
         if options.trust {
@@ -645,7 +645,7 @@ pub(super) fn dependencies(options: &crate::cli::DependenciesOptions) -> bool {
 }
 
 /// How many packages a lockfile holds, for a line about a change.
-pub(super) fn packages_of(lockfile: &crate::project::dependencies::Lockfile) -> String {
+pub(super) fn packages_of(lockfile: &crate::project::build::dependencies::Lockfile) -> String {
     match lockfile.packages() {
         Some(packages) => format!("{packages} package(s)"),
         None => "absent".to_owned(),
@@ -653,8 +653,8 @@ pub(super) fn packages_of(lockfile: &crate::project::dependencies::Lockfile) -> 
 }
 
 pub(super) fn kit(options: &crate::cli::KitOptions) -> bool {
-    use crate::project::kit::{Found, Kit, Observed, Probe};
-    use crate::project::session::{TrustDecision, TrustQuestion};
+    use crate::project::build::kit::{Found, Kit, Observed, Probe};
+    use crate::project::lifecycle::session::{TrustDecision, TrustQuestion};
 
     let permissions = PermissionService::new();
     let kit = match Kit::read(&options.path) {
@@ -672,7 +672,7 @@ pub(super) fn kit(options: &crate::cli::KitOptions) -> bool {
     if options.diagnose {
         let question = TrustQuestion::read(kit.root());
         println!("{}", question.ask());
-        let outcome = crate::project::session::answer(
+        let outcome = crate::project::lifecycle::session::answer(
             &question,
             &permissions,
             if options.trust {
@@ -749,8 +749,8 @@ pub(super) fn ask_the_program(
     root: &crate::host::paths::ProjectRoot,
     command: &str,
     argument: Option<&str>,
-) -> crate::project::kit::Found {
-    use crate::project::kit::{Found, version_like};
+) -> crate::project::build::kit::Found {
+    use crate::project::build::kit::{Found, version_like};
 
     let mut spec = crate::host::subprocess::ProcessSpec::new(
         format!(
@@ -808,7 +808,7 @@ pub(super) fn workspace(options: &crate::cli::WorkspaceOptions) -> bool {
     use crate::cli::WorkspaceAction;
 
     let permissions = PermissionService::new();
-    let workspace = match crate::project::workspace::Workspace::read(&options.path) {
+    let workspace = match crate::project::build::workspace::Workspace::read(&options.path) {
         Ok(workspace) => workspace,
         Err(error) => {
             println!("rustage: {}", error.message());
@@ -877,7 +877,7 @@ pub(super) fn workspace(options: &crate::cli::WorkspaceOptions) -> bool {
             &workspace,
             &permissions,
             options,
-            crate::project::workspace::WorkspaceChange::Add {
+            crate::project::build::workspace::WorkspaceChange::Add {
                 name: name.clone(),
                 root: root.clone(),
             },
@@ -886,19 +886,19 @@ pub(super) fn workspace(options: &crate::cli::WorkspaceOptions) -> bool {
             &workspace,
             &permissions,
             options,
-            crate::project::workspace::WorkspaceChange::Remove { name: name.clone() },
+            crate::project::build::workspace::WorkspaceChange::Remove { name: name.clone() },
         ),
     }
 }
 
 /// Plans a member change, and carries it out when it was asked for.
 pub(super) fn change_members(
-    workspace: &crate::project::workspace::Workspace,
+    workspace: &crate::project::build::workspace::Workspace,
     permissions: &PermissionService,
     options: &crate::cli::WorkspaceOptions,
-    change: crate::project::workspace::WorkspaceChange,
+    change: crate::project::build::workspace::WorkspaceChange,
 ) -> bool {
-    use crate::project::session::{TrustDecision, TrustQuestion};
+    use crate::project::lifecycle::session::{TrustDecision, TrustQuestion};
 
     let plan = workspace.plan(change);
     for line in plan.render() {
@@ -911,7 +911,7 @@ pub(super) fn change_members(
 
     let question = TrustQuestion::read(workspace.root());
     println!("{}", question.ask());
-    let outcome = crate::project::session::answer(
+    let outcome = crate::project::lifecycle::session::answer(
         &question,
         permissions,
         if options.trust {
@@ -956,8 +956,8 @@ pub(super) fn change_members(
 /// person's own action, and what it writes is one document that did not exist. The directory has to
 /// be there, because a workspace is made by naming roots that are already there.
 pub(super) fn new_workspace(options: &crate::cli::NewWorkspaceOptions) -> bool {
-    use crate::project::create::{ProjectIds, SystemProjectIds};
-    use crate::project::workspace::Workspace;
+    use crate::project::build::workspace::Workspace;
+    use crate::project::lifecycle::create::{ProjectIds, SystemProjectIds};
 
     let name = options
         .name
@@ -975,7 +975,7 @@ pub(super) fn new_workspace(options: &crate::cli::NewWorkspaceOptions) -> bool {
         "workspace: {}",
         options
             .directory
-            .join(crate::project::workspace::WORKSPACE_FILE_NAME)
+            .join(crate::project::build::workspace::WORKSPACE_FILE_NAME)
             .display()
     );
     println!("name: {name}, identity: {id}");
@@ -1006,8 +1006,9 @@ pub(super) fn new_workspace(options: &crate::cli::NewWorkspaceOptions) -> bool {
 }
 
 /// This machine's workspace state: which member is active, per workspace.
-pub(super) fn workspace_state() -> Result<crate::project::workspace::WorkspaceState, String> {
-    use crate::project::workspace::WorkspaceState;
+pub(super) fn workspace_state() -> Result<crate::project::build::workspace::WorkspaceState, String>
+{
+    use crate::project::build::workspace::WorkspaceState;
 
     let directories = HostDirectories::from_environment()
         .map_err(|error| format!("this machine's configuration directory is unknown: {error}"))?;
@@ -1033,7 +1034,7 @@ pub(super) fn workspace_state() -> Result<crate::project::workspace::WorkspaceSt
 /// and the last line of the output is the project's own bytes compared with the ones read at the
 /// start — so "this did not clear my document" is shown rather than promised.
 pub(super) fn validate(options: &crate::cli::ValidateOptions) -> bool {
-    use crate::project::validate::{Reach, Scan, Validation};
+    use crate::project::lifecycle::validate::{Reach, Scan, Validation};
 
     let permissions = PermissionService::new();
     let mut session = match ProjectSession::open(&options.path) {
@@ -1109,7 +1110,9 @@ pub(super) fn validate(options: &crate::cli::ValidateOptions) -> bool {
     }
 
     if let Some(record) = options.record.as_deref() {
-        if let Err(refusal) = crate::project::validate::may_record_at(session.file(), record) {
+        if let Err(refusal) =
+            crate::project::lifecycle::validate::may_record_at(session.file(), record)
+        {
             println!("rustage: {}", refusal.message());
             return stop_without_writing(&session, &before);
         }
@@ -1412,8 +1415,11 @@ pub(super) fn configuration(options: &crate::cli::ConfigurationOptions) -> bool 
     // The store is the environment, which is what this host has; a credential whose material lives in
     // the system keyring is reported as unavailable rather than as missing, and never as a value.
     let store = crate::host::network::default_store();
-    let views =
-        crate::project::configuration::credentials(document, store.as_ref(), SystemTime::now());
+    let views = crate::project::build::configuration::credentials(
+        document,
+        store.as_ref(),
+        SystemTime::now(),
+    );
     if views.is_empty() {
         println!("credentials: no service of this project names one");
     } else {

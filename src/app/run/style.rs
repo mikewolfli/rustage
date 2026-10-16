@@ -10,7 +10,7 @@ use super::*;
 
 /// Drives the schema-driven property editor (task T11.01).
 pub(super) fn property_editor(options: &crate::cli::PropertyEditorOptions) -> bool {
-    use crate::app::property_editor::{Editor, Schema};
+    use crate::app::style::property_editor::{Editor, Schema};
     use crate::contracts::model::PropertyName;
 
     let mut editor = Editor::new(Schema::new());
@@ -139,7 +139,7 @@ pub(super) fn parse_node_property(
 
 /// Inspects a multi-selection's shared properties and resets an override (task T11.02).
 pub(super) fn multi_property(options: &crate::cli::MultiPropertyOptions) -> bool {
-    use crate::app::multi_property::{Common, NodeProperties, common, reset, value_of};
+    use crate::app::style::multi_property::{Common, NodeProperties, common, reset, value_of};
     use crate::contracts::model::PropertyName;
 
     let mut nodes: Vec<NodeProperties> = Vec::new();
@@ -165,7 +165,7 @@ pub(super) fn multi_property(options: &crate::cli::MultiPropertyOptions) -> bool
                     Some(index) => {
                         nodes[index].settings.insert(
                             name.clone(),
-                            crate::app::multi_property::Setting { value, origin },
+                            crate::app::style::multi_property::Setting { value, origin },
                         );
                         Ok(vec![format!("set {} ({})", name.as_str(), origin.name())])
                     }
@@ -215,7 +215,7 @@ pub(super) fn multi_property(options: &crate::cli::MultiPropertyOptions) -> bool
 }
 
 pub(super) fn css(options: &crate::cli::CssOptions) -> bool {
-    use crate::app::css_view::{Css, Element, compute};
+    use crate::app::style::css_view::{Css, Element, compute};
 
     let mut source = String::new();
     let mut element: Option<Element> = None;
@@ -282,7 +282,7 @@ pub(super) fn css(options: &crate::cli::CssOptions) -> bool {
 }
 
 pub(super) fn tokens(options: &crate::cli::TokensOptions) -> bool {
-    use crate::app::design_tokens::{TokenSet, Usage, rename_references};
+    use crate::app::style::design_tokens::{TokenSet, Usage, rename_references};
 
     let mut set = TokenSet::new();
     let mut usages: Vec<Usage> = Vec::new();
@@ -378,8 +378,8 @@ pub(super) fn tokens(options: &crate::cli::TokensOptions) -> bool {
 
 pub(super) fn parse_design_token(
     argument: &str,
-) -> Result<(crate::app::design_tokens::TokenKind, String, String), String> {
-    use crate::app::design_tokens::TokenKind;
+) -> Result<(crate::app::style::design_tokens::TokenKind, String, String), String> {
+    use crate::app::style::design_tokens::TokenKind;
     let parts = argument.split_once(':').and_then(|(kind, rest)| {
         rest.split_once(':')
             .map(|(name, value)| (kind, name, value))
@@ -396,7 +396,7 @@ pub(super) fn parse_design_token(
 }
 
 pub(super) fn define_token_from(
-    set: &mut crate::app::design_tokens::TokenSet,
+    set: &mut crate::app::style::design_tokens::TokenSet,
     argument: &str,
 ) -> Result<String, String> {
     let (kind, name, value) = parse_design_token(argument)?;
@@ -425,7 +425,7 @@ pub(super) fn parse_theme(argument: &str) -> Result<(String, Vec<(String, String
 }
 
 pub(super) fn define_theme_from(
-    set: &mut crate::app::design_tokens::TokenSet,
+    set: &mut crate::app::style::design_tokens::TokenSet,
     argument: &str,
 ) -> Result<String, String> {
     let (name, values) = parse_theme(argument)?;
@@ -434,9 +434,9 @@ pub(super) fn define_theme_from(
 }
 
 pub(super) fn states(options: &crate::cli::StatesOptions) -> bool {
-    use crate::app::css_view::{Css, Element, State, compute_in};
-    use crate::app::design_tokens::TokenSet;
-    use crate::app::interaction_states::{Report, compare, literal, preview, resolved};
+    use crate::app::style::css_view::{Css, Element, State, compute_in};
+    use crate::app::style::design_tokens::TokenSet;
+    use crate::app::style::interaction_states::{Report, compare, literal, preview, resolved};
 
     let mut source = String::new();
     let mut element: Option<Element> = None;
@@ -579,9 +579,9 @@ pub(super) fn states(options: &crate::cli::StatesOptions) -> bool {
 
 pub(super) fn parse_motion(
     argument: &str,
-    effect: crate::app::motion::Effect,
-) -> Result<crate::app::motion::Motion, String> {
-    use crate::app::motion::{Easing, Motion, Timing};
+    effect: crate::app::style::motion::Effect,
+) -> Result<crate::app::style::motion::Motion, String> {
+    use crate::app::style::motion::{Easing, Motion, Timing};
     let parts: Vec<&str> = argument.split(':').collect();
     if parts.len() != 4 {
         return Err(format!(
@@ -604,7 +604,7 @@ pub(super) fn parse_motion(
 }
 
 pub(super) fn motion(options: &crate::cli::MotionOptions) -> bool {
-    use crate::app::motion::{Capability, Control, Easing, Effect, Timeline};
+    use crate::app::style::motion::{Capability, Control, Easing, Effect, Timeline};
 
     let mut capability = Capability::new();
     let mut timeline = Timeline::new();
@@ -733,9 +733,9 @@ pub(super) fn motion(options: &crate::cli::MotionOptions) -> bool {
 pub(super) fn style(options: &crate::cli::StyleOptions) -> bool {
     use std::collections::BTreeMap;
 
-    use crate::app::css_view::{Css, Element};
-    use crate::app::design_tokens::TokenSet;
-    use crate::app::style_emit::{Input, Mode, emit, migrate};
+    use crate::app::style::css_view::{Css, Element};
+    use crate::app::style::design_tokens::TokenSet;
+    use crate::app::style::style_emit::{Input, Mode, emit, migrate};
 
     let mut source = String::new();
     let mut element: Option<Element> = None;
@@ -852,10 +852,10 @@ pub(super) fn style(options: &crate::cli::StyleOptions) -> bool {
 }
 
 pub(super) fn style_boundary(options: &crate::cli::StyleBoundaryOptions) -> bool {
-    use crate::app::css_view::{Css, Element};
-    use crate::app::design_tokens::TokenSet;
-    use crate::app::style_boundary::{Level, Session, contrast, meets};
-    use crate::app::style_emit::Mode;
+    use crate::app::style::css_view::{Css, Element};
+    use crate::app::style::design_tokens::TokenSet;
+    use crate::app::style::style_boundary::{Level, Session, contrast, meets};
+    use crate::app::style::style_emit::Mode;
 
     let mut session = Session::new(TokenSet::new());
     let mut source = String::new();
@@ -986,7 +986,7 @@ pub(super) fn style_boundary(options: &crate::cli::StyleBoundaryOptions) -> bool
 
 /// The selection and any resets in a report.
 pub(super) fn render_multi(
-    nodes: &[crate::app::multi_property::NodeProperties],
+    nodes: &[crate::app::style::multi_property::NodeProperties],
     resets: &[String],
 ) -> Vec<String> {
     let mut lines = vec![format!("nodes: {}", nodes.len())];
@@ -1008,11 +1008,11 @@ pub(super) fn parse_setting(
     (
         crate::contracts::model::PropertyName,
         crate::contracts::model::PropertyValue,
-        crate::app::layout_plan::Origin,
+        crate::app::layout::layout_plan::Origin,
     ),
     String,
 > {
-    use crate::app::layout_plan::Origin;
+    use crate::app::layout::layout_plan::Origin;
     use crate::contracts::model::{PropertyName, PropertyValue};
 
     let fields: Vec<&str> = argument.splitn(3, ':').collect();
@@ -1037,12 +1037,12 @@ pub(super) fn parse_reset(
     argument: &str,
 ) -> Result<
     (
-        crate::app::layout_plan::Origin,
+        crate::app::layout::layout_plan::Origin,
         Option<crate::contracts::model::PropertyValue>,
     ),
     String,
 > {
-    use crate::app::layout_plan::Origin;
+    use crate::app::layout::layout_plan::Origin;
     use crate::contracts::model::PropertyValue;
 
     let (origin, fallback) = match argument.split_once(':') {

@@ -9,10 +9,10 @@
 use super::*;
 
 pub(super) fn parse_data_value(
-    kind: Option<&crate::app::data_model::FieldKind>,
+    kind: Option<&crate::app::data::data_model::FieldKind>,
     text: &str,
 ) -> Result<crate::contracts::model::PropertyValue, String> {
-    use crate::app::data_model::FieldKind;
+    use crate::app::data::data_model::FieldKind;
     use crate::contracts::model::PropertyValue;
     Ok(match kind {
         Some(FieldKind::Integer) => PropertyValue::Integer(
@@ -47,7 +47,7 @@ pub(super) fn render_data_value(value: &crate::contracts::model::PropertyValue) 
 }
 
 pub(super) fn data(options: &crate::cli::DataOptions) -> bool {
-    use crate::app::data_model::{
+    use crate::app::data::data_model::{
         Data, DataField, Dataset, FieldKind, Schema, active, secrets, validate,
     };
 
@@ -216,8 +216,8 @@ pub(super) fn data(options: &crate::cli::DataOptions) -> bool {
 }
 
 pub(super) fn binding(options: &crate::cli::BindingOptions) -> bool {
-    use crate::app::binding::{Binding, Conversion, Direction, Environment, Graph, SlotKind};
-    use crate::app::data_model::{DataField, FieldKind, Schema};
+    use crate::app::data::binding::{Binding, Conversion, Direction, Environment, Graph, SlotKind};
+    use crate::app::data::data_model::{DataField, FieldKind, Schema};
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::PropertyName;
 
@@ -382,8 +382,8 @@ pub(super) fn binding(options: &crate::cli::BindingOptions) -> bool {
 }
 
 pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
-    use crate::app::data_model::{Data, DataField, FieldKind};
-    use crate::app::events::{EventDecl, Registry, Trigger, Wiring, fire, status};
+    use crate::app::data::data_model::{Data, DataField, FieldKind};
+    use crate::app::data::events::{EventDecl, Registry, Trigger, Wiring, fire, status};
     use crate::contracts::identity::NodeId;
 
     let mut registry = Registry::new();
@@ -570,9 +570,9 @@ pub(super) fn parse_capability(text: &str) -> Option<crate::contracts::permissio
 }
 
 pub(super) fn dispatch_actions(options: &crate::cli::DispatchOptions) -> bool {
-    use crate::app::binding::Environment;
-    use crate::app::data_model::Schema;
-    use crate::app::dispatch::{Action, Dispatcher};
+    use crate::app::data::binding::Environment;
+    use crate::app::data::data_model::Schema;
+    use crate::app::data::dispatch::{Action, Dispatcher};
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::PropertyName;
     use crate::contracts::permission::{PermissionGate, Principal};
@@ -596,14 +596,13 @@ pub(super) fn dispatch_actions(options: &crate::cli::DispatchOptions) -> bool {
                             Ok(kind) => {
                                 let line =
                                     format!("slot {node}.{} : {}", property.as_str(), kind.name());
-                                dispatcher
-                                    .environment
-                                    .slots
-                                    .push(crate::app::binding::SlotKind {
+                                dispatcher.environment.slots.push(
+                                    crate::app::data::binding::SlotKind {
                                         node: NodeId::from_raw(node),
                                         property,
                                         kind,
-                                    });
+                                    },
+                                );
                                 Ok(vec![line])
                             }
                             Err(reason) => Err(reason),
@@ -759,7 +758,7 @@ pub(super) fn dispatch_actions(options: &crate::cli::DispatchOptions) -> bool {
 }
 
 pub(super) fn routes(options: &crate::cli::RoutesOptions) -> bool {
-    use crate::app::routes::{Navigator, Route, Window};
+    use crate::app::data::routes::{Navigator, Route, Window};
 
     let mut navigator = Navigator::new();
     let mut window: Option<Window> = None;
@@ -856,7 +855,7 @@ pub(super) fn routes(options: &crate::cli::RoutesOptions) -> bool {
 pub(super) fn machine(options: &crate::cli::MachineOptions) -> bool {
     use std::collections::BTreeMap;
 
-    use crate::app::state_machine::{Answer, Interaction, Machine, Mode, Session, send};
+    use crate::app::data::state_machine::{Answer, Interaction, Machine, Mode, Session, send};
 
     let mut machine = Machine::new();
     let mut session: Option<Session> = None;
@@ -967,7 +966,7 @@ pub(super) fn add_transition(
     rest: &str,
     from: &str,
     on: &str,
-    machine: &mut crate::app::state_machine::Machine,
+    machine: &mut crate::app::data::state_machine::Machine,
 ) -> Result<Vec<String>, String> {
     let (to, guard) = match rest.split_once(':') {
         Some((to, guard)) => (to, Some(guard.to_owned())),
@@ -982,7 +981,7 @@ pub(super) fn add_transition(
     );
     machine
         .transitions
-        .push(crate::app::state_machine::Transition {
+        .push(crate::app::data::state_machine::Transition {
             from: from.to_owned(),
             on: on.to_owned(),
             to: to.to_owned(),
@@ -991,8 +990,8 @@ pub(super) fn add_transition(
     Ok(vec![line])
 }
 
-pub(super) fn parse_outcome(text: &str) -> Option<crate::app::adapters::Outcome> {
-    use crate::app::adapters::Outcome;
+pub(super) fn parse_outcome(text: &str) -> Option<crate::app::data::adapters::Outcome> {
+    use crate::app::data::adapters::Outcome;
     let (kind, rest) = text.split_once(':').unwrap_or((text, ""));
     Some(match kind {
         "ok" => Outcome::Ok(rest.to_owned()),
@@ -1004,7 +1003,7 @@ pub(super) fn parse_outcome(text: &str) -> Option<crate::app::adapters::Outcome>
 }
 
 pub(super) fn adapter(options: &crate::cli::AdapterOptions) -> bool {
-    use crate::app::adapters::{
+    use crate::app::data::adapters::{
         Availability, Cancel, Kind, Outcome, Policy, Request, attempt, run,
     };
     use crate::contracts::permission::{PermissionGate, Principal};
@@ -1062,9 +1061,9 @@ pub(super) fn adapter(options: &crate::cli::AdapterOptions) -> bool {
             "run" => match &request {
                 Some(request) => {
                     let mut adapter = if live.is_empty() {
-                        crate::app::adapters::Adapter::sample(&sample)
+                        crate::app::data::adapters::Adapter::sample(&sample)
                     } else {
-                        crate::app::adapters::Adapter::live_owned(&live)
+                        crate::app::data::adapters::Adapter::live_owned(&live)
                     };
                     match run(
                         &mut adapter,
@@ -1087,9 +1086,9 @@ pub(super) fn adapter(options: &crate::cli::AdapterOptions) -> bool {
                         Err(_) => return report(format!("{argument:?} is not a number")),
                     };
                     let mut adapter = if live.is_empty() {
-                        crate::app::adapters::Adapter::sample(&sample)
+                        crate::app::data::adapters::Adapter::sample(&sample)
                     } else {
-                        crate::app::adapters::Adapter::live_owned(&live)
+                        crate::app::data::adapters::Adapter::live_owned(&live)
                     };
                     let outcomes = attempt(&mut adapter, request, &cancel, Policy::new(attempts));
                     let mut lines: Vec<String> = outcomes
@@ -1151,8 +1150,8 @@ pub(super) fn adapter(options: &crate::cli::AdapterOptions) -> bool {
 pub(super) fn session_log(options: &crate::cli::SessionLogOptions) -> bool {
     use std::collections::BTreeMap;
 
-    use crate::app::session_log::{Log, Loop, Origin, Transform, run_vector};
-    use crate::app::state_machine::{Answer, Machine, Mode, Session};
+    use crate::app::data::session_log::{Log, Loop, Origin, Transform, run_vector};
+    use crate::app::data::state_machine::{Answer, Machine, Mode, Session};
 
     let mut log = Log::new();
     let mut machine = Machine::new();

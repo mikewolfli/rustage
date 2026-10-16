@@ -13,7 +13,9 @@ pub(super) fn language(options: &crate::cli::LanguageOptions) -> bool {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use crate::app::language::{Capabilities, Capability, Launcher, Services, StartupFailure};
+    use crate::app::language::session::{
+        Capabilities, Capability, Launcher, Services, StartupFailure,
+    };
 
     /// What the command line has told the launcher to do.
     #[derive(Default)]
@@ -112,7 +114,7 @@ pub(super) fn language(options: &crate::cli::LanguageOptions) -> bool {
 
 /// Synchronises documents and converts positions (task T07.02).
 pub(super) fn protocol(options: &crate::cli::ProtocolOptions) -> bool {
-    use crate::app::protocol::{Sync, to_offset, to_units};
+    use crate::app::language::protocol::{Sync, to_offset, to_units};
 
     let mut sync = Sync::new();
     for op in &options.ops {
@@ -205,8 +207,8 @@ pub(super) fn protocol(options: &crate::cli::ProtocolOptions) -> bool {
 /// A change from `<uri>:<version>:<sl>,<sc>:<el>,<ec>=<text>`.
 pub(super) fn parse_change(
     argument: &str,
-) -> Result<(String, u64, crate::app::protocol::Change), String> {
-    use crate::app::protocol::{Change, Range};
+) -> Result<(String, u64, crate::app::language::protocol::Change), String> {
+    use crate::app::language::protocol::{Change, Range};
     let (spec, text) = argument
         .split_once('=')
         .ok_or_else(|| format!("{argument:?} has no =<text>"))?;
@@ -233,7 +235,9 @@ pub(super) fn parse_change(
 }
 
 /// A position from `<line>,<char>`.
-pub(super) fn parse_position(text: &str) -> Result<crate::app::protocol::Position, String> {
+pub(super) fn parse_position(
+    text: &str,
+) -> Result<crate::app::language::protocol::Position, String> {
     let (line, character) = text
         .split_once(',')
         .ok_or_else(|| format!("{text:?} is not <line>,<char>"))?;
@@ -243,12 +247,14 @@ pub(super) fn parse_position(text: &str) -> Result<crate::app::protocol::Positio
     let character: u32 = character
         .parse()
         .map_err(|_| format!("{character:?} is not a character"))?;
-    Ok(crate::app::protocol::Position::new(line, character))
+    Ok(crate::app::language::protocol::Position::new(
+        line, character,
+    ))
 }
 
 /// Drives completion freshness (task T07.03).
 pub(super) fn features(options: &crate::cli::FeaturesOptions) -> bool {
-    use crate::app::features::{CompletionItem, Completions, Delivery, Response};
+    use crate::app::language::features::{CompletionItem, Completions, Delivery, Response};
 
     let mut completions = Completions::new(1);
     for op in &options.ops {
@@ -313,8 +319,8 @@ pub(super) fn features(options: &crate::cli::FeaturesOptions) -> bool {
 /// A response from `<id>:<version>:<label>,<label>`.
 pub(super) fn parse_response(
     argument: &str,
-) -> Result<(crate::app::features::Request, Vec<String>), String> {
-    use crate::app::features::Request;
+) -> Result<(crate::app::language::features::Request, Vec<String>), String> {
+    use crate::app::language::features::Request;
     let (id, rest) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} has no version"))?;
@@ -337,8 +343,8 @@ pub(super) fn parse_response(
 
 /// Answers navigation queries and shows the outline (task T07.04).
 pub(super) fn navigation(options: &crate::cli::NavigationOptions) -> bool {
-    use crate::app::language::{Capabilities, Capability};
-    use crate::app::navigation::{Navigation, Query, Target};
+    use crate::app::language::navigation::{Navigation, Query, Target};
+    use crate::app::language::session::{Capabilities, Capability};
 
     let mut capabilities = Capabilities::all();
     let mut nav = Navigation::new(capabilities.clone());
@@ -436,8 +442,10 @@ pub(super) fn navigation(options: &crate::cli::NavigationOptions) -> bool {
 }
 
 /// A symbol from `<uri>:<name>:<kind>:<start>:<end>:<name_start>:<name_end>`.
-pub(super) fn parse_symbol(argument: &str) -> Result<crate::app::navigation::Symbol, String> {
-    use crate::app::navigation::{Span, Symbol, SymbolKind};
+pub(super) fn parse_symbol(
+    argument: &str,
+) -> Result<crate::app::language::navigation::Symbol, String> {
+    use crate::app::language::navigation::{Span, Symbol, SymbolKind};
     // The uri has colons, so the last six fields are name, kind, start, end, name_start, name_end.
     let fields: Vec<&str> = argument.rsplitn(6, ':').collect();
     let [name_end, name_start, end, start, kind, name_and_uri] = fields.as_slice() else {
@@ -465,13 +473,13 @@ pub(super) fn parse_symbol(argument: &str) -> Result<crate::app::navigation::Sym
 
 /// Drives diagnostics, tokens and guarded code actions (task T07.05).
 pub(super) fn diagnostics(options: &crate::cli::DiagnosticsOptions) -> bool {
-    use crate::app::diagnostics::{
+    use crate::app::language::diagnostics::{
         CodeAction, Diagnostic, DiagnosticSet, Diagnostics, SemanticToken, SemanticTokens, Tokens,
         apply_action,
     };
-    use crate::app::features::{Delivery, Response};
-    use crate::project::conflict::Writability;
-    use crate::project::protection::{ProtectedRegion, WriteGuard};
+    use crate::app::language::features::{Delivery, Response};
+    use crate::project::document::conflict::Writability;
+    use crate::project::text::protection::{ProtectedRegion, WriteGuard};
 
     let mut diagnostics = Diagnostics::new(1);
     let mut tokens = Tokens::new(1);
@@ -593,9 +601,9 @@ pub(super) fn diagnostics(options: &crate::cli::DiagnosticsOptions) -> bool {
 pub(super) fn workspace_edit(options: &crate::cli::WorkspaceEditOptions) -> bool {
     use std::collections::BTreeMap;
 
-    use crate::app::workspace_edit::{OpenDocument, WorkspaceEdit, commit, review};
-    use crate::project::conflict::Writability;
-    use crate::project::protection::{ProtectedRegion, WriteGuard};
+    use crate::app::language::workspace_edit::{OpenDocument, WorkspaceEdit, commit, review};
+    use crate::project::document::conflict::Writability;
+    use crate::project::text::protection::{ProtectedRegion, WriteGuard};
 
     let mut edit = WorkspaceEdit::new("edit");
     let mut documents: BTreeMap<String, OpenDocument> = BTreeMap::new();
@@ -682,8 +690,8 @@ pub(super) fn workspace_edit(options: &crate::cli::WorkspaceEditOptions) -> bool
 
 /// Shows schema documentation and target-relative completion (task T07.07).
 pub(super) fn schema(options: &crate::cli::SchemaOptions) -> bool {
-    use crate::app::highlight::Language;
-    use crate::app::schema_docs::{Catalog, Target};
+    use crate::app::editor::highlight::Language;
+    use crate::app::language::schema_docs::{Catalog, Target};
 
     let mut catalog = Catalog::new(Language::Css);
     let mut target = Target::new("default", Vec::new());
@@ -755,7 +763,7 @@ pub(super) fn schema(options: &crate::cli::SchemaOptions) -> bool {
 
 /// Runs the language-service failure regression (task T07.08).
 pub(super) fn health(options: &crate::cli::HealthOptions) -> bool {
-    use crate::app::service_health::{Scenario, run};
+    use crate::app::language::service_health::{Scenario, run};
 
     let scenarios = if options.scenarios.is_empty() {
         Scenario::ALL.to_vec()
@@ -786,9 +794,11 @@ pub(super) fn health(options: &crate::cli::HealthOptions) -> bool {
 
 /// Shows hints, lenses and hierarchies (task T07.09).
 pub(super) fn hints(options: &crate::cli::HintsOptions) -> bool {
-    use crate::app::features::{Delivery, Response};
-    use crate::app::hints::{HierarchyKind, HierarchyNode, Hint, HintKind, Hints, hierarchy};
-    use crate::app::language::{Capabilities, Capability};
+    use crate::app::language::features::{Delivery, Response};
+    use crate::app::language::hints::{
+        HierarchyKind, HierarchyNode, Hint, HintKind, Hints, hierarchy,
+    };
+    use crate::app::language::session::{Capabilities, Capability};
 
     let mut capabilities = Capabilities::all();
     let mut layer = Hints::new(1);
@@ -883,9 +893,12 @@ pub(super) fn hints(options: &crate::cli::HintsOptions) -> bool {
 }
 
 /// A hint from `inlay`'s `<s>:<e>:<label>` or `lens`'s `<s>:<e>:<label>:<id>:<title>`.
-pub(super) fn parse_hint(verb: &str, argument: &str) -> Result<crate::app::hints::Hint, String> {
-    use crate::app::hints::{Hint, LensCommand};
-    use crate::app::navigation::Span;
+pub(super) fn parse_hint(
+    verb: &str,
+    argument: &str,
+) -> Result<crate::app::language::hints::Hint, String> {
+    use crate::app::language::hints::{Hint, LensCommand};
+    use crate::app::language::navigation::Span;
     if verb == "inlay" {
         let fields: Vec<&str> = argument.splitn(3, ':').collect();
         let [start, end, label] = fields.as_slice() else {
@@ -907,9 +920,9 @@ pub(super) fn parse_hint(verb: &str, argument: &str) -> Result<crate::app::hints
 
 /// Rebuilds the analysis configuration after a member/feature/target/Kit switch (task T07.10).
 pub(super) fn analysis(options: &crate::cli::AnalysisOptions) -> bool {
-    use crate::app::analysis_config::{Analysis, Selection, Trust};
-    use crate::app::diagnostics::DiagnosticSet;
-    use crate::app::features::{Delivery, Response};
+    use crate::app::language::analysis_config::{Analysis, Selection, Trust};
+    use crate::app::language::diagnostics::DiagnosticSet;
+    use crate::app::language::features::{Delivery, Response};
 
     let mut analysis = Analysis::new();
     let mut selection = Selection::new("app", "x86_64-unknown-linux-gnu");

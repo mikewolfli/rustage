@@ -38,7 +38,7 @@ import { checkResources } from './check-resources.mjs';
 
 const UNVERIFIED = [
   'No window has displayed the icon strip: the controls, the geometry and the theme switch are '
-    + 'covered by the crate\'s own tests (src/app/toolbar.rs), but a platform window needs a display '
+    + 'covered by the crate\'s own tests (src/app/shell/toolbar.rs), but a platform window needs a display '
     + 'session the resource tooling does not have.',
   'DPI handling, RTL mirroring, focus/hover rendering and assistive-technology readout are not '
     + 'verified here; the crate tests cover size, the disabled state and a forced-colour mode.',

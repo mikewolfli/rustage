@@ -14,7 +14,7 @@ use super::*;
 /// `splice`, `reassembled` is still 0 and `additions` grew by one byte, so "the whole text was not
 /// cloned" is a number on the line rather than a claim.
 pub(super) fn text(options: &crate::cli::TextOptions) -> bool {
-    use crate::project::text::TextStore;
+    use crate::project::text::piece_table::TextStore;
 
     let initial = match &options.file {
         Some(file) => match std::fs::read_to_string(file) {
@@ -87,7 +87,7 @@ pub(super) fn text(options: &crate::cli::TextOptions) -> bool {
 /// line reads `not lexed yet`, never `clean`, and the tail after an edit that changes an end state is
 /// re-lexed by the next `step`.
 pub(super) fn highlight(options: &crate::cli::HighlightOptions) -> bool {
-    use crate::app::highlight::{Highlights, Language, Theme};
+    use crate::app::editor::highlight::{Highlights, Language, Theme};
 
     let language = options
         .language
@@ -169,8 +169,8 @@ pub(super) fn highlight(options: &crate::cli::HighlightOptions) -> bool {
 
 /// The highlight cache's own report.
 pub(super) fn highlight_report(
-    highlights: &crate::app::highlight::Highlights,
-    theme: &crate::app::highlight::Theme,
+    highlights: &crate::app::editor::highlight::Highlights,
+    theme: &crate::app::editor::highlight::Theme,
 ) -> bool {
     println!("theme: {}", theme.name());
     for line in highlights.render(theme) {
@@ -184,7 +184,7 @@ pub(super) fn highlight_report(
 /// A `mark` is placed by the same conversion a `visual` lookup uses, which is the acceptance: the
 /// cursor, a diagnostic and a protected region cannot disagree about where a character is.
 pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
-    use crate::app::coordinates::{Coordinates, Mark, Metrics};
+    use crate::app::editor::coordinates::{Coordinates, Mark, Metrics};
 
     // Lines given as `line:` build the document; a file replaces it; everything else is an action.
     let mut lines: Vec<String> = Vec::new();
@@ -253,7 +253,7 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
                 Some((row, column)) => match (row.parse::<usize>(), column.parse::<u32>()) {
                     (Ok(row), Ok(column)) => {
                         let offset = coordinates
-                            .offset_at(crate::app::coordinates::Visual::new(row, column));
+                            .offset_at(crate::app::editor::coordinates::Visual::new(row, column));
                         Ok(format!("row {row} col {column} → offset {offset}"))
                     }
                     _ => Err(format!("{argument:?} is not <row>:<column>")),
@@ -297,7 +297,7 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
 
 /// The conversion's own report.
 pub(super) fn coordinates_report(
-    coordinates: &crate::app::coordinates::Coordinates,
+    coordinates: &crate::app::editor::coordinates::Coordinates,
     reason: &str,
 ) -> bool {
     if !reason.is_empty() {
@@ -316,8 +316,8 @@ pub(super) fn coordinates_report(
 /// whole keystroke back rather than one caret's share of it, and an edit that would land inside a
 /// character is refused whole, so `text:` never shows half a character.
 pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
-    use crate::app::editing::{Carets, Editor, PAIRS, Selection, matching_bracket};
-    use crate::project::text::TextStore;
+    use crate::app::editor::editing::{Carets, Editor, PAIRS, Selection, matching_bracket};
+    use crate::project::text::piece_table::TextStore;
 
     // Lines given as `line:` build the document; a file replaces it; everything else is an action.
     let mut lines: Vec<String> = Vec::new();
@@ -451,8 +451,8 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
 }
 
 /// Parses an `o1:o2:...` argument into carets, one per offset.
-pub(super) fn carets_of(argument: &str) -> Result<crate::app::editing::Carets, String> {
-    use crate::app::editing::{Carets, Selection};
+pub(super) fn carets_of(argument: &str) -> Result<crate::app::editor::editing::Carets, String> {
+    use crate::app::editor::editing::{Carets, Selection};
 
     let mut selections = Vec::new();
     for number in argument.split(':') {
@@ -477,8 +477,8 @@ pub(super) fn single_char(argument: &str) -> Option<char> {
 
 /// The text store's and editor's own report.
 pub(super) fn edit_report(
-    store: &crate::project::text::TextStore,
-    editor: &crate::app::editing::Editor,
+    store: &crate::project::text::piece_table::TextStore,
+    editor: &crate::app::editor::editing::Editor,
     reason: &str,
 ) -> bool {
     if !reason.is_empty() {
@@ -502,8 +502,8 @@ pub(super) fn edit_report(
 /// default. The decoration — visible whitespace, the gutter, fold regions and a minimap — is printed
 /// from the same text, so the view cannot disagree with the file it was read from.
 pub(super) fn editor_view(options: &crate::cli::EditorViewOptions) -> bool {
-    use crate::app::editor_view::{FoldKind, View, fold_regions, minimap};
-    use crate::project::text_file::{Ending, TextFile};
+    use crate::app::editor::editor_view::{FoldKind, View, fold_regions, minimap};
+    use crate::project::text::text_file::{Ending, TextFile};
 
     // `line:` operations build an in-memory file; `--file` reads bytes; the rest are actions.
     let mut lines: Vec<String> = Vec::new();
@@ -627,8 +627,8 @@ pub(super) fn window_of(argument: &str) -> Result<(usize, usize, Option<usize>),
 /// negative case for every door. A refused write is the guard doing its job, not a command failure:
 /// the exit code is non-zero only when an operation itself is malformed.
 pub(super) fn write_guard(options: &crate::cli::WriteGuardOptions) -> bool {
-    use crate::project::conflict::Writability;
-    use crate::project::protection::{ProtectedRegion, Write, WriteGuard, WriteSource};
+    use crate::project::document::conflict::Writability;
+    use crate::project::text::protection::{ProtectedRegion, Write, WriteGuard, WriteSource};
 
     let mut regions: Vec<ProtectedRegion> = Vec::new();
     let mut writability = Writability::Writable;
@@ -704,12 +704,12 @@ pub(super) fn source_and_write(
     replacement: bool,
 ) -> Result<
     (
-        crate::project::protection::WriteSource,
-        crate::project::protection::Write,
+        crate::project::text::protection::WriteSource,
+        crate::project::text::protection::Write,
     ),
     String,
 > {
-    use crate::project::protection::{Write, WriteSource};
+    use crate::project::text::protection::{Write, WriteSource};
 
     let source = WriteSource::from_name(verb).expect("the caller passes a write source name");
     if replacement {
@@ -738,7 +738,7 @@ pub(super) fn three_numbers(argument: &str) -> Result<(usize, usize, usize), Str
 /// The report names the tier, the size boundaries it used, how much of the document the highlight
 /// cache keeps, and every feature with `on` or `off — <reason>`; a degradation always has a reason.
 pub(super) fn scale(options: &crate::cli::ScaleOptions) -> bool {
-    use crate::app::scale::{Cancellation, Limits, Scale, read_cancellable};
+    use crate::app::editor::scale::{Cancellation, Limits, Scale, read_cancellable};
 
     // `line:` builds a document; `fill:`/`long-line:` synthesise one; `--file` reads one.
     let mut lines: Vec<String> = Vec::new();
@@ -815,11 +815,11 @@ pub(super) fn scale(options: &crate::cli::ScaleOptions) -> bool {
 
 /// Expands a language snippet, walks its placeholders, and surrounds a selection (task T06.09).
 pub(super) fn snippet(options: &crate::cli::SnippetOptions) -> bool {
-    use crate::app::editing::Editor;
-    use crate::app::snippets::{Session, Snippet, surround_selection};
-    use crate::project::conflict::Writability;
-    use crate::project::protection::{ProtectedRegion, WriteGuard};
-    use crate::project::text::TextStore;
+    use crate::app::editor::editing::Editor;
+    use crate::app::editor::snippets::{Session, Snippet, surround_selection};
+    use crate::project::document::conflict::Writability;
+    use crate::project::text::piece_table::TextStore;
+    use crate::project::text::protection::{ProtectedRegion, WriteGuard};
 
     let mut store = TextStore::new(String::new());
     let mut editor = Editor::new();
@@ -994,12 +994,12 @@ pub(super) fn snippet(options: &crate::cli::SnippetOptions) -> bool {
 
 /// Places carets from a `cursor`/`select`/`add-caret`/`add-select` operation.
 pub(super) fn place_carets(
-    editor: &mut crate::app::editing::Editor,
+    editor: &mut crate::app::editor::editing::Editor,
     text: &str,
     verb: &str,
     argument: &str,
 ) -> Result<(), String> {
-    use crate::app::editing::{Carets, Selection};
+    use crate::app::editor::editing::{Carets, Selection};
     let selection = match verb {
         "cursor" | "add-caret" => match argument.parse::<usize>() {
             Ok(at) => Selection::caret(at),
@@ -1022,7 +1022,7 @@ pub(super) fn place_carets(
 
 /// Replays the editing regression scenarios and rechecks the size boundaries (task T06.08).
 pub(super) fn regression(options: &crate::cli::RegressionOptions) -> bool {
-    use crate::app::regression::{Scenario, boundaries, run};
+    use crate::app::editor::regression::{Scenario, boundaries, run};
 
     let mut ok = true;
     println!("size boundaries:");
@@ -1061,8 +1061,8 @@ pub(super) fn regression(options: &crate::cli::RegressionOptions) -> bool {
 
 /// Grows a selection, keeps edit locations, and toggles display elements (task T06.10).
 pub(super) fn structural(options: &crate::cli::StructuralOptions) -> bool {
-    use crate::app::editing::Selection;
-    use crate::app::structural::{Bookmarks, Capability, Toggle, Toggles, expand};
+    use crate::app::editor::editing::Selection;
+    use crate::app::editor::structural::{Bookmarks, Capability, Toggle, Toggles, expand};
 
     let mut text = String::new();
     let mut selection = Selection::caret(0);
@@ -1156,7 +1156,7 @@ pub(super) fn structural(options: &crate::cli::StructuralOptions) -> bool {
                 None => Err(format!("{argument:?} is not a display toggle")),
             },
             "baseline" => {
-                toggles.set_baseline(crate::app::diff::Revision::new(
+                toggles.set_baseline(crate::app::search::diff::Revision::new(
                     "baseline",
                     unescape(argument),
                 ));
@@ -1199,8 +1199,8 @@ pub(super) fn place_selection(
     text: &str,
     verb: &str,
     argument: &str,
-) -> Result<crate::app::editing::Selection, String> {
-    use crate::app::editing::Selection;
+) -> Result<crate::app::editor::editing::Selection, String> {
+    use crate::app::editor::editing::Selection;
     if verb == "cursor" {
         let at = argument
             .parse::<usize>()

@@ -10,16 +10,16 @@ use super::*;
 
 /// Resolves a command through the typed registry (task T05.01).
 ///
-/// The registry is the only door: a [`Call`](crate::app::command::Call) becomes an
-/// [`Invocation`](crate::app::command::Invocation) only through `Registry::resolve`, which checks that
+/// The registry is the only door: a [`Call`](crate::app::commands::command::Call) becomes an
+/// [`Invocation`](crate::app::commands::command::Invocation) only through `Registry::resolve`, which checks that
 /// the command is known, available in this context, authorized, and given valid arguments — in that
 /// order, because "not available" is a more useful answer than "one argument would have been wrong"
 /// for a command that was never going to run. With no id, every registered command is listed.
 pub(super) fn resolve_command(options: &crate::cli::CommandOptions) -> bool {
-    use crate::app::command::{Call, Context};
+    use crate::app::commands::command::{Call, Context};
     use crate::contracts::permission::EffectClass;
 
-    let registry = crate::app::command::built_in();
+    let registry = crate::app::commands::command::built_in();
 
     let Some(id) = &options.id else {
         println!("{} command(s):", registry.len());
@@ -103,9 +103,9 @@ pub(super) fn resolve_command(options: &crate::cli::CommandOptions) -> bool {
 /// resolves to a command, waits for more keys, is suppressed, or is unbound — and each is reported as
 /// itself rather than as a success.
 pub(super) fn keys(options: &crate::cli::KeysOptions) -> bool {
-    use crate::app::shortcuts::{Chord, Key, Resolution, Scene};
+    use crate::app::commands::shortcuts::{Chord, Key, Resolution, Scene};
 
-    let keymap = crate::app::shortcuts::built_in();
+    let keymap = crate::app::commands::shortcuts::built_in();
     let Some(press) = &options.press else {
         println!("{} binding(s):", keymap.len());
         for binding in keymap.bindings() {
@@ -176,8 +176,8 @@ pub(super) fn keys(options: &crate::cli::KeysOptions) -> bool {
 /// two leaves may share an id, and a leaf marked planned must not name one that works. A problem is
 /// printed with the menu path, so a report points at the item rather than at the file.
 pub(super) fn menu() -> bool {
-    let registry = crate::app::command::built_in();
-    let menus = crate::app::menu::built_in();
+    let registry = crate::app::commands::command::built_in();
+    let menus = crate::app::commands::menu::built_in();
     let mut problems = Vec::new();
     for menu in &menus {
         for line in menu.render() {
@@ -202,11 +202,11 @@ pub(super) fn menu() -> bool {
 /// reason rather than a grey row. An empty query lists every command, which is what makes a new
 /// command discoverable from the keyboard; a non-empty query that matches nothing is a finding.
 pub(super) fn palette(options: &crate::cli::PaletteOptions) -> bool {
-    use crate::app::command::Context;
-    use crate::app::palette::{Recents, help_for, search};
+    use crate::app::commands::command::Context;
+    use crate::app::commands::palette::{Recents, help_for, search};
     use crate::contracts::permission::EffectClass;
 
-    let registry = crate::app::command::built_in();
+    let registry = crate::app::commands::command::built_in();
 
     if let Some(id) = &options.help_for {
         return match help_for(&registry, id) {
@@ -263,8 +263,8 @@ pub(super) fn palette(options: &crate::cli::PaletteOptions) -> bool {
 /// layout changes applied: a panel whose service this host does not have is never shown, and hiding
 /// and showing a panel restores the size and focus it had.
 pub(super) fn workbench(options: &crate::cli::WorkbenchOptions) -> bool {
-    use crate::app::panels::{PanelError, built_in as panels_built_in};
-    use crate::app::workbench::{Mode, Workbench};
+    use crate::app::shell::panels::{PanelError, built_in as panels_built_in};
+    use crate::app::shell::workbench::{Mode, Workbench};
     use std::collections::BTreeSet;
 
     let mut workbench = Workbench::new();
@@ -329,7 +329,7 @@ pub(super) fn workbench(options: &crate::cli::WorkbenchOptions) -> bool {
 /// them: skipping one is `apply-none`, a choice, and it is recorded in the history so a later "why is
 /// this one missing" has an answer.
 pub(super) fn operation(options: &crate::cli::OperationOptions) -> bool {
-    use crate::app::operations::{BatchPreview, Choice, History, Operation, Verdict};
+    use crate::app::commands::operations::{BatchPreview, Choice, History, Operation, Verdict};
     use crate::contracts::permission::EffectClass;
     use std::collections::BTreeSet;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -408,10 +408,10 @@ pub(super) fn operation(options: &crate::cli::OperationOptions) -> bool {
 /// (the palette searches the registry itself). A new area re-verifies by being added to one of the
 /// three tables — there is no per-area checklist to remember.
 pub(super) fn audit() -> bool {
-    let registry = crate::app::command::built_in();
-    let menus = crate::app::menu::built_in();
-    let keymap = crate::app::shortcuts::built_in();
-    let report = crate::app::audit::audit(&registry, &menus, &keymap);
+    let registry = crate::app::commands::command::built_in();
+    let menus = crate::app::commands::menu::built_in();
+    let keymap = crate::app::commands::shortcuts::built_in();
+    let report = crate::app::commands::audit::audit(&registry, &menus, &keymap);
     for line in report.render() {
         println!("{line}");
     }
@@ -419,10 +419,10 @@ pub(super) fn audit() -> bool {
     // T04.08: every offer (toolbar or key) has both a way to see it and a way to reach it.
     let sets = ["design", "code", "debug", "welcome"]
         .into_iter()
-        .map(crate::app::chrome::toolbar_for)
+        .map(crate::app::shell::chrome::toolbar_for)
         .collect::<Vec<_>>();
     let slices: Vec<&[String]> = sets.iter().map(Vec::as_slice).collect();
-    let reach = crate::app::audit::discoverability(&registry, &menus, &slices, &keymap);
+    let reach = crate::app::commands::audit::discoverability(&registry, &menus, &slices, &keymap);
     for line in reach.render() {
         println!("{line}");
     }
@@ -442,7 +442,7 @@ pub(super) fn audit() -> bool {
 /// the document itself closed. Every operation is applied in order; an operation that names a tab
 /// that is not there is reported and stops the run, so a script cannot silently do nothing.
 pub(super) fn tabs(options: &crate::cli::TabsOptions) -> bool {
-    use crate::app::tabs::Tabs;
+    use crate::app::shell::tabs::Tabs;
 
     let mut tabs = Tabs::new(options.limit);
     for op in &options.ops {
@@ -510,7 +510,7 @@ pub(super) fn tabs(options: &crate::cli::TabsOptions) -> bool {
 }
 
 /// Prints the strip as it stands and reports why the script stopped.
-pub(super) fn tabs_fail(tabs: &crate::app::tabs::Tabs, reason: &str) -> bool {
+pub(super) fn tabs_fail(tabs: &crate::app::shell::tabs::Tabs, reason: &str) -> bool {
     println!("rustage: {reason}");
     for line in tabs.render() {
         println!("{line}");
@@ -525,7 +525,7 @@ pub(super) fn tabs_fail(tabs: &crate::app::tabs::Tabs, reason: &str) -> bool {
 /// script and prints the area as it stands, so a story that goes wrong says where it went wrong
 /// instead of a success shape around a half-run script (principle #22).
 pub(super) fn groups(options: &crate::cli::GroupsOptions) -> bool {
-    use crate::app::groups::{Axis, Direction, GroupId, Groups};
+    use crate::app::shell::groups::{Axis, Direction, GroupId, Groups};
 
     let mut area = Groups::new(options.limit);
     for op in &options.ops {
@@ -645,7 +645,7 @@ pub(super) fn groups(options: &crate::cli::GroupsOptions) -> bool {
 }
 
 /// Prints the editor area as it stands and reports why the script stopped.
-pub(super) fn groups_fail(area: &crate::app::groups::Groups, reason: &str) -> bool {
+pub(super) fn groups_fail(area: &crate::app::shell::groups::Groups, reason: &str) -> bool {
     println!("rustage: {reason}");
     for line in area.render() {
         println!("{line}");
@@ -655,10 +655,10 @@ pub(super) fn groups_fail(area: &crate::app::groups::Groups, reason: &str) -> bo
 
 /// Copies, round-trips or pastes one clipboard payload (task T05.06).
 pub(super) fn clipboard(options: &crate::cli::ClipboardOptions) -> bool {
-    use crate::app::clipboard::{CopySubtree, Pasted, Payload};
+    use crate::app::commands::clipboard::{CopySubtree, Pasted, Payload};
     use crate::contracts::identity::{IdAllocator, NodeId};
-    use crate::project::document::root_of;
-    use crate::project::page::PageDocument;
+    use crate::project::document::buffer::root_of;
+    use crate::project::record::page::PageDocument;
 
     let payload = if let Some(text) = &options.text {
         Payload::Text(text.clone())
@@ -709,7 +709,7 @@ pub(super) fn clipboard(options: &crate::cli::ClipboardOptions) -> bool {
     );
 
     if options.roundtrip {
-        match crate::app::clipboard::decode(&encoded, options.limit) {
+        match crate::app::commands::clipboard::decode(&encoded, options.limit) {
             Ok(back) if back == payload => {
                 println!("round-trip: the payload decoded to itself");
             }
@@ -769,9 +769,9 @@ pub(super) fn clipboard(options: &crate::cli::ClipboardOptions) -> bool {
 /// are still there afterwards. The run still exits non-zero so the refusal is not mistaken for a
 /// success.
 pub(super) fn layout(options: &crate::cli::LayoutOptions) -> bool {
-    use crate::app::groups::{Axis, Groups};
-    use crate::app::layout::Layouts;
-    use crate::app::panels::built_in;
+    use crate::app::shell::groups::{Axis, Groups};
+    use crate::app::shell::layout::Layouts;
+    use crate::app::shell::panels::built_in;
     use std::collections::BTreeSet;
 
     let services: BTreeSet<String> = options.services.iter().cloned().collect();
@@ -871,11 +871,11 @@ pub(super) fn layout(options: &crate::cli::LayoutOptions) -> bool {
 /// Places windows and floating panels across displays, and reconciles them (task T04.06).
 ///
 /// The display set is an input because the pinned platform exposes no display enumeration (see
-/// [`crate::app::windows`] and `feedback-20261015.md` §十二): the caller plays the platform's part.
+/// [`crate::app::shell::windows`] and `feedback-20261015.md` §十二): the caller plays the platform's part.
 /// With no `--display` named, one documented stand-in display is used so the command is usable from
 /// a terminal, and that is said out loud rather than left to look like a real reading.
 pub(super) fn windows(options: &crate::cli::WindowsOptions) -> bool {
-    use crate::app::windows::{Display, DisplayId, Displays, Rect, WindowId, Windows};
+    use crate::app::shell::windows::{Display, DisplayId, Displays, Rect, WindowId, Windows};
 
     let mut displays = if options.displays.is_empty() {
         println!(
@@ -1025,8 +1025,8 @@ pub(super) fn windows(options: &crate::cli::WindowsOptions) -> bool {
 /// with no way to reach either, so the property holds by construction; the script prints the state
 /// after the notices so it can be read off.
 pub(super) fn chrome(options: &crate::cli::ChromeOptions) -> bool {
-    use crate::app::chrome::{Breadcrumb, Chrome};
-    use crate::app::command::{Context, built_in as registry};
+    use crate::app::commands::command::{Context, built_in as registry};
+    use crate::app::shell::chrome::{Breadcrumb, Chrome};
     use crate::contracts::permission::EffectClass;
 
     let registry = registry();
@@ -1139,9 +1139,9 @@ pub(super) fn chrome(options: &crate::cli::ChromeOptions) -> bool {
 /// With a width, the toolbar is split into what fits and what overflows — the narrow-window case
 /// (T04.08): a cramped window moves buttons into a "more" menu rather than clipping one.
 pub(super) fn chrome_report(
-    chrome: &crate::app::chrome::Chrome,
-    registry: &crate::app::command::Registry,
-    context: &crate::app::command::Context,
+    chrome: &crate::app::shell::chrome::Chrome,
+    registry: &crate::app::commands::command::Registry,
+    context: &crate::app::commands::command::Context,
     width: Option<u32>,
 ) -> bool {
     for line in chrome.render() {
@@ -1156,7 +1156,7 @@ pub(super) fn chrome_report(
             }
         }
         Some(width) => {
-            let (shown, overflowed) = crate::app::chrome::fit_toolbar(&entries, width);
+            let (shown, overflowed) = crate::app::shell::chrome::fit_toolbar(&entries, width);
             for entry in shown {
                 println!("  {}", entry.render());
             }
@@ -1173,8 +1173,10 @@ pub(super) fn chrome_report(
 }
 
 /// The focus target an area name asks for. The design and code modes name the canvas and the editor.
-pub(super) fn target_of(name: &str) -> Option<crate::app::focus::Target> {
-    use crate::app::focus::Target::{Canvas, Editor, Inspector, Outline, Status, Tabs, Welcome};
+pub(super) fn target_of(name: &str) -> Option<crate::app::commands::focus::Target> {
+    use crate::app::commands::focus::Target::{
+        Canvas, Editor, Inspector, Outline, Status, Tabs, Welcome,
+    };
     Some(match name {
         "welcome" => Welcome,
         "canvas" | "design" => Canvas,
@@ -1203,9 +1205,9 @@ pub(super) fn severity_of(name: &str) -> Option<crate::host::notify::Severity> {
 /// A repeated id stops the walk instead of looping, so a document that somehow names one node twice
 /// cannot make a copy run forever.
 pub(super) fn subtree_of(
-    page: &crate::project::page::PageDocument,
+    page: &crate::project::record::page::PageDocument,
     root: crate::contracts::identity::NodeId,
-) -> Option<Vec<crate::project::page::PageNode>> {
+) -> Option<Vec<crate::project::record::page::PageNode>> {
     use std::collections::BTreeSet;
 
     let mut out = Vec::new();
@@ -1230,13 +1232,13 @@ pub(super) fn subtree_of(
 /// not fall through, which is what keeps one press from running two things. The context menu and the
 /// toolbar both ask the registry, so they grey the same items with the same reasons.
 pub(super) fn focus(options: &crate::cli::FocusOptions) -> bool {
-    use crate::app::command::Context;
-    use crate::app::focus::{Target, menu_entries, press, toolbar_entries};
-    use crate::app::shortcuts::Chord;
+    use crate::app::commands::command::Context;
+    use crate::app::commands::focus::{Target, menu_entries, press, toolbar_entries};
+    use crate::app::commands::shortcuts::Chord;
     use crate::contracts::permission::EffectClass;
 
-    let registry = crate::app::command::built_in();
-    let keymap = crate::app::shortcuts::built_in();
+    let registry = crate::app::commands::command::built_in();
+    let keymap = crate::app::commands::shortcuts::built_in();
     let target = match options.target.as_str() {
         "welcome" => Target::Welcome,
         "canvas" => Target::Canvas,
@@ -1296,14 +1298,14 @@ pub(super) fn focus(options: &crate::cli::FocusOptions) -> bool {
         // A refusal is a finding (the convention `--command` also uses); a consumed key is not.
         return matches!(
             route,
-            crate::app::focus::Route::Ran { .. }
-                | crate::app::focus::Route::Suppressed { .. }
-                | crate::app::focus::Route::Pending { .. }
+            crate::app::commands::focus::Route::Ran { .. }
+                | crate::app::commands::focus::Route::Suppressed { .. }
+                | crate::app::commands::focus::Route::Pending { .. }
         );
     }
 
     let entries = match &options.menu {
-        Some(title) => match crate::app::menu::built_in()
+        Some(title) => match crate::app::commands::menu::built_in()
             .into_iter()
             .find(|menu| menu.title() == title)
         {
@@ -1318,7 +1320,11 @@ pub(super) fn focus(options: &crate::cli::FocusOptions) -> bool {
         },
         None => {
             println!("toolbar:");
-            toolbar_entries(&registry, &crate::app::focus::built_in_toolbar(), &context)
+            toolbar_entries(
+                &registry,
+                &crate::app::commands::focus::built_in_toolbar(),
+                &context,
+            )
         }
     };
     let ok = entries.iter().all(|entry| entry.is_enabled()) || entries.is_empty();

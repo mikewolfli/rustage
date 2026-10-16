@@ -10,41 +10,25 @@
 //!
 //! The layers are separate on purpose:
 //!
-//! * [`json`] reads and writes JSON without losing members it does not know.
-//! * [`format`] says which members a version 1 document has, interprets them, and enforces the
-//!   version policy (a version this build does not know is readable and never written, decision
+//! * [`record::json`] reads and writes JSON without losing members it does not know.
+//! * [`record::format`] says which members a version 1 document has, interprets them, and enforces
+//!   the version policy (a version this build does not know is readable and never written, decision
 //!   `U1`).
 //!
 //! Machine-local state — window geometry, the last page that was open, proxy and TLS overrides for
 //! this machine — deliberately does **not** belong to the metadata document: it lives in the host's
 //! configuration directory, so a project file can be shared without carrying one machine's state
 //! and without becoming a place where a secret could hide.
+//!
+//! * The roadmap families interleave across these files (the project format is `T02.07`, the page
+//!   format is `T03.02`, text is `T06.01`), so the modules are grouped by role rather than by task
+//!   number: one group per question a reader asks — what is on disk, what edits a document, what
+//!   turns bytes into text, how a project comes into being, and how a build is decided.
 
 #![allow(dead_code)]
 
-pub mod batch;
-pub mod closing;
-pub mod configuration;
-pub mod conflict;
-pub mod create;
-pub mod dependencies;
+pub mod build;
 pub mod document;
-pub mod entries;
-pub mod files;
-pub mod format;
-pub mod history;
-pub mod import;
-pub mod index;
-pub mod json;
-pub mod kit;
-pub mod page;
-pub mod protection;
-pub mod recent;
-pub mod recovery;
-pub mod retention;
-pub mod save;
-pub mod session;
+pub mod lifecycle;
+pub mod record;
 pub mod text;
-pub mod text_file;
-pub mod validate;
-pub mod workspace;

@@ -9,7 +9,7 @@
 use super::*;
 
 pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
-    use crate::app::preview_service::Preview;
+    use crate::app::preview::preview_service::Preview;
     use crate::contracts::identity::NodeId;
 
     let mut preview = Preview::new();
@@ -87,7 +87,7 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
 }
 
 pub(super) fn hot_update(options: &crate::cli::HotUpdateOptions) -> bool {
-    use crate::app::hot_update::{Edit, Updater};
+    use crate::app::preview::hot_update::{Edit, Updater};
 
     let mut updater = Updater::new("preview");
     let mut source = "editor".to_owned();
@@ -152,7 +152,7 @@ pub(super) fn hot_update(options: &crate::cli::HotUpdateOptions) -> bool {
 }
 
 pub(super) fn state_keep(options: &crate::cli::StateKeepOptions) -> bool {
-    use crate::app::state_keep::{Capture, Kept, Present, restore};
+    use crate::app::preview::state_keep::{Capture, Kept, Present, restore};
     use crate::contracts::identity::NodeId;
 
     let mut capture = Capture::new();
@@ -295,7 +295,7 @@ pub(super) fn state_keep(options: &crate::cli::StateKeepOptions) -> bool {
 }
 
 pub(super) fn matrix(options: &crate::cli::MatrixOptions) -> bool {
-    use crate::app::viewport_matrix::{Matrix, Orientation, Viewport};
+    use crate::app::preview::viewport_matrix::{Matrix, Orientation, Viewport};
 
     let mut matrix = Matrix::new("(none)");
     for op in &options.ops {
@@ -403,7 +403,7 @@ fn inspect_version(argument: &str) -> Result<u32, String> {
 }
 
 pub(super) fn inspect(options: &crate::cli::InspectOptions) -> bool {
-    use crate::app::inspection::{Adapter, Inspection, Mode, Source};
+    use crate::app::preview::inspection::{Adapter, Inspection, Mode, Source};
 
     let mut inspection = Inspection::new();
     for op in &options.ops {
@@ -571,8 +571,11 @@ pub(super) fn inspect(options: &crate::cli::InspectOptions) -> bool {
 }
 
 /// A greyscale image from `<w>x<h>` and its digits.
-fn visual_image(size: &str, digits: &str) -> Result<crate::app::visual_baseline::Image, String> {
-    use crate::app::visual_baseline::Image;
+fn visual_image(
+    size: &str,
+    digits: &str,
+) -> Result<crate::app::preview::visual_baseline::Image, String> {
+    use crate::app::preview::visual_baseline::Image;
 
     let Some((width, height)) = size.split_once('x') else {
         return Err(format!("{size:?} is not <w>x<h>"));
@@ -587,7 +590,7 @@ fn visual_image(size: &str, digits: &str) -> Result<crate::app::visual_baseline:
 }
 
 pub(super) fn visual(options: &crate::cli::VisualOptions) -> bool {
-    use crate::app::visual_baseline::{Baseline, Conditions, Shot, Tolerance, compare};
+    use crate::app::preview::visual_baseline::{Baseline, Conditions, Shot, Tolerance, compare};
 
     let mut baseline = Baseline::new();
     let mut conditions = Conditions::new("unknown", 0);
@@ -673,7 +676,7 @@ pub(super) fn visual(options: &crate::cli::VisualOptions) -> bool {
 }
 
 pub(super) fn preview_recovery(options: &crate::cli::PreviewRecoveryOptions) -> bool {
-    use crate::app::preview_recovery::Preview;
+    use crate::app::preview::preview_recovery::Preview;
 
     let mut preview = Preview::new();
     for op in &options.ops {
@@ -743,7 +746,7 @@ pub(super) fn preview_recovery(options: &crate::cli::PreviewRecoveryOptions) -> 
 }
 
 pub(super) fn load(options: &crate::cli::LoadOptions) -> bool {
-    use crate::app::load::Load;
+    use crate::app::preview::load::Load;
 
     let mut load = Load::new();
     for op in &options.ops {

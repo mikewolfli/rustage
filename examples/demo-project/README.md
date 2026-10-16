@@ -4,7 +4,7 @@ A project document in the version 1 format, kept in the repository so the format
 without inventing one first. It is not Rust code and no Rust code is built from this directory.
 
 The format itself is documented where it is implemented:
-[`src/project/format.rs`](../../src/project/format.rs).
+[`src/project/record/format.rs`](../../src/project/record/format.rs).
 
 Check it with:
 

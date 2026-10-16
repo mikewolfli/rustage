@@ -17,7 +17,7 @@ use super::*;
 /// to identity. The exit code says whether the newest text reads; a text that does not read is a
 /// finding, not a crash, and the whole report is still printed.
 pub(super) fn document(options: &crate::cli::DocumentOptions) -> bool {
-    use crate::project::document::{Buffer, root_of};
+    use crate::project::document::buffer::{Buffer, root_of};
 
     let root = match options.root.as_ref() {
         Some(directory) => match crate::host::paths::ProjectRoot::new(directory) {
@@ -92,9 +92,9 @@ pub(super) fn document(options: &crate::cli::DocumentOptions) -> bool {
 pub(super) fn history(options: &crate::cli::HistoryOptions) -> bool {
     use crate::cli::HistoryEdit;
     use crate::contracts::permission::PermissionGate;
-    use crate::project::batch::{Batch, Fingerprint, Plan, apply, store_of};
-    use crate::project::document::Buffer;
-    use crate::project::history::{Domain, History, View, batch_edit_of, text_edit_of};
+    use crate::project::document::batch::{Batch, Fingerprint, Plan, apply, store_of};
+    use crate::project::document::buffer::Buffer;
+    use crate::project::document::history::{Domain, History, View, batch_edit_of, text_edit_of};
 
     let root = match options.root.as_ref() {
         Some(directory) => match crate::host::paths::ProjectRoot::new(directory) {
@@ -104,7 +104,7 @@ pub(super) fn history(options: &crate::cli::HistoryOptions) -> bool {
                 return false;
             }
         },
-        None => match crate::project::document::root_of(&options.file) {
+        None => match crate::project::document::buffer::root_of(&options.file) {
             Ok(root) => root,
             Err(refusal) => {
                 println!("rustage: {}", refusal.message());
@@ -305,8 +305,8 @@ pub(super) fn history(options: &crate::cli::HistoryOptions) -> bool {
 /// refused) is a finding, and the report says whether the original is still exactly what it was.
 pub(super) fn save(options: &crate::cli::SaveOptions) -> bool {
     use crate::host::paths::ProjectRoot;
-    use crate::project::document::{Buffer, root_of};
-    use crate::project::save::{Commit, Saving, Verb};
+    use crate::project::document::buffer::{Buffer, root_of};
+    use crate::project::document::save::{Commit, Saving, Verb};
 
     let root = match options.root.as_ref() {
         Some(directory) => match ProjectRoot::new(directory) {
@@ -487,9 +487,9 @@ pub(super) fn save(options: &crate::cli::SaveOptions) -> bool {
 /// picking a side silently is the data loss this task exists to prevent.
 pub(super) fn conflict(options: &crate::cli::ConflictOptions) -> bool {
     use crate::host::paths::ProjectRoot;
-    use crate::project::conflict::{OnDisk, Verdict, decide, writability};
-    use crate::project::document::{Buffer, root_of};
-    use crate::project::save::Verb;
+    use crate::project::document::buffer::{Buffer, root_of};
+    use crate::project::document::conflict::{OnDisk, Verdict, decide, writability};
+    use crate::project::document::save::Verb;
 
     let root = match options.root.as_ref() {
         Some(directory) => match ProjectRoot::new(directory) {
@@ -655,10 +655,10 @@ pub(super) fn write_text(
     root: &crate::host::paths::ProjectRoot,
     document: &str,
     text: &str,
-    verb: crate::project::save::Verb,
+    verb: crate::project::document::save::Verb,
     agreed: Option<&[u8]>,
 ) -> bool {
-    use crate::project::save::Saving;
+    use crate::project::document::save::Saving;
 
     match Saving::plan_guarded(root, document, text, verb, agreed) {
         Ok(saving) => match saving.execute() {
@@ -691,7 +691,7 @@ pub(super) fn write_text(
 /// silently replaced a file saved afterwards would be worse than none.
 pub(super) fn recovery(options: &crate::cli::RecoveryOptions) -> bool {
     use crate::host::paths::ProjectRoot;
-    use crate::project::recovery::RecoveryStore;
+    use crate::project::document::recovery::RecoveryStore;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let store = RecoveryStore::new(&options.store);
@@ -710,7 +710,7 @@ pub(super) fn recovery(options: &crate::cli::RecoveryOptions) -> bool {
                 return false;
             }
         },
-        (None, Some(file)) => match crate::project::document::root_of(file) {
+        (None, Some(file)) => match crate::project::document::buffer::root_of(file) {
             Ok(root) => root,
             Err(refusal) => {
                 println!("rustage: {}", refusal.message());
@@ -818,8 +818,8 @@ pub(super) fn recovery(options: &crate::cli::RecoveryOptions) -> bool {
     }
 
     if options.prune {
-        let policy = crate::project::retention::Policy::new(options.keep.unwrap_or(5));
-        let plan = crate::project::retention::plan(&store, policy);
+        let policy = crate::project::document::retention::Policy::new(options.keep.unwrap_or(5));
+        let plan = crate::project::document::retention::plan(&store, policy);
         for line in plan.render() {
             println!("{line}");
         }
@@ -827,7 +827,7 @@ pub(super) fn recovery(options: &crate::cli::RecoveryOptions) -> bool {
             println!("nothing was removed; pass --apply to carry the prune out");
             return true;
         }
-        let pruned = crate::project::retention::apply(&plan);
+        let pruned = crate::project::document::retention::apply(&plan);
         println!("{}", pruned.message());
         return true;
     }
@@ -861,7 +861,7 @@ pub(super) fn recovery(options: &crate::cli::RecoveryOptions) -> bool {
 /// than acted on in place.
 pub(super) fn close(options: &crate::cli::CloseOptions) -> bool {
     use crate::host::paths::ProjectRoot;
-    use crate::project::closing::{Closing, Document, Task};
+    use crate::project::document::closing::{Closing, Document, Task};
 
     let first = match options.files.first().or(options.root.as_ref()) {
         Some(path) => path,
@@ -878,7 +878,7 @@ pub(super) fn close(options: &crate::cli::CloseOptions) -> bool {
                 return false;
             }
         },
-        None => match crate::project::document::root_of(first) {
+        None => match crate::project::document::buffer::root_of(first) {
             Ok(root) => root,
             Err(refusal) => {
                 println!("rustage: {}", refusal.message());
@@ -937,8 +937,8 @@ pub(super) fn close(options: &crate::cli::CloseOptions) -> bool {
         after.tasks().len()
     );
     match outcome {
-        crate::project::closing::Outcome::Closed { .. } => true,
-        crate::project::closing::Outcome::Cancelled => true,
-        crate::project::closing::Outcome::Blocked { .. } => false,
+        crate::project::document::closing::Outcome::Closed { .. } => true,
+        crate::project::document::closing::Outcome::Cancelled => true,
+        crate::project::document::closing::Outcome::Blocked { .. } => false,
     }
 }

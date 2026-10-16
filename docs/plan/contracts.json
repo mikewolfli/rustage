@@ -61,7 +61,7 @@
     {
       "id": "C-PROJECT",
       "concern": "工程文档、根相对路径引用与格式版本策略",
-      "module": "src/project/format.rs",
+      "module": "src/project/record/format.rs",
       "principle": "principle #22（拒绝必须是准确结果）"
     }
   ],
@@ -284,7 +284,7 @@
       "id": "INV-VERSION-UNKNOWN-NOT-WRITTEN",
       "statement": "本构建不认识的格式版本只读打开：不解释任何成员，也没有任何写回路径",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/format.rs",
+      "enforcedBy": "src/project/record/format.rs",
       "test": "a_newer_format_version_refuses_to_write_the_project",
       "evidence": "结构 + 测试",
       "note": "未知版本不会成为 ProjectDocument，而只有 ProjectDocument 才能渲染，因此“不写回”是类型结构而不是纪律；读取时只尽力读身份，其余成员原样列出"
@@ -293,7 +293,7 @@
       "id": "INV-NO-FIELD-LOSS",
       "statement": "本构建不认识的成员被原样保留并报告，保存时写回原位，不静默丢弃",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/format.rs",
+      "enforcedBy": "src/project/record/format.rs",
       "test": "unknown_members_survive_a_round_trip_and_are_reported",
       "evidence": "测试",
       "note": "唯一例外是凭证引用与其来源：那里的成员集合是封闭的，出现未知成员按“机密被写进工程”拒绝，而不是保留"
@@ -302,7 +302,7 @@
       "id": "INV-NO-HALF-PROJECT",
       "statement": "创建只在暂存目录里发生，最后一步用一次改名提交；失败或取消移除暂存目录，原目录不被触碰",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/create.rs",
+      "enforcedBy": "src/project/lifecycle/create.rs",
       "test": "a_failure_or_a_cancel_leaves_the_directory_as_it_was",
       "evidence": "结构 + 测试",
       "note": "暂存目录在目标同级（同一文件系统），因此提交是一次 rename：要么工程存在，要么原目录与之前完全一样；取消后再次取消会如实报告“没有暂存副本”"
@@ -311,7 +311,7 @@
       "id": "INV-NO-OVERWRITE",
       "statement": "已存在且含内容的目录在任何写入发生之前就被拒绝，本构建绝不覆盖已有的工程目录",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/create.rs",
+      "enforcedBy": "src/project/lifecycle/create.rs",
       "test": "a_failure_does_not_overwrite_a_directory_that_has_something_in_it",
       "evidence": "测试",
       "note": "空目录可以承接新工程（rename 允许替换空目录），但非空目录、文件与缺失的父目录都各自给出准确拒绝；“向导打开期间别人写进目标目录”这一冲突由提交失败覆盖"
@@ -320,7 +320,7 @@
       "id": "INV-CREATED-IS-READABLE",
       "statement": "创建出来的工程在提交前先被本构建自己的读码器读回：写出与能读回是同一件事",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/create.rs",
+      "enforcedBy": "src/project/lifecycle/create.rs",
       "test": "a_project_that_is_created_is_a_project_this_build_reads_back",
       "evidence": "测试",
       "note": "暂存目录里的 project.json 与每个页面文档都由设计器使用的读者读一遍（verify_staged），因此写出器与读码器不一致会让创建失败，而不是交付一个打不开的工程"
@@ -329,7 +329,7 @@
       "id": "INV-OPEN-DECIDES-NOTHING",
       "statement": "打开工程只读入文档并给出将被提出的问题：不记录决定、不授权、不运行任何程序",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/session.rs",
+      "enforcedBy": "src/project/lifecycle/session.rs",
       "test": "opening_reads_the_project_and_decides_nothing",
       "evidence": "测试",
       "note": "授权记录在打开后为空；未信任时 may_write 为假；工具链状态是 NotAsked。路径不是权限：只有 ProjectSession::decide 会记录信任"
@@ -338,7 +338,7 @@
       "id": "INV-RECENT-IS-A-PLACE",
       "statement": "最近项只记“哪里”：用它打开等同于手打路径，同样不信任、不授权、不运行",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/session.rs",
+      "enforcedBy": "src/project/lifecycle/session.rs",
       "test": "a_recent_entry_opens_the_project_without_trusting_or_running_anything",
       "evidence": "结构 + 测试",
       "note": "recent 模块只持有路径/名字/身份/时间，没有权限服务也没有启动程序的能力；修整（repair）按身份判定，不同工程拒绝，路径仍在则不修"
@@ -347,7 +347,7 @@
       "id": "INV-PROMPT-IS-CURRENT",
       "statement": "信任提问在回答前被重新读取；目录在提问之后变了，答案不生效并撤销信任",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/session.rs",
+      "enforcedBy": "src/project/lifecycle/session.rs",
       "test": "a_directory_that_changed_while_the_question_was_on_screen_is_not_trusted",
       "evidence": "测试",
       "note": "提问的 findings 由目录本身读出（build.rs / .cargo/config / rust-toolchain*），因此“提问后新增 build.rs”会被发现；拒绝与撤销两次都记录在授权记录里"
@@ -356,7 +356,7 @@
       "id": "INV-MIGRATION-IS-VERSIONED",
       "statement": "格式变更附带带版本的迁移步骤；能到达本构建版本的旧文档被读取并在写回时先保留原文件，到不了的版本明确拒绝",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/format.rs",
+      "enforcedBy": "src/project/record/format.rs",
       "test": "an_older_version_is_migrated_by_versioned_steps",
       "evidence": "测试",
       "note": "决策 Q6：迁移前不原地覆盖原文件（save 对旧版本拒绝，save_migrating 先写 .v1.bak）；决策 U1：只向前、按步；文档声明 v1 却带 v2 才有的成员会被拒绝，而不是被相信"
@@ -365,7 +365,7 @@
       "id": "INV-FILE-OP-PREVIEWS",
       "statement": "文件操作先出计划：计划只读工程、写出要做的每一步，不写盘；有设计引用指向该文件时阻断并列出引用，而不是静默丢弃引用",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/files.rs",
+      "enforcedBy": "src/project/record/files.rs",
       "test": "a_plan_is_a_preview_that_touches_nothing",
       "evidence": "测试",
       "note": "阻断项（blockers）与计划同一次读出，因此“能不能做”先于“做了什么”；删除一个页面文档被阻断，指向它的设计引用逐条列出（页面成员与属性），并给出替代做法：删条目而不是删文件"
@@ -374,7 +374,7 @@
       "id": "INV-FILE-OP-FAILURE-RECOVERS",
       "statement": "文件操作失败时已做的移动按逆序回滚，并如实报告回滚了哪些、没能回滚什么；写文档失败不会留下半个工程",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/files.rs",
+      "enforcedBy": "src/project/record/files.rs",
       "test": "a_failure_after_the_moves_puts_them_back",
       "evidence": "测试",
       "note": "移动先做、文档最后写，因此失败只可能落在文档写入上；FileFailure::is_recovered 说“是否还需要人看一眼”，命令的退出码不因此变成成功（原则 22：不把失败藏在成功里）"
@@ -383,7 +383,7 @@
       "id": "INV-CONFIG-SOURCE-VISIBLE",
       "statement": "构建/运行配置的每个生效值都带来源（内置默认 / 目标 / 本机覆盖）以及它替换掉的各层取值：没有“只看值”的读取路径",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/configuration.rs",
+      "enforcedBy": "src/project/build/configuration.rs",
       "test": "every_value_says_where_it_came_from",
       "evidence": "结构 + 测试",
       "note": "Setting 同时持有 value、source 与 replaced，因此调用方拿到值就拿到来源；某一层沉默不等于它说了“无”——沉默时下层决定，报告据实写出（quiet 目标用例）；本机覆盖替换列表时也逐条报告被替换项，避免“被去掉的特性”看起来像“从来没要过”"
@@ -392,7 +392,7 @@
       "id": "INV-CONFIG-NOT-SHARED",
       "statement": "本机记录的活动目标与覆盖都带工程身份：读取时必须给出身份，属于别的工程的选择与覆盖一律不使用并说明原因",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/configuration.rs",
+      "enforcedBy": "src/project/build/configuration.rs",
       "test": "an_active_configuration_does_not_leak_between_projects",
       "evidence": "结构 + 测试",
       "note": "active_for(id) 只回答该身份；别处的选择返回 AnotherProject 并把双方身份都写出来，解析时不采用；覆盖按 工程+目标 判定，未命中的进 Skipped 并带原因；ResolvedConfiguration::for_project 拒绝把配置交给别的工程"
@@ -401,7 +401,7 @@
       "id": "INV-CREDENTIAL-VIEW-NEVER-MATERIAL",
       "statement": "机密引用视图只呈现“名字 + 材料在哪 + 存储怎么说”，从不读取、持有或渲染材料本身",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/configuration.rs",
+      "enforcedBy": "src/project/build/configuration.rs",
       "test": "a_credential_is_shown_as_a_reference_and_its_health_never_its_material",
       "evidence": "结构 + 测试",
       "note": "凭据视图由 CredentialRef::health(store, now) 得出（该接口只回答 Usable/ExpiringSoon/Expired/Missing/Unavailable）；lookup 只在网络层发出请求前调用；本模块的类型里没有 Secret 字段，因此“渲染出机密”不是纪律而是不可表达"
@@ -410,7 +410,7 @@
       "id": "INV-IMPORT-PLANS-BEFORE-WRITING",
       "statement": "导入先给候选：每一步迁移与每个会变的成员（diff）都在写盘之前列出，候选本身不写盘",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/import.rs",
+      "enforcedBy": "src/project/lifecycle/import.rs",
       "test": "the_candidate_names_the_steps_and_every_member_that_would_change",
       "evidence": "测试",
       "note": "候选由 migration_path 与「读到的 JSON」对「本构建会写出的 JSON」的差异算出，两者都只读；diff 不列出没有变化的成员（否则没人读），容器只报形状与规模；候选不写盘这条由用例直接断言（文件原文未变、备份不存在）"
@@ -419,7 +419,7 @@
       "id": "INV-MIGRATION-KEEPS-ORIGINAL",
       "statement": "迁移先留底并逐字节校验留底内容，再写结果并读回；任何一步失败都保证工程保持原样（失败发生在写之后则把原文放回）",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/import.rs",
+      "enforcedBy": "src/project/lifecycle/import.rs",
       "test": "committing_keeps_the_file_it_read_and_the_result_reads_back",
       "evidence": "测试",
       "note": "顺序是有意的：先比对磁盘上的文件仍是读到的那份 → 已有留底则拒绝（绝不覆盖留底）→ 写留底并读回逐字节比对 → 迁移 → 读回要求是当前版本；写失败或读回失败时用留底把原字节放回，放回也失败才报告 left_behind；已有留底与外部改动两个用例断言「工程一动没动」"
@@ -428,7 +428,7 @@
       "id": "INV-VALIDATION-NEVER-WRITES",
       "statement": "工程校验只回答不写盘：缺失的 SDK/资源被逐条列出，文档既不被清空也不被改写，且每次运行都把「文档逐字节未变」当作结论念出来",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/validate.rs",
+      "enforcedBy": "src/project/lifecycle/validate.rs",
       "test": "validating_a_project_with_nothing_present_is_a_report_and_not_an_edit",
       "evidence": "结构 + 测试",
       "note": "结构：Validation::of 只取已读入的文档、已诊断的工具链状态与已查过的凭据视图，本模块里没有任何写入者；测试：同一工程缺资源又缺 SDK 时先断言文件字节未变，再走既有编辑路径（with_resource + write_document）断言页面/目标/服务/身份都还在；命令行每次收尾都重读项目文件逐字节比对，是本条已有的第二处证据"
@@ -437,7 +437,7 @@
       "id": "INV-MISSING-IS-NOT-NOT-CHECKED",
       "statement": "「没有看过」与「不在那里」是两条不同结论：未读工具链、许可被拒、凭据存储不可达都报 not-checked，只有真查过而缺失的才报 missing，越出工程根的引用报 refused 而不是 missing",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/validate.rs",
+      "enforcedBy": "src/project/lifecycle/validate.rs",
       "test": "not_looking_at_the_toolchain_is_not_the_same_finding_as_a_missing_sdk",
       "evidence": "测试",
       "note": "Availability 的四个取值合并任意两个都会把「没查」说成「没有」，所以是四个而不是两个；工具链映射取 ToolchainState 自己的话：NotChecked 一律 not-checked（没人问/工程未信任/许可拒绝），Checked 里没答上的程序才是 missing；凭据同理（存储不可达是 not-checked，环境变量没设是 missing）；路径层拒绝的引用是 refused"
@@ -446,7 +446,7 @@
       "id": "INV-OFFLINE-OPEN",
       "statement": "打开工程不向任何远端提问：每条需求的答案都带来源，来源由需求类别唯一决定，而没有任何类别的来源是网络",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/validate.rs",
+      "enforcedBy": "src/project/lifecycle/validate.rs",
       "test": "every_answer_says_where_it_came_from_and_none_of_them_needs_the_network",
       "evidence": "结构 + 测试",
       "note": "Where::of(kind) 是全函数：文件→工程自身文件，工具链与目标→本机，凭据→本机凭据存储，网络这一取值在 ALL 里但没有类别映射到它，所以「离线打开同一条路径」是类型的性质而不是散文；报告把来源折成一行念出来，并在真有网络需求时改口（不是一句永远成立的 yes）；用例断言 needs_no_network() 与「每个需求的 source 都不是 Network」，并在无网络命名空间（unshare -rn，curl 取不到主机）里跑过一次真实调用链"
@@ -455,7 +455,7 @@
       "id": "INV-RESCAN-IS-FRESH",
       "statement": "重扫是重新读文件而不是复用记住的状态：记录的扫描只作对照，条目按文档写出的路径标识（一个文件的多个成员只算一条），属于别的工程或来自更新构建的记录一律拒绝",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/validate.rs",
+      "enforcedBy": "src/project/lifecycle/validate.rs",
       "test": "a_re_scan_names_what_appeared_what_vanished_and_what_nothing_touched",
       "evidence": "测试",
       "note": "Scan::read 重新打开并扫描（用例断言它与「先前读入的文档」在文件出现后给出不同答案）；Scan::of 取文件声明的版本（migrated_from 优先）而不是文档值自带的版本——文档值自带的版本是本构建解释出的版本，这条陷阱以前栽过一次；Scanned::key 是文档写出的路径，因为状态是路径的性质而不是成员的，所以同一文件被多个成员命名时只有一条；Scan::between 先比对工程身份，身份不同的记录被拒绝而不是当成对照"
@@ -464,7 +464,7 @@
       "id": "INV-WORKSPACE-KEYED-BY-MEMBER",
       "statement": "工作区里每个文件由「成员 + 该成员写出的路径」标识：同一路径在两个成员中是两个文件；离开本成员仍留在工作区内的引用按它落地的成员命名，越出工作区的引用被拒绝，落在工作区内却没有成员拥有的路径单独报告",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/workspace.rs",
+      "enforcedBy": "src/project/build/workspace.rs",
       "test": "a_file_is_identified_by_its_member_and_not_by_its_path_alone",
       "evidence": "结构 + 测试",
       "note": "WorkspaceFile 的地址就是 member:path，解析时没有成员一律拒绝（两条同名的文件在别的层看来完全一样）；文件表按（成员, 路径）去重，所以页面文档与 startup 指向同一文件时是一行；CrossRoot 四态：WithinMember / AnotherMember{成员,落地路径} / Outside{原因} / NoMemberOwns{路径}，最后一条正是「加成员」能回答的；判断是否留在本成员用路径层自己的 resolve_for_creation（同一条越界规则，且不要求父目录已存在），因此「即将创建的文件」不会被读成「跑到别处去了」"
@@ -473,7 +473,7 @@
       "id": "INV-MEMBER-REMOVAL-TOUCHES-NOTHING",
       "statement": "添加与移除成员只改工作区文档：不创建也不删除任何目录；被别的成员文档引用时先阻断并逐条列出引用；写之前比对磁盘上仍是读到的那一份，冲突则一个字节都不写",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/workspace.rs",
+      "enforcedBy": "src/project/build/workspace.rs",
       "test": "removing_a_member_writes_the_document_and_touches_no_directory",
       "evidence": "测试",
       "note": "成员是文档里的一行，所以移除不碰目录，用例在移除后逐字节比对那个目录里原来的文件；添加只接受一个「已经在那里的目录」（命名一个 root 不等于创建它，造目录属于创建路径）；被引用时的阻断项与引用一起给出（Referrer），不做静默修正；受影响时不写盘由用例直接断言（文档原文未变）；写路径是唯一一次写：先比对 original 再原子替换，失败即「工作区原样」而不是半个状态"
@@ -482,7 +482,7 @@
       "id": "INV-WORKSPACE-ACTIVE-IS-MACHINE-LOCAL",
       "statement": "活动成员是本机状态：按工作区身份记录在宿主配置目录，共享文档不因切换成员而改变；记录里的成员已经不在了则如实报告，不改指另一个成员",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/workspace.rs",
+      "enforcedBy": "src/project/build/workspace.rs",
       "test": "the_active_member_is_machine_state_and_belongs_to_one_workspace",
       "evidence": "结构 + 测试",
       "note": "ActiveMember 四态（Named / MemberIsGone / AnotherWorkspace / NeverChosen）与 T02.06 的活动目标同一套思路与同一套判定词；WorkspaceState 是按工作区身份键控的本机文件（未写入者不写盘、原子写、更新构建的记录拒绝读），用例断言激活后工作区文档里没有任何「活动成员」字样；未知成员名被拒绝而不是记录一个空选择"
@@ -491,7 +491,7 @@
       "id": "INV-KIT-IS-NOT-AN-OUTPUT",
       "statement": "Kit 只描述工具组合，从不描述输出：文档里没有 profile/triple 作为它自己的属性（写进来会被读入时拒绝），输出只以 triple 提问，成员各自显式声明能服务哪些 triple",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/kit.rs",
+      "enforcedBy": "src/project/build/kit.rs",
       "test": "a_kit_is_not_an_output_and_a_profile_in_it_is_refused",
       "evidence": "结构 + 测试",
       "note": "Kit::diagnose 只接一个 triple，没有任何参数是 profile；成员用 Serves（Every 或一组 triple，两种都写出来，不靠省略字段表达「都行」）；不认识的成员在读入时被拒绝并说明「哪个 profile 由工程配置回答」，因此「把 profile 塞进 kit」不是被忽略而是报错；报告的每一行都写着这一点"
@@ -500,7 +500,7 @@
       "id": "INV-KIT-DIAGNOSES-EXPLICITLY",
       "statement": "缺成员、版本不符、无法服务与不兼容组合都显式给出，且绝不互相冒充：「没人问过」不是缺，无法比较的版本不判满足也不判不满足，必需角色没有成员时明说无法构建",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/kit.rs",
+      "enforcedBy": "src/project/build/kit.rs",
       "test": "not_asked_a_missing_member_and_a_wrong_version_are_three_different_findings",
       "evidence": "结构 + 测试",
       "note": "Finding 五态（Ok/Missing/Version/NotChecked/CannotServe）合并任意两个都会把「没查」说成「没有」或把「版本不符」说成「没装」；Observed 里没有记录的成员返回 NotChecked 而不是 Nothing，理由原文保留；Requirement::holds 对无法比较的版本返回 None → NotChecked，并把版本与要求都写出来；必需角色（只有 toolchain）缺成员时报告里带「nothing can be built without one」；命令的退出码看 has_decided_problems（被判定为错），不看 is_complete，所以「没查过」不会冒充失败"
@@ -509,7 +509,7 @@
       "id": "INV-KIT-IS-VERSIONED-AND-KEYED-BY-ROLE",
       "statement": "Kit 自带版本（两个版本是两个 Kit），成员按角色唯一：同一角色两个成员、角色不认识、版本要求读不出来、路径探针配版本要求，都在读入时拒绝，不留到解析时按「找到哪个算哪个」决定",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/kit.rs",
+      "enforcedBy": "src/project/build/kit.rs",
       "test": "a_document_that_cannot_be_a_combination_is_refused_when_it_is_read",
       "evidence": "测试",
       "note": "identity 的三个成员是 id/name/version，version 为空即拒绝；角色用 ProjectError::Duplicate 拒绝第二个同角色成员（两个 toolchain 是提问而不是组合）；版本要求只有 `*`、`1.2.3`、`>=1.2.3` 三种形状，其它形状在读入时报出写法；路径探针的「版本」只能是 `*`，因为路径无法回答版本，能检查的要求才准写进去"
@@ -518,7 +518,7 @@
       "id": "INV-RESOLUTION-EFFECTS-AUTHORIZED",
       "statement": "一次解析就是一个值：命令与它会产生哪些副作用一起给出，每个副作用按权限表的类别命名，默认解析靠 `--locked --offline` 在结构上是只读的，任何副作用未获授权就不启动任何程序，也绝不会默认升级依赖或访问网络",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/dependencies.rs",
+      "enforcedBy": "src/project/build/dependencies.rs",
       "test": "the_command_a_resolution_would_run_says_what_it_would_do",
       "evidence": "结构 + 测试",
       "note": "Effect 三态与权限表类别一一对应（RunsAProgram/Command、MayWriteTheLockfile/FileWrite、MayReachTheRegistry/Network），用例断言只授权 Command 时 unauthorized 正好列出另外两个；参数与副作用由 with_effects 的两个布尔同时决定（默认两个都 false），因此「不隐式升级」不是约定而是构造里没有这条路径：只有准许改锁文件才丢 `--locked`，只有准许访问网络才丢 `--offline`；命令行对每个类别各取一次 permit 之后才 spawn，未获授权时打印「nothing was run」并以 4 退出；解析总是带 --manifest-path，运行的那条命令就是报告里那一行"
@@ -527,7 +527,7 @@
       "id": "INV-DEPENDENCY-RECORD-BELONGS-TO-ONE-WORKSPACE",
       "statement": "依赖记录属于一个工作区：记录按 cargo 报告的工作区根键控，拿别的工作区的记录作基线一律拒绝比较而不是照比，记录也不许写到清单或锁文件上，一次版本变化配对成一条变化而不是「删一个加一个」",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/dependencies.rs",
+      "enforcedBy": "src/project/build/dependencies.rs",
       "test": "a_review_names_what_changed_and_what_did_not",
       "evidence": "结构 + 测试",
       "note": "ReviewRefusal::AnotherWorkspace 把双方路径都写出来，拒绝时不产生任何比较结果；写记录前用 may_record_at 拒绝清单与锁文件（把 `sub/../Cargo.lock` 这类同一文件的另一种写法也算出来，用 canonicalize 判定），因此「记录自己描述的东西」不会被记录覆盖掉；配对按（包名, 来源）进行，cargo 的标识符带版本，所以 1.0.200→1.0.210 是一条 Version 变化；同标识符不同版本这种 cargo 不会产生的形状仍报为版本变化而不是「没变」"
@@ -536,7 +536,7 @@
       "id": "INV-DEPENDENCY-FACTS-ARE-READ-WHERE-THEY-LIVE",
       "statement": "依赖事实只在它所在的地方读：锁文件按 cargo 报告的工作区根读取（成员目录的锁文件属于工作区），报告的工作区根与所指名的目录不同时如实说出锁文件在那里，而不是把「这个目录没有锁文件」当成工作区的状态",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/dependencies.rs",
+      "enforcedBy": "src/project/build/dependencies.rs",
       "test": "the_lockfile_is_read_where_cargo_keeps_it",
       "evidence": "结构 + 测试",
       "note": "lockfile_beside 就是这条规则：报告里的根是本机的一个目录就用它，否则才退回所指名的目录；用例覆盖成员目录（锁文件读的是工作区根那一份）与「报告的根在这台机器上不存在」（退回所指名目录，没有锁文件就如实说没有）；命令行在这种情况下报告锁文件位于工作区根及其状态，不与解析前在所指名目录读到的值比较，因为那个值不是工作区的状态"
@@ -545,7 +545,7 @@
       "id": "INV-TEXT-IS-KEPT-VERBATIM",
       "statement": "缓冲里的文本就是给出的文本：不裁剪、不修补、也不用模型重渲染的文本替换它；读不懂的文本仍然是最新的文本（文本版本仍然前进），失败的那次读不会把文本回滚到上一次能读的内容",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/document.rs",
+      "enforcedBy": "src/project/document/buffer.rs",
       "test": "the_buffer_never_rewrites_the_text_it_holds",
       "evidence": "结构 + 测试",
       "note": "Buffer::set_text 先记下新的文本版本再尝试读，因此读不通的文本也不会被回滚（读不通是状态而不是撤销）；文本只以 String 保存，模型只在另一处（Model::document）且它的渲染结果从不写回文本——用例断言模型重渲染与文本不等，且文本仍带着自己的换行与空格；非 UTF-8 的字节在读入时就被拒绝（没有可保留的文本），文件本身一个字节都不动"
@@ -554,7 +554,7 @@
       "id": "INV-LAST-VALID-MODEL-SURVIVES-A-BAD-EDIT",
       "statement": "有效模型是「最后一次读通的模型」：读不懂的文本不会清掉它，状态只有两种形状（读通 / 文本读不通且带着那个模型与拒绝原因），问到模型的地方同时拿到它来自哪个文本版本，所以旧模型不可能被当作当前结果",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/document.rs",
+      "enforcedBy": "src/project/document/buffer.rs",
       "test": "an_invalid_text_is_kept_and_the_last_model_still_previews",
       "evidence": "结构 + 测试",
       "note": "State 只有 Reads{model} 与 TextDoesNotRead{refusal, model, text} 两种形状，没有「模型 + 可能坏掉的文本」这种第三值，所以不存在把过期模型当作当前结果读出来的路径；读失败时 model 字段原样保留上一次成功的 Model（用例断言两个值相等），Model 自带 version 与 text，State::render 明说「它落后于文本」；模型版本不是 store 的 Revision：那是唯一可写模型自己的序号，缓冲区借用它等于成为第二写者"
@@ -563,7 +563,7 @@
       "id": "INV-IDENTITY-EVENTS-ARE-REPORTED-NOT-SILENT",
       "statement": "身份变化是如实报告的事实而不是静默：同一个 id 在没被触碰的编辑后保持同一身份；离开文本的 id 记为 departed、回来的记为 returned（不是 appeared）、同一 id 换了 type 记为 relabelled；同一个 id 出现在两个节点上则不成为一个模型（读入时拒绝）",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/document.rs",
+      "enforcedBy": "src/project/document/buffer.rs",
       "test": "identity_that_comes_and_goes_is_reported_rather_than_policed",
       "evidence": "结构 + 测试",
       "note": "缓冲区从不分配 id（id 是文本的），所以它记的是「哪些 id 见过」这一件事实（seen/known_ids 同一来源），returned 与 appeared 的差别正是这个记录；relabelled 把同一 id 的旧/新 type 都写出来，因为工程里所有引用仍指向那个 id；两条同 id 的节点由页面读入器拒绝（ProjectError::Duplicate），拒绝理由随状态一起给出，缓冲区不会自己发明一条「按找到哪个算哪个」的规则"
@@ -572,7 +572,7 @@
       "id": "INV-A-BATCH-LANDS-WHOLE-OR-NOT-AT-ALL",
       "statement": "一批操作是一个变更集：全落地或全拒绝；被计划判定的批次一步都不执行；基线过期由 store 拒绝且文档停在原处；计划按「批次自己已经做过的事」量位置，而不是只看文档",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/batch.rs",
+      "enforcedBy": "src/project/document/batch.rs",
       "test": "one_operation_that_cannot_land_refuses_the_whole_batch_and_changes_nothing",
       "evidence": "结构 + 测试",
       "note": "全落地由 store 的 apply 保证（暂存后一次提交），本项不重新实现：apply 只在计划未被阻断时调用它，并把答案如实转述；「计划里没有一条能落地」本身也算被阻断（set 为 None），所以一个全被挡下的批次不会变成「空批次」这种第三种结局；Structure 覆盖层只用来量位置（与 store 的暂存同一套规则），它不改文档，且一切最终仍由 store 判定：用例专门构造「计划看着没问题但基线已过期」的情形，断言 store 以 stale-base 拒绝且文档停在 r2"
@@ -581,7 +581,7 @@
       "id": "INV-AN-EDIT-SAYS-WHAT-UNDOES-IT",
       "statement": "落地的批次一定给得出它的逆：逆由操作自身携带的记录推出（移除带节点、set 带旧值），作为批次文档可读可存可回放；但移除会退休身份，因此「把同一个 id 放回去」由计划明确指出会被拒绝，而不是让它在 apply 时才失败",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/batch.rs",
+      "enforcedBy": "src/project/document/batch.rs",
       "test": "a_batch_of_moves_and_sets_lands_and_its_inverse_puts_the_document_back",
       "evidence": "结构 + 测试",
       "note": "逆不是重新计算一遍：ChangeOp::inverse 造逆、ChangeSet::inverse(应用后的修订) 定基线，Batch::of_change_set 只把操作携带的事实翻译回批次文档；用例断言「两次写（move+set）→ 逆 → 指纹与开始完全一致」，并按 store 的语义断言「移除的逆会被拒绝（RetiredNode）」——那是设计而不是故障；新增的 store 只读访问器 knows_id/is_retired 让计划能在 apply 之前说出这件事"
@@ -590,7 +590,7 @@
       "id": "INV-A-FILE-BECOMES-A-MODEL-THROUGH-CHANGE-SETS",
       "statement": "文件里的节点经变更集进入模型：页面与根节点由 store 的构造接住、其余节点按深度优先各以一次 add 加属性操作到达、文件的 id 先被 adopt 再使用；因此模型不可能出现编辑路径到不了的状态，且同一个文件读两次得到同一棵树",
       "area": "C-PROJECT",
-      "enforcedBy": "src/project/batch.rs",
+      "enforcedBy": "src/project/document/batch.rs",
       "test": "a_file_becomes_a_model_through_change_sets_and_keeps_the_files_identities",
       "evidence": "结构 + 测试",
       "note": "桥接不需要新的写入口：节点用 Node::new 造、属性用 SetProperty 设、adopt_id 只把文件带来的 id 收进 id 序列（不改文档，见 C-STORE）；用例断言父链由 store 建立、子节点顺序与文件一致、根节点自己的属性也在、整个文件是一个修订；Node::record 只造记录（不挂到任何文档），移除携带它、逆就是把它加回来"

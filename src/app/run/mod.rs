@@ -4,7 +4,7 @@
 //! What rustage does when it runs: one arm per parsed command.
 //!
 //! The designer itself is not implemented. What *is* implemented and reachable here is the icon
-//! strip in [`toolbar`](super::toolbar) — which exists because the host's icons need a real
+//! strip in [`toolbar`](super::shell::toolbar) — which exists because the host's icons need a real
 //! consumer before anything downstream can claim to be verified: the resource tooling proves a
 //! glyph is a glyph, and only a control can prove the glyph reaches a screen — and the dependency
 //! contract probes under `crate::probe`, and the host's own platform services under
@@ -18,22 +18,22 @@
 //! * A handler is `pub(super)` and re-exported by a glob import, so a domain that needs another
 //!   domain's parser can name it without the two modules having to be merged back together.
 
-use super::toolbar;
+use super::shell::toolbar;
 use crate::cli::{self, Command};
 use crate::host::paths::{HostDirectories, HostDirectory};
 use crate::host::permission::PermissionService;
 use crate::host::startup::StartupRequest;
 use crate::probe::report::ProbeReport;
-use crate::project::configuration::{
+use crate::project::build::configuration::{
     ActiveVerdict, MachineConfiguration, Override, ResolvedConfiguration, SettingKey,
 };
-use crate::project::create::{Creation, NewProjectRequest, SystemProjectIds};
-use crate::project::entries::{ProjectEntries, ProjectTree};
-use crate::project::files::FilePlan;
-use crate::project::format::{ProjectContent, ProjectFile};
-use crate::project::import::{Backup, Import, backups_of};
-use crate::project::recent::RecentProjects;
-use crate::project::session::{ProjectSession, SessionState, TrustDecision};
+use crate::project::lifecycle::create::{Creation, NewProjectRequest, SystemProjectIds};
+use crate::project::lifecycle::import::{Backup, Import, backups_of};
+use crate::project::lifecycle::recent::RecentProjects;
+use crate::project::lifecycle::session::{ProjectSession, SessionState, TrustDecision};
+use crate::project::record::entries::{ProjectEntries, ProjectTree};
+use crate::project::record::files::FilePlan;
+use crate::project::record::format::{ProjectContent, ProjectFile};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -869,7 +869,7 @@ fn relative_to(
 /// Both things it can do are worth saying out loud: an entry absorbed into a merge window is not a
 /// step of its own, and an entry recorded after an undo *drops* the steps that were undone, which is
 /// the one part of a history a person cannot see from the document itself.
-fn report_recording(recording: &crate::project::history::Recording) {
+fn report_recording(recording: &crate::project::document::history::Recording) {
     if recording.merged {
         println!("  absorbed into the step the merge window opened");
     }
@@ -888,9 +888,9 @@ fn report_recording(recording: &crate::project::history::Recording) {
 /// refusal is why the answer is false — a caller that asked for three steps and got two has not been
 /// obeyed, and saying "two" while exiting zero would be reporting the wrong thing.
 fn move_steps(
-    history: &mut crate::project::history::History,
+    history: &mut crate::project::document::history::History,
     store: &mut crate::contracts::store::DocumentStore,
-    buffer: &mut crate::project::document::Buffer,
+    buffer: &mut crate::project::document::buffer::Buffer,
     root: &crate::host::paths::ProjectRoot,
     redo: bool,
     times: usize,
@@ -919,8 +919,8 @@ fn move_steps(
 }
 
 /// The merge window's closing, in one sentence.
-fn close_merge(state: crate::project::history::MergeState) -> String {
-    use crate::project::history::MergeState;
+fn close_merge(state: crate::project::document::history::MergeState) -> String {
+    use crate::project::document::history::MergeState;
 
     match state {
         MergeState::NothingOpen => "there was no window open".to_owned(),
@@ -936,8 +936,8 @@ fn close_merge(state: crate::project::history::MergeState) -> String {
 }
 
 /// A short name for what a payload holds, for the copy line.
-fn describe(payload: &crate::app::clipboard::Payload) -> String {
-    use crate::app::clipboard::Payload;
+fn describe(payload: &crate::app::commands::clipboard::Payload) -> String {
+    use crate::app::commands::clipboard::Payload;
     match payload {
         Payload::Text(text) => format!("{} char(s) of text", text.chars().count()),
         Payload::Nodes(subtree) => format!("a subtree of {} node(s)", subtree.nodes().len()),
@@ -947,10 +947,10 @@ fn describe(payload: &crate::app::clipboard::Payload) -> String {
 
 /// The area, the panels and the layout's own state, as the closing report.
 fn layout_report(
-    groups: &crate::app::groups::Groups,
-    panels: &crate::app::panels::Panels,
+    groups: &crate::app::shell::groups::Groups,
+    panels: &crate::app::shell::panels::Panels,
     services: &std::collections::BTreeSet<String>,
-    layouts: &crate::app::layout::Layouts,
+    layouts: &crate::app::shell::layout::Layouts,
 ) -> bool {
     for line in groups.render() {
         println!("{line}");
@@ -983,7 +983,7 @@ fn layout_report(
 
 /// A layout operation's outcome as a line, naming any panel the build has no home for.
 fn layout_outcome(
-    outcome: Result<Vec<String>, crate::app::layout::LayoutError>,
+    outcome: Result<Vec<String>, crate::app::shell::layout::LayoutError>,
     note: impl FnOnce() -> String,
 ) -> Result<String, String> {
     match outcome {
@@ -1003,7 +1003,7 @@ fn on_off(argument: &str) -> Option<bool> {
 }
 
 /// The text store's own report.
-fn text_report(store: &crate::project::text::TextStore) -> bool {
+fn text_report(store: &crate::project::text::piece_table::TextStore) -> bool {
     for line in store.render() {
         println!("{line}");
     }
@@ -1013,12 +1013,13 @@ fn text_report(store: &crate::project::text::TextStore) -> bool {
 
 /// The allowed/refused line for one write through one entry point.
 fn verdict(
-    regions: &[crate::project::protection::ProtectedRegion],
-    writability: &crate::project::conflict::Writability,
-    source: crate::project::protection::WriteSource,
-    write: crate::project::protection::Write,
+    regions: &[crate::project::text::protection::ProtectedRegion],
+    writability: &crate::project::document::conflict::Writability,
+    source: crate::project::text::protection::WriteSource,
+    write: crate::project::text::protection::Write,
 ) -> String {
-    let guard = crate::project::protection::WriteGuard::new(regions.to_vec(), writability.clone());
+    let guard =
+        crate::project::text::protection::WriteGuard::new(regions.to_vec(), writability.clone());
     match guard.check(source, &[write]) {
         Ok(()) => format!("{}: allowed", source.name()),
         Err(refusal) => format!("{}: refused: {}", source.name(), refusal.message()),
@@ -1073,9 +1074,11 @@ fn unescape(text: &str) -> String {
 }
 
 /// A diagnostic from `<severity>:<source>:<start>:<end>:<message>`.
-fn parse_diagnostic(argument: &str) -> Result<crate::app::diagnostics::Diagnostic, String> {
-    use crate::app::diagnostics::{Diagnostic, Severity, Source};
-    use crate::app::navigation::Span;
+fn parse_diagnostic(
+    argument: &str,
+) -> Result<crate::app::language::diagnostics::Diagnostic, String> {
+    use crate::app::language::diagnostics::{Diagnostic, Severity, Source};
+    use crate::app::language::navigation::Span;
     let fields: Vec<&str> = argument.splitn(5, ':').collect();
     let [severity, source, start, end, message] = fields.as_slice() else {
         return Err(format!(
@@ -1098,9 +1101,9 @@ fn parse_diagnostic(argument: &str) -> Result<crate::app::diagnostics::Diagnosti
 }
 
 /// A token from `<kind>:<start>:<end>`.
-fn parse_token(argument: &str) -> Result<crate::app::diagnostics::SemanticToken, String> {
-    use crate::app::diagnostics::{SemanticToken, TokenKind};
-    use crate::app::navigation::Span;
+fn parse_token(argument: &str) -> Result<crate::app::language::diagnostics::SemanticToken, String> {
+    use crate::app::language::diagnostics::{SemanticToken, TokenKind};
+    use crate::app::language::navigation::Span;
     let fields: Vec<&str> = argument.splitn(3, ':').collect();
     let [kind, start, end] = fields.as_slice() else {
         return Err(format!("{argument:?} is not <kind>:<start>:<end>"));
@@ -1117,8 +1120,8 @@ fn parse_token(argument: &str) -> Result<crate::app::diagnostics::SemanticToken,
 }
 
 /// An action from `<title>:<at>:<remove>:<insert>`.
-fn parse_action(argument: &str) -> Result<crate::app::diagnostics::CodeAction, String> {
-    use crate::app::diagnostics::{ActionKind, CodeAction, TextEdit};
+fn parse_action(argument: &str) -> Result<crate::app::language::diagnostics::CodeAction, String> {
+    use crate::app::language::diagnostics::{ActionKind, CodeAction, TextEdit};
     let fields: Vec<&str> = argument.rsplitn(4, ':').collect();
     let [insert, remove, at, title] = fields.as_slice() else {
         return Err(format!(
@@ -1150,9 +1153,11 @@ fn parse_uri_range(argument: &str) -> Result<(String, usize, usize), String> {
 }
 
 /// A file edit from `<uri>:<baseline>:<at>:<remove>:<insert>` (the uri may contain colons).
-fn parse_file_edit(argument: &str) -> Result<crate::app::workspace_edit::FileEdit, String> {
-    use crate::app::diagnostics::TextEdit;
-    use crate::app::workspace_edit::FileEdit;
+fn parse_file_edit(
+    argument: &str,
+) -> Result<crate::app::language::workspace_edit::FileEdit, String> {
+    use crate::app::language::diagnostics::TextEdit;
+    use crate::app::language::workspace_edit::FileEdit;
     let fields: Vec<&str> = argument.rsplitn(5, ':').collect();
     let [insert, remove, at, baseline, uri] = fields.as_slice() else {
         return Err(format!(
@@ -1174,8 +1179,8 @@ fn parse_file_edit(argument: &str) -> Result<crate::app::workspace_edit::FileEdi
 }
 
 /// An entry from `<key>:<requires|->:<detail>`.
-fn parse_entry(argument: &str) -> Result<crate::app::schema_docs::Entry, String> {
-    use crate::app::schema_docs::Entry;
+fn parse_entry(argument: &str) -> Result<crate::app::language::schema_docs::Entry, String> {
+    use crate::app::language::schema_docs::Entry;
     let (key, rest) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} has no requirement"))?;
@@ -1208,8 +1213,8 @@ fn parse_widget(argument: &str) -> Option<(String, String, String)> {
 /// A property from `<id>:<name>:<type>[:<default>]`.
 fn parse_property(
     argument: &str,
-) -> Result<(String, crate::app::widget_catalog::PropertySchema), String> {
-    use crate::app::widget_catalog::{PropertySchema, ValueType};
+) -> Result<(String, crate::app::canvas::widget_catalog::PropertySchema), String> {
+    use crate::app::canvas::widget_catalog::{PropertySchema, ValueType};
     let fields: Vec<&str> = argument.splitn(4, ':').collect();
     let [id, name, type_name, rest @ ..] = fields.as_slice() else {
         return Err(format!(
@@ -1251,8 +1256,8 @@ fn parse_scene_node(text: &str) -> Result<crate::contracts::identity::NodeId, St
 }
 
 /// A kind from a name.
-fn parse_kind(text: &str) -> Result<crate::app::structure::Kind, String> {
-    crate::app::structure::Kind::from_name(text)
+fn parse_kind(text: &str) -> Result<crate::app::canvas::structure::Kind, String> {
+    crate::app::canvas::structure::Kind::from_name(text)
         .ok_or_else(|| format!("{text:?} is not a node kind"))
 }
 
@@ -1262,7 +1267,7 @@ fn parse_insert(
 ) -> Result<
     (
         crate::contracts::identity::NodeId,
-        crate::app::structure::Kind,
+        crate::app::canvas::structure::Kind,
         String,
     ),
     String,
@@ -1290,8 +1295,10 @@ fn parse_floats(text: &str) -> Result<Vec<f64>, String> {
 }
 
 /// A property type from `<kind>[:<args>]`.
-fn parse_property_type(text: &str) -> Result<crate::app::property_editor::PropertyType, String> {
-    use crate::app::property_editor::PropertyType;
+fn parse_property_type(
+    text: &str,
+) -> Result<crate::app::style::property_editor::PropertyType, String> {
+    use crate::app::style::property_editor::PropertyType;
 
     let (kind, args) = text.split_once(':').unwrap_or((text, ""));
     match kind {
@@ -1339,8 +1346,8 @@ fn parse_bounds(args: &str) -> Result<(Option<f64>, Option<f64>), String> {
     Ok((number(min)?, number(max)?))
 }
 
-fn parse_origin(text: &str) -> Result<crate::app::binding::Origin, String> {
-    use crate::app::binding::Origin;
+fn parse_origin(text: &str) -> Result<crate::app::data::binding::Origin, String> {
+    use crate::app::data::binding::Origin;
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::PropertyName;
     if let Some(name) = text.strip_prefix("f:") {
@@ -1439,7 +1446,7 @@ fn list_recent() -> bool {
     let mut missing = 0usize;
     for entry in &entries {
         let state = recent.state_of(entry);
-        if state == crate::project::recent::RecentState::Missing {
+        if state == crate::project::lifecycle::recent::RecentState::Missing {
             missing += 1;
         }
     }

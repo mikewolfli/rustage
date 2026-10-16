@@ -280,7 +280,7 @@ another tool's format, merging two projects and migrating downwards all belong e
 
 `--validate <file>` is where this milestone's fifth acceptance line lives: "a missing SDK or resource
 does not clear the editable document". Checking is answering, and the types say so: there is no writer
-in `src/project/validate.rs` at all, and the command prints, as its last line, the project's own bytes
+in `src/project/lifecycle/validate.rs` at all, and the command prints, as its last line, the project's own bytes
 compared with the ones it read when it started. Every need is answered with one of four words, because
 folding them together is how a report starts lying: `present`, `missing`, `not-checked` (nobody looked
 — the project is not trusted, the permission table said no, the store could not be reached) and

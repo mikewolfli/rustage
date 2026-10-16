@@ -275,7 +275,7 @@ rustage/
 * `tools/resources/` 随首个派生需求（`y' = y - 24` 几何转换、平台图标、联系表）实现，
   不是空脚手架：`check-resources.mjs` 校验源文件，`generate-resources.mjs` 生成派生物。
 * 已建立（更新三）：`src/resources/`（`icons.rs` + 生成的图标表）与
-  `src/app/toolbar.rs`（真实控件工具栏小样）。依赖按修订固定，见 §7.5；
+  `src/app/shell/toolbar.rs`（真实控件工具栏小样）。依赖按修订固定，见 §7.5；
   八角色映射见 §9.1，控件侧证据见 §9.2。
 * 已建立（更新三）：`tests/baselines/icons/` 的四个基线由**真实控件**经依赖自带的 SVG 后端
   渲染，并由测试逐字节比对；生成命令见 §16.3。
@@ -1189,7 +1189,7 @@ derived digest / rustage semantic ID(s)
  -> cargo test                                  # 固定依赖里的轮廓/容量/绘制/主题断言
  -> cargo run -- --render-icons tests/baselines/icons   # 真实控件重渲染基线
  -> 审核视觉 diff（`tests/baselines/icons/` 四个 SVG 与两张评审图）
- -> 需要时把新 ID 加进 src/app/toolbar.rs 的样例计划
+ -> 需要时把新 ID 加进 src/app/shell/toolbar.rs 的样例计划
 ```
 
 `generate-resources.mjs` 会重写 `src/resources/generated_host_icons.rs`；提交它之前先看

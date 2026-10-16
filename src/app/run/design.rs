@@ -10,7 +10,7 @@ use super::*;
 
 /// Shows the widget catalog (task T09.01).
 pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
-    use crate::app::widget_catalog::{Catalog, WidgetDescriptor};
+    use crate::app::canvas::widget_catalog::{Catalog, WidgetDescriptor};
 
     let mut descriptors: Vec<WidgetDescriptor> = Vec::new();
     let mut favorites: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -135,10 +135,10 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
 
 /// Drives the design scene: instances, hit tests and selection (task T09.02).
 pub(super) fn scene(options: &crate::cli::SceneOptions) -> bool {
-    use crate::app::scene::Scene;
+    use crate::app::canvas::scene::Scene;
 
     let mut scene = Scene::new();
-    let mut selection = crate::app::selection::Selection::new();
+    let mut selection = crate::app::canvas::selection::Selection::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -238,7 +238,7 @@ pub(super) fn scene(options: &crate::cli::SceneOptions) -> bool {
             },
             "resolve" => match parse_node_generation(argument) {
                 Ok((node, generation)) => {
-                    match scene.resolve(crate::app::scene::Handle { node, generation }) {
+                    match scene.resolve(crate::app::canvas::scene::Handle { node, generation }) {
                         Ok(rect) => Ok(vec![format!(
                             "resolve node {} gen {generation}: {}",
                             node.get(),
@@ -280,7 +280,13 @@ pub(super) fn scene(options: &crate::cli::SceneOptions) -> bool {
 /// A `(node, rect)` from `<node>:<x>,<y>,<w>,<h>`.
 pub(super) fn parse_node_rect(
     argument: &str,
-) -> Result<(crate::contracts::identity::NodeId, crate::app::scene::Rect), String> {
+) -> Result<
+    (
+        crate::contracts::identity::NodeId,
+        crate::app::canvas::scene::Rect,
+    ),
+    String,
+> {
     let (node, rect) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} is not <node>:<rect>"))?;
@@ -288,7 +294,7 @@ pub(super) fn parse_node_rect(
 }
 
 /// A rect from `<x>,<y>,<w>,<h>`.
-pub(super) fn parse_rect(text: &str) -> Result<crate::app::scene::Rect, String> {
+pub(super) fn parse_rect(text: &str) -> Result<crate::app::canvas::scene::Rect, String> {
     let parts: Vec<&str> = text.split(',').collect();
     let [x, y, width, height] = parts.as_slice() else {
         return Err(format!("{text:?} is not <x>,<y>,<w>,<h>"));
@@ -298,7 +304,7 @@ pub(super) fn parse_rect(text: &str) -> Result<crate::app::scene::Rect, String> 
             .parse()
             .map_err(|_| format!("{value:?} is not a number"))
     };
-    Ok(crate::app::scene::Rect::new(
+    Ok(crate::app::canvas::scene::Rect::new(
         number(x)?,
         number(y)?,
         number(width)?.max(0) as u32,
@@ -334,7 +340,7 @@ pub(super) fn parse_node_generation(
 
 /// Runs structural edits on the object tree (task T09.04).
 pub(super) fn structure(options: &crate::cli::StructureOptions) -> bool {
-    use crate::app::structure::Tree;
+    use crate::app::canvas::structure::Tree;
 
     let mut tree = Tree::new();
     for op in &options.ops {
@@ -448,7 +454,7 @@ pub(super) fn structure(options: &crate::cli::StructureOptions) -> bool {
 
 /// Pans, zooms and shows the design aids without touching the model (task T09.05).
 pub(super) fn viewport(options: &crate::cli::ViewportOptions) -> bool {
-    use crate::app::viewport::{Point, Size, Transform, Viewport, align};
+    use crate::app::canvas::viewport::{Point, Size, Transform, Viewport, align};
 
     let mut viewport = Viewport::new(10.0);
     for op in &options.ops {
@@ -614,7 +620,14 @@ pub(super) fn viewport(options: &crate::cli::ViewportOptions) -> bool {
 /// A `(bounds, view, margin)` from `<x>,<y>,<w>,<h>:<vw>,<vh>[:<margin>]`.
 pub(super) fn parse_fit(
     argument: &str,
-) -> Result<(crate::app::scene::Rect, crate::app::viewport::Size, f64), String> {
+) -> Result<
+    (
+        crate::app::canvas::scene::Rect,
+        crate::app::canvas::viewport::Size,
+        f64,
+    ),
+    String,
+> {
     let mut parts = argument.split(':');
     let bounds = parts
         .next()
@@ -632,17 +645,17 @@ pub(super) fn parse_fit(
 }
 
 /// A `(x, y)` size in float form.
-pub(super) fn parse_size(text: &str) -> Result<crate::app::viewport::Size, String> {
+pub(super) fn parse_size(text: &str) -> Result<crate::app::canvas::viewport::Size, String> {
     match parse_floats(text).as_deref() {
-        Ok([width, height]) => Ok(crate::app::viewport::Size::new(*width, *height)),
+        Ok([width, height]) => Ok(crate::app::canvas::viewport::Size::new(*width, *height)),
         _ => Err(format!("{text:?} is not <w>,<h>")),
     }
 }
 
 /// A model or screen point from `<x>,<y>`.
-pub(super) fn parse_rect_point(text: &str) -> Result<crate::app::viewport::Point, String> {
+pub(super) fn parse_rect_point(text: &str) -> Result<crate::app::canvas::viewport::Point, String> {
     match parse_floats(text).as_deref() {
-        Ok([x, y]) => Ok(crate::app::viewport::Point::new(*x, *y)),
+        Ok([x, y]) => Ok(crate::app::canvas::viewport::Point::new(*x, *y)),
         _ => Err(format!("{text:?} is not <x>,<y>")),
     }
 }
@@ -650,7 +663,14 @@ pub(super) fn parse_rect_point(text: &str) -> Result<crate::app::viewport::Point
 /// A `(moving, others, tolerance)` from `<rect>:<rect>[:<tol>]`.
 pub(super) fn parse_align(
     argument: &str,
-) -> Result<(crate::app::scene::Rect, Vec<crate::app::scene::Rect>, f64), String> {
+) -> Result<
+    (
+        crate::app::canvas::scene::Rect,
+        Vec<crate::app::canvas::scene::Rect>,
+        f64,
+    ),
+    String,
+> {
     let mut parts = argument.split(':');
     let moving = parts
         .next()
@@ -669,11 +689,11 @@ pub(super) fn parse_align(
 
 /// Drags a node, previews the drop, and commits a batch as one transaction (task T09.06).
 pub(super) fn drag(options: &crate::cli::DragOptions) -> bool {
-    use crate::app::drag::{Design, Drag, Drop, Edit};
+    use crate::app::canvas::drag::{Design, Drag, Drop, Edit};
 
     let mut design = Design::new();
     let mut in_progress: Option<Drag> = None;
-    let mut pending: Vec<crate::app::drag::Move> = Vec::new();
+    let mut pending: Vec<crate::app::canvas::drag::Move> = Vec::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -783,12 +803,12 @@ pub(super) fn drag(options: &crate::cli::DragOptions) -> bool {
 
 /// Inserts a node as its own one-edit transaction.
 pub(super) fn insert_edit(
-    design: &mut crate::app::drag::Design,
+    design: &mut crate::app::canvas::drag::Design,
     parent: Option<crate::contracts::identity::NodeId>,
-    kind: crate::app::structure::Kind,
+    kind: crate::app::canvas::structure::Kind,
     name: &str,
 ) -> Result<Vec<String>, String> {
-    let edit = crate::app::drag::Edit::Insert {
+    let edit = crate::app::canvas::drag::Edit::Insert {
         parent,
         kind,
         name: name.to_owned(),
@@ -800,12 +820,12 @@ pub(super) fn insert_edit(
 }
 
 /// The comma-separated numbers in an argument.
-pub(super) fn parse_move(argument: &str) -> Result<crate::app::drag::Move, String> {
+pub(super) fn parse_move(argument: &str) -> Result<crate::app::canvas::drag::Move, String> {
     let (node, rest) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} is not <node>:<parent|->:<index>"))?;
     let (parent, index) = parse_parent_index(rest)?;
-    Ok(crate::app::drag::Move::new(
+    Ok(crate::app::canvas::drag::Move::new(
         parse_scene_node(node)?,
         parent,
         index,
@@ -832,7 +852,7 @@ pub(super) fn parse_parent_index(
 
 /// Shows design-time object state, filtering and pages (task T09.07).
 pub(super) fn objects(options: &crate::cli::ObjectsOptions) -> bool {
-    use crate::app::objects::{Filter, Objects, Pages, published};
+    use crate::app::canvas::objects::{Filter, Objects, Pages, published};
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::Node;
     use std::collections::BTreeMap;
@@ -1062,20 +1082,20 @@ pub(super) fn parse_page_id(argument: &str) -> Result<crate::contracts::identity
 /// A design-state filter from a name.
 pub(super) fn parse_state_filter(
     argument: &str,
-) -> Result<crate::app::objects::StateFilter, String> {
+) -> Result<crate::app::canvas::objects::StateFilter, String> {
     match argument {
-        "hidden" => Ok(crate::app::objects::StateFilter::Hidden),
-        "shown" => Ok(crate::app::objects::StateFilter::Shown),
-        "locked" => Ok(crate::app::objects::StateFilter::Locked),
-        "unlocked" => Ok(crate::app::objects::StateFilter::Unlocked),
+        "hidden" => Ok(crate::app::canvas::objects::StateFilter::Hidden),
+        "shown" => Ok(crate::app::canvas::objects::StateFilter::Shown),
+        "locked" => Ok(crate::app::canvas::objects::StateFilter::Locked),
+        "unlocked" => Ok(crate::app::canvas::objects::StateFilter::Unlocked),
         other => Err(format!("{other:?} is not a state")),
     }
 }
 
 /// Drives the design surface's keyboard and its stress harness (task T09.08).
 pub(super) fn design(options: &crate::cli::DesignOptions) -> bool {
-    use crate::app::design::{Action, Surface};
-    use crate::app::shortcuts::{Chord, Scene as Keys};
+    use crate::app::canvas::design::{Action, Surface};
+    use crate::app::commands::shortcuts::{Chord, Scene as Keys};
 
     let mut surface = Surface::bounded(64);
     let context = Keys::in_mode("design", None);
@@ -1150,14 +1170,18 @@ pub(super) fn design(options: &crate::cli::DesignOptions) -> bool {
 
 /// Builds `nodes` nodes, then runs `rounds` delete/undo cycles and reports the footprint.
 pub(super) fn run_stress(nodes: usize, rounds: usize) -> Result<String, String> {
-    use crate::app::design::{Action, Surface};
+    use crate::app::canvas::design::{Action, Surface};
 
     let mut surface = Surface::bounded(64);
-    let panel = surface.add(None, crate::app::structure::Kind::Container, "panel")?;
+    let panel = surface.add(
+        None,
+        crate::app::canvas::structure::Kind::Container,
+        "panel",
+    )?;
     for index in 0..nodes {
         surface.add(
             Some(panel),
-            crate::app::structure::Kind::Widget,
+            crate::app::canvas::structure::Kind::Widget,
             &format!("n{index}"),
         )?;
     }
@@ -1190,7 +1214,7 @@ pub(super) fn parse_design_node(
 ) -> Result<
     (
         Option<crate::contracts::identity::NodeId>,
-        crate::app::structure::Kind,
+        crate::app::canvas::structure::Kind,
         String,
     ),
     String,

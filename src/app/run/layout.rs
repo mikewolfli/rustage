@@ -10,7 +10,9 @@ use super::*;
 
 /// Exercises the layout contract and its diagnostics (task T10.01).
 pub(super) fn layout_plan(options: &crate::cli::LayoutPlanOptions) -> bool {
-    use crate::app::layout_plan::{Computed, Diagnostic, Engine, LayoutInput, Role, Size, layout};
+    use crate::app::layout::layout_plan::{
+        Computed, Diagnostic, Engine, LayoutInput, Role, Size, layout,
+    };
 
     /// The headless stand-in for the library engine: it answers the boxes the operator supplied
     /// (`box:` ops) and diagnoses a node it was given none for. The real engine arrives with the
@@ -128,8 +130,8 @@ pub(super) fn layout_plan(options: &crate::cli::LayoutPlanOptions) -> bool {
 
 /// The inputs and supplied boxes in a report.
 pub(super) fn render_layout_state(
-    inputs: &[crate::app::layout_plan::LayoutInput],
-    boxes: &[crate::app::layout_plan::Computed],
+    inputs: &[crate::app::layout::layout_plan::LayoutInput],
+    boxes: &[crate::app::layout::layout_plan::Computed],
 ) -> Vec<String> {
     let mut lines = vec![format!("inputs: {}", inputs.len())];
     for input in inputs {
@@ -151,7 +153,7 @@ pub(super) fn render_layout_state(
 /// A constraint from `<node>:<property>:<origin>`.
 pub(super) fn parse_constraint(
     argument: &str,
-) -> Result<crate::app::layout_plan::Constraint, String> {
+) -> Result<crate::app::layout::layout_plan::Constraint, String> {
     let fields: Vec<&str> = argument.splitn(3, ':').collect();
     let [node, property, origin] = fields.as_slice() else {
         return Err(format!("{argument:?} is not <node>:<property>:<origin>"));
@@ -159,21 +161,23 @@ pub(super) fn parse_constraint(
     let node = parse_scene_node(node)?;
     let property = crate::contracts::model::PropertyName::new(property)
         .ok_or_else(|| format!("{property:?} is not a property name"))?;
-    let origin = crate::app::layout_plan::Origin::from_name(origin)
+    let origin = crate::app::layout::layout_plan::Origin::from_name(origin)
         .ok_or_else(|| format!("{origin:?} is not an origin"))?;
-    Ok(crate::app::layout_plan::Constraint::new(
+    Ok(crate::app::layout::layout_plan::Constraint::new(
         node, property, origin,
     ))
 }
 
 /// A computed box from `<node>:<x>,<y>,<w>,<h>`.
-pub(super) fn parse_box(argument: &str) -> Result<crate::app::layout_plan::Computed, String> {
+pub(super) fn parse_box(
+    argument: &str,
+) -> Result<crate::app::layout::layout_plan::Computed, String> {
     let (node, rect) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} is not <node>:<x>,<y>,<w>,<h>"))?;
     let node = parse_scene_node(node)?;
     match parse_floats(rect).as_deref() {
-        Ok([x, y, width, height]) => Ok(crate::app::layout_plan::Computed {
+        Ok([x, y, width, height]) => Ok(crate::app::layout::layout_plan::Computed {
             node,
             x: *x,
             y: *y,
@@ -186,10 +190,10 @@ pub(super) fn parse_box(argument: &str) -> Result<crate::app::layout_plan::Compu
 
 /// Chooses, switches and detaches a container's layout (task T10.02).
 pub(super) fn layout_switch(options: &crate::cli::LayoutSwitchOptions) -> bool {
-    use crate::app::layout_choice::{LayoutKind, detach, switch};
+    use crate::app::layout::layout_choice::{LayoutKind, detach, switch};
 
     let mut kind: Option<LayoutKind> = None;
-    let mut children: Vec<crate::app::layout_plan::Constraint> = Vec::new();
+    let mut children: Vec<crate::app::layout::layout_plan::Constraint> = Vec::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -239,12 +243,12 @@ pub(super) fn layout_switch(options: &crate::cli::LayoutSwitchOptions) -> bool {
 
 /// The chosen layout and the children in a report.
 pub(super) fn render_layout_choice(
-    kind: Option<crate::app::layout_choice::LayoutKind>,
-    children: &[crate::app::layout_plan::Constraint],
+    kind: Option<crate::app::layout::layout_choice::LayoutKind>,
+    children: &[crate::app::layout::layout_plan::Constraint],
 ) -> Vec<String> {
     let mut lines = vec![format!(
         "layout: {}",
-        kind.map_or("none", crate::app::layout_choice::LayoutKind::name)
+        kind.map_or("none", crate::app::layout::layout_choice::LayoutKind::name)
     )];
     lines.push(format!("children: {}", children.len()));
     for constraint in children {
@@ -260,23 +264,23 @@ pub(super) fn render_layout_choice(
 /// A child constraint from `<node>:<property>`.
 pub(super) fn parse_child_constraint(
     argument: &str,
-) -> Result<crate::app::layout_plan::Constraint, String> {
+) -> Result<crate::app::layout::layout_plan::Constraint, String> {
     let (node, property) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} is not <node>:<property>"))?;
     let node = parse_scene_node(node)?;
     let property = crate::contracts::model::PropertyName::new(property)
         .ok_or_else(|| format!("{property:?} is not a property name"))?;
-    Ok(crate::app::layout_plan::Constraint::new(
+    Ok(crate::app::layout::layout_plan::Constraint::new(
         node,
         property,
-        crate::app::layout_plan::Origin::Explicit,
+        crate::app::layout::layout_plan::Origin::Explicit,
     ))
 }
 
 /// Sets and validates a node's box constraints (task T10.03).
 pub(super) fn constraints(options: &crate::cli::ConstraintsOptions) -> bool {
-    use crate::app::constraints::{BoxConstraints, Overflow};
+    use crate::app::layout::constraints::{BoxConstraints, Overflow};
     use crate::contracts::identity::NodeId;
     use std::collections::BTreeMap;
 
@@ -289,7 +293,7 @@ pub(super) fn constraints(options: &crate::cli::ConstraintsOptions) -> bool {
                     let set = sets
                         .entry(node)
                         .or_insert_with(|| BoxConstraints::new(node));
-                    let size = crate::app::layout_plan::Size::new(width, height);
+                    let size = crate::app::layout::layout_plan::Size::new(width, height);
                     match verb {
                         "min" => set.minimum = Some(size),
                         "max" => set.maximum = Some(size),
@@ -361,7 +365,7 @@ pub(super) fn constraints(options: &crate::cli::ConstraintsOptions) -> bool {
 pub(super) fn render_constraints(
     sets: &std::collections::BTreeMap<
         crate::contracts::identity::NodeId,
-        crate::app::constraints::BoxConstraints,
+        crate::app::layout::constraints::BoxConstraints,
     >,
 ) -> Vec<String> {
     let mut lines = vec![format!("constraints: {} node(s)", sets.len())];
@@ -401,8 +405,8 @@ pub(super) fn parse_node_scalar(
 
 /// Aligns, distributes and nudges a selection as constraint writes (task T10.04).
 pub(super) fn arrange(options: &crate::cli::ArrangeOptions) -> bool {
-    use crate::app::arrange::{Axis, Operation};
-    use crate::app::layout_choice::LayoutKind;
+    use crate::app::layout::arrange::{Axis, Operation};
+    use crate::app::layout::layout_choice::LayoutKind;
     use crate::contracts::identity::NodeId;
 
     let mut kind = LayoutKind::Row;
@@ -467,11 +471,11 @@ pub(super) fn arrange(options: &crate::cli::ArrangeOptions) -> bool {
 
 /// Runs one arrangement and renders either it or its refusal.
 pub(super) fn run_arrange(
-    kind: crate::app::layout_choice::LayoutKind,
+    kind: crate::app::layout::layout_choice::LayoutKind,
     selected: &[crate::contracts::identity::NodeId],
-    operation: crate::app::arrange::Operation,
+    operation: crate::app::layout::arrange::Operation,
 ) -> Vec<String> {
-    match crate::app::arrange::apply(kind, selected, operation) {
+    match crate::app::layout::arrange::apply(kind, selected, operation) {
         Ok(arrangement) => arrangement.render(),
         Err(refusal) => refusal.render(),
     }
@@ -479,7 +483,7 @@ pub(super) fn run_arrange(
 
 /// The layout and the selection in a report.
 pub(super) fn render_arrange(
-    kind: crate::app::layout_choice::LayoutKind,
+    kind: crate::app::layout::layout_choice::LayoutKind,
     selected: &[crate::contracts::identity::NodeId],
 ) -> Vec<String> {
     let ids: Vec<String> = selected.iter().map(|node| node.get().to_string()).collect();
@@ -492,19 +496,27 @@ pub(super) fn render_arrange(
 /// An `(axis, mode)` from `<axis>:<mode>`.
 pub(super) fn parse_axis_mode(
     argument: &str,
-) -> Result<(crate::app::arrange::Axis, crate::app::arrange::Align), String> {
+) -> Result<
+    (
+        crate::app::layout::arrange::Axis,
+        crate::app::layout::arrange::Align,
+    ),
+    String,
+> {
     let (axis, mode) = argument
         .split_once(':')
         .ok_or_else(|| format!("{argument:?} is not <axis>:<mode>"))?;
-    let axis = crate::app::arrange::Axis::from_name(axis)
+    let axis = crate::app::layout::arrange::Axis::from_name(axis)
         .ok_or_else(|| format!("{axis:?} is not an axis"))?;
-    let mode = crate::app::arrange::Align::from_name(mode)
+    let mode = crate::app::layout::arrange::Align::from_name(mode)
         .ok_or_else(|| format!("{mode:?} is not an alignment"))?;
     Ok((axis, mode))
 }
 
 /// A nudge operation from `<axis>:<direction>:<step>[:<spacing>]`, snapping the step to the grid.
-pub(super) fn parse_nudge(argument: &str) -> Result<crate::app::arrange::Operation, String> {
+pub(super) fn parse_nudge(
+    argument: &str,
+) -> Result<crate::app::layout::arrange::Operation, String> {
     let fields: Vec<&str> = argument.split(':').collect();
     let (axis, direction, step, spacing) = match fields.as_slice() {
         [axis, direction, step] => (*axis, *direction, *step, None),
@@ -515,7 +527,7 @@ pub(super) fn parse_nudge(argument: &str) -> Result<crate::app::arrange::Operati
             ));
         }
     };
-    let axis = crate::app::arrange::Axis::from_name(axis)
+    let axis = crate::app::layout::arrange::Axis::from_name(axis)
         .ok_or_else(|| format!("{axis:?} is not an axis"))?;
     let direction = direction
         .parse::<i8>()
@@ -528,11 +540,11 @@ pub(super) fn parse_nudge(argument: &str) -> Result<crate::app::arrange::Operati
             let spacing = spacing
                 .parse::<f64>()
                 .map_err(|_| format!("{spacing:?} is not a spacing"))?;
-            crate::app::arrange::snapped_step(step, spacing)
+            crate::app::layout::arrange::snapped_step(step, spacing)
         }
         None => step,
     };
-    Ok(crate::app::arrange::Operation::Nudge {
+    Ok(crate::app::layout::arrange::Operation::Nudge {
         axis,
         direction,
         step,
@@ -541,8 +553,8 @@ pub(super) fn parse_nudge(argument: &str) -> Result<crate::app::arrange::Operati
 
 /// Checks simulated frames against a target's support (task T10.05).
 pub(super) fn frames(options: &crate::cli::FramesOptions) -> bool {
-    use crate::app::frames::{Frame, Insets, Orientation, Support, check};
-    use crate::app::layout_plan::Size;
+    use crate::app::layout::frames::{Frame, Insets, Orientation, Support, check};
+    use crate::app::layout::layout_plan::Size;
     use std::collections::BTreeMap;
 
     let mut support = Support::new();
@@ -665,8 +677,8 @@ pub(super) fn frames(options: &crate::cli::FramesOptions) -> bool {
 
 /// The support and the frames in a report.
 pub(super) fn render_frames(
-    support: &crate::app::frames::Support,
-    frames: &std::collections::BTreeMap<String, crate::app::frames::Frame>,
+    support: &crate::app::layout::frames::Support,
+    frames: &std::collections::BTreeMap<String, crate::app::layout::frames::Frame>,
     order: &[String],
 ) -> Vec<String> {
     let mut lines = vec![format!(
@@ -692,17 +704,17 @@ pub(super) fn render_frames(
 }
 
 /// A frame from `<label>:<w>,<h>:<orientation>`.
-pub(super) fn parse_frame(argument: &str) -> Result<crate::app::frames::Frame, String> {
+pub(super) fn parse_frame(argument: &str) -> Result<crate::app::layout::frames::Frame, String> {
     let fields: Vec<&str> = argument.splitn(3, ':').collect();
     let [label, size, orientation] = fields.as_slice() else {
         return Err(format!("{argument:?} is not <label>:<w>,<h>:<orientation>"));
     };
-    let orientation = crate::app::frames::Orientation::from_name(orientation)
+    let orientation = crate::app::layout::frames::Orientation::from_name(orientation)
         .ok_or_else(|| format!("{orientation:?} is not an orientation"))?;
     match parse_floats(size).as_deref() {
-        Ok([width, height]) => Ok(crate::app::frames::Frame::new(
+        Ok([width, height]) => Ok(crate::app::layout::frames::Frame::new(
             *label,
-            crate::app::layout_plan::Size::new(*width, *height),
+            crate::app::layout::layout_plan::Size::new(*width, *height),
             orientation,
         )),
         _ => Err(format!("{size:?} is not <w>,<h>")),
@@ -711,8 +723,8 @@ pub(super) fn parse_frame(argument: &str) -> Result<crate::app::frames::Frame, S
 
 /// Builds and inspects the focus order (task T10.06).
 pub(super) fn focus_order(options: &crate::cli::FocusOrderOptions) -> bool {
-    use crate::app::focus_order::build;
-    use crate::app::structure::Tree;
+    use crate::app::canvas::structure::Tree;
+    use crate::app::layout::focus_order::build;
     use crate::contracts::identity::NodeId;
     use std::collections::BTreeMap;
 
@@ -818,7 +830,7 @@ pub(super) fn focus_order(options: &crate::cli::FocusOrderOptions) -> bool {
 
 /// Declares a target's capability and builds layout variants (task T10.07).
 pub(super) fn variants(options: &crate::cli::VariantsOptions) -> bool {
-    use crate::app::variants::{Capability, ConditionKind, Variant, add};
+    use crate::app::layout::variants::{Capability, ConditionKind, Variant, add};
 
     let mut capability = Capability::new();
     let mut variants: Vec<Variant> = Vec::new();
@@ -888,8 +900,8 @@ pub(super) fn variants(options: &crate::cli::VariantsOptions) -> bool {
 
 /// The capability and the variants in a report.
 pub(super) fn render_variants(
-    capability: &crate::app::variants::Capability,
-    variants: &[crate::app::variants::Variant],
+    capability: &crate::app::layout::variants::Capability,
+    variants: &[crate::app::layout::variants::Variant],
 ) -> Vec<String> {
     let kinds: Vec<&str> = capability
         .conditions
@@ -905,30 +917,32 @@ pub(super) fn render_variants(
 }
 
 /// A condition from `<kind>=<value>`.
-pub(super) fn parse_condition(argument: &str) -> Result<crate::app::variants::Condition, String> {
-    use crate::app::variants::Condition;
+pub(super) fn parse_condition(
+    argument: &str,
+) -> Result<crate::app::layout::variants::Condition, String> {
+    use crate::app::layout::variants::Condition;
 
     let (kind, value) = argument
         .split_once('=')
         .ok_or_else(|| format!("{argument:?} is not <kind>=<value>"))?;
-    let kind = crate::app::variants::ConditionKind::from_name(kind)
+    let kind = crate::app::layout::variants::ConditionKind::from_name(kind)
         .ok_or_else(|| format!("{kind:?} is not a condition kind"))?;
     match kind {
-        crate::app::variants::ConditionKind::Orientation => {
-            let orientation = crate::app::frames::Orientation::from_name(value)
+        crate::app::layout::variants::ConditionKind::Orientation => {
+            let orientation = crate::app::layout::frames::Orientation::from_name(value)
                 .ok_or_else(|| format!("{value:?} is not an orientation"))?;
             Ok(Condition::Orientation(orientation))
         }
-        crate::app::variants::ConditionKind::MinWidth => {
+        crate::app::layout::variants::ConditionKind::MinWidth => {
             Ok(Condition::MinWidth(parse_number(value)?))
         }
-        crate::app::variants::ConditionKind::MaxWidth => {
+        crate::app::layout::variants::ConditionKind::MaxWidth => {
             Ok(Condition::MaxWidth(parse_number(value)?))
         }
-        crate::app::variants::ConditionKind::MinHeight => {
+        crate::app::layout::variants::ConditionKind::MinHeight => {
             Ok(Condition::MinHeight(parse_number(value)?))
         }
-        crate::app::variants::ConditionKind::MaxHeight => {
+        crate::app::layout::variants::ConditionKind::MaxHeight => {
             Ok(Condition::MaxHeight(parse_number(value)?))
         }
     }
@@ -943,8 +957,8 @@ pub(super) fn parse_number(value: &str) -> Result<f64, String> {
 
 /// Compares the preview with a library-generated probe on the same input (task T10.08).
 pub(super) fn layout_probe(options: &crate::cli::LayoutProbeOptions) -> bool {
-    use crate::app::layout_plan::{Computed, Diagnostic, Engine, LayoutInput, Role, Size};
-    use crate::app::layout_probe::{compare, run};
+    use crate::app::layout::layout_plan::{Computed, Diagnostic, Engine, LayoutInput, Role, Size};
+    use crate::app::layout::layout_probe::{compare, run};
 
     /// The headless stand-in for a layout engine: it answers the boxes it was given for this side.
     struct Supplied(Vec<Computed>);
@@ -1056,9 +1070,9 @@ pub(super) fn layout_probe(options: &crate::cli::LayoutProbeOptions) -> bool {
 /// The scenario, inputs and both sides' boxes in a report.
 pub(super) fn render_probe(
     scenario: &str,
-    inputs: &[crate::app::layout_plan::LayoutInput],
-    preview: &[crate::app::layout_plan::Computed],
-    probe: &[crate::app::layout_plan::Computed],
+    inputs: &[crate::app::layout::layout_plan::LayoutInput],
+    preview: &[crate::app::layout::layout_plan::Computed],
+    probe: &[crate::app::layout::layout_plan::Computed],
 ) -> Vec<String> {
     let mut lines = vec![format!("scenario: {scenario}")];
     lines.push(format!("inputs: {}", inputs.len()));

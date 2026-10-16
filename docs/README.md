@@ -31,7 +31,7 @@ boundaries. It informs roadmap scope, not claims of implemented capabilities.
 [Icon and resource plan](plan/resources.md) defines host/project resource boundaries,
 source placement, rust-widgets integration constraints, and packaging acceptance.
 Its host source layer is implemented in `resources/` with checks in `tools/resources/`;
-the icon seam and the control-level strip are `src/resources/` and `src/app/toolbar.rs`,
+the icon seam and the control-level strip are `src/resources/` and `src/app/shell/toolbar.rs`,
 with baselines under `tests/baselines/icons/`.
 
 [Issue record](issues/issue-20261013.md) tracks the icon, resource and packaging gaps and the
@@ -122,7 +122,7 @@ order they are being closed in. It is a work list, not a statement of implemente
   notification centre T01.06 asks for, the project registry with its shutdown order T01.07 asks for,
   and the credential references, TLS configuration and network permits T01.09 asks for (with the
   decision-table row that change required), the project format version 1 T02.01 asks for, whose
-  specification is the module documentation of `src/project/format.rs` and whose example is the
+  specification is the module documentation of `src/project/record/format.rs` and whose example is the
   committed project under `examples/demo-project/`, and the page document format and the creation
   path T02.02 asks for, which write a project into a staging directory and put it in place with one
   rename, and opening a project T02.03 asks for, with the trust question, the machine-local recent

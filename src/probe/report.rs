@@ -209,9 +209,9 @@ impl ProbeReport {
 /// and must not grow a second escaper: two implementations would eventually disagree about which
 /// characters are legal inside a literal, and one of the two artifacts would be the one that is
 /// wrong (principle #35). The rule itself lives next to the writer that owns it,
-/// [`crate::project::json::escape_string`].
+/// [`crate::project::record::json::escape_string`].
 pub(crate) fn json_string(value: &str) -> String {
-    crate::project::json::escape_string(value)
+    crate::project::record::json::escape_string(value)
 }
 
 #[cfg(test)]

@@ -59,11 +59,11 @@ impl FormatVersion {
     /// The **project document** format this build writes.
     ///
     /// Version 2 added `startup` to the project document: which entry a target starts with. Version 1
-    /// documents are read by the migration table in `crate::project::format` and written back as
+    /// documents are read by the migration table in `crate::project::record::format` and written back as
     /// version 2, so this number is the ceiling a reader has to know about, not a floor.
     ///
     /// A page document and the machine-local recent list are *other* formats with their own
-    /// sequences (`crate::project::page::PAGE_FORMAT`, `crate::project::recent::RECENT_FORMAT`):
+    /// sequences (`crate::project::record::page::PAGE_FORMAT`, `crate::project::lifecycle::recent::RECENT_FORMAT`):
     /// adding a member to one of them must not silently invalidate the others, which is exactly what
     /// sharing this constant would do.
     pub const CURRENT: Self = Self(2);

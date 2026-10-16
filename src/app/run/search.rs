@@ -10,7 +10,9 @@ use super::*;
 
 /// Compares two texts or trees, and shows a read-only revision (task T08.07).
 pub(super) fn diff_command(options: &crate::cli::DiffOptions) -> bool {
-    use crate::app::diff::{Options, Revision, Row, TreeEntry, changed_rows, compare_trees, diff};
+    use crate::app::search::diff::{
+        Options, Revision, Row, TreeEntry, changed_rows, compare_trees, diff,
+    };
 
     let compare = Options {
         ignore_line_endings: options.ignore_endings,
@@ -86,7 +88,7 @@ pub(super) fn diff_command(options: &crate::cli::DiffOptions) -> bool {
                 let mut changed = 0;
                 for file in compare_trees(&left_tree, &right_tree, compare) {
                     println!("{}", file.render());
-                    if file.kind != crate::app::diff::FileKind::Identical {
+                    if file.kind != crate::app::search::diff::FileKind::Identical {
                         changed += 1;
                     }
                 }
@@ -113,14 +115,17 @@ pub(super) fn diff_command(options: &crate::cli::DiffOptions) -> bool {
 }
 
 /// A tree entry from `<path>=<text>`.
-pub(super) fn tree_entry(text: &str) -> Option<crate::app::diff::TreeEntry> {
+pub(super) fn tree_entry(text: &str) -> Option<crate::app::search::diff::TreeEntry> {
     let (path, body) = text.split_once('=')?;
-    Some(crate::app::diff::TreeEntry::new(path, unescape(body)))
+    Some(crate::app::search::diff::TreeEntry::new(
+        path,
+        unescape(body),
+    ))
 }
 
 /// Builds the project file index (task T08.01).
 pub(super) fn index_command(options: &crate::cli::IndexOptions) -> bool {
-    use crate::project::index::{Event, Index, Node, Rules, Tree};
+    use crate::project::record::index::{Event, Index, Node, Rules, Tree};
 
     let mut rules = Rules::new();
     let mut tree = Tree::default();
@@ -225,8 +230,8 @@ pub(super) fn index_command(options: &crate::cli::IndexOptions) -> bool {
 }
 
 /// A node from `<path>:<file|dir|symlink>:<size|target>`.
-pub(super) fn parse_node(argument: &str) -> Result<crate::project::index::Node, String> {
-    use crate::project::index::Node;
+pub(super) fn parse_node(argument: &str) -> Result<crate::project::record::index::Node, String> {
+    use crate::project::record::index::Node;
     let fields: Vec<&str> = argument.rsplitn(3, ':').collect();
     let [value, kind, path] = fields.as_slice() else {
         return Err(format!("{argument:?} is not <path>:<kind>:<size|target>"));
@@ -249,14 +254,14 @@ pub(super) fn parse_path_size(argument: &str) -> Result<(String, usize), String>
 
 /// Searches file and project text (task T08.02).
 pub(super) fn search(options: &crate::cli::SearchOptions) -> bool {
-    use crate::app::scale::Cancellation;
-    use crate::app::search::{Limits, Query, search};
+    use crate::app::editor::scale::Cancellation;
+    use crate::app::search::text::{Limits, Query, search};
 
     let mut query = Query::literal(String::new());
     let mut files: Vec<(String, String)> = Vec::new();
     let mut limits = Limits::new();
     let mut cancel = false;
-    let mut results: Option<crate::app::search::Results> = None;
+    let mut results: Option<crate::app::search::text::Results> = None;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -340,8 +345,8 @@ pub(super) fn search(options: &crate::cli::SearchOptions) -> bool {
 
 /// Opens files and symbols by a query (task T08.03).
 pub(super) fn quick_open(options: &crate::cli::QuickOpenOptions) -> bool {
-    use crate::app::language::{Capabilities, Capability};
-    use crate::app::quick_open::{Candidate, QuickOpen, SymbolEntry, symbols};
+    use crate::app::language::session::{Capabilities, Capability};
+    use crate::app::search::quick_open::{Candidate, QuickOpen, SymbolEntry, symbols};
 
     let mut open = QuickOpen::new();
     let mut entries: Vec<SymbolEntry> = Vec::new();
@@ -414,10 +419,10 @@ pub(super) fn quick_open(options: &crate::cli::QuickOpenOptions) -> bool {
 pub(super) fn replace(options: &crate::cli::ReplaceOptions) -> bool {
     use std::collections::BTreeMap;
 
-    use crate::app::replace_candidates::{Candidates, parse_template};
-    use crate::app::search::Query;
-    use crate::project::conflict::Writability;
-    use crate::project::protection::{ProtectedRegion, WriteGuard};
+    use crate::app::search::replace_candidates::{Candidates, parse_template};
+    use crate::app::search::text::Query;
+    use crate::project::document::conflict::Writability;
+    use crate::project::text::protection::{ProtectedRegion, WriteGuard};
 
     let mut files: Vec<(String, String)> = Vec::new();
     let mut query = Query::literal(String::new());
@@ -535,10 +540,10 @@ pub(super) fn replace(options: &crate::cli::ReplaceOptions) -> bool {
 pub(super) fn batch(options: &crate::cli::BatchOptions) -> bool {
     use std::collections::BTreeMap;
 
-    use crate::app::batch_replace::{Batch, BatchEdit};
-    use crate::app::workspace_edit::OpenDocument;
-    use crate::project::conflict::Writability;
-    use crate::project::protection::{ProtectedRegion, WriteGuard};
+    use crate::app::language::workspace_edit::OpenDocument;
+    use crate::app::search::batch_replace::{Batch, BatchEdit};
+    use crate::project::document::conflict::Writability;
+    use crate::project::text::protection::{ProtectedRegion, WriteGuard};
 
     let mut plan: Vec<BatchEdit> = Vec::new();
     let mut documents: BTreeMap<String, OpenDocument> = BTreeMap::new();
@@ -617,7 +622,7 @@ pub(super) fn batch(options: &crate::cli::BatchOptions) -> bool {
 pub(super) fn history_nav(options: &crate::cli::HistoryNavOptions) -> bool {
     use std::collections::BTreeSet;
 
-    use crate::app::history_nav::{History, Origin, resolve};
+    use crate::app::search::history_nav::{History, Origin, resolve};
 
     let mut history = History::new();
     let mut vanished: BTreeSet<String> = BTreeSet::new();
@@ -684,7 +689,7 @@ pub(super) fn history_nav(options: &crate::cli::HistoryNavOptions) -> bool {
 
 /// Runs the search/replace acceptance regression (task T08.08).
 pub(super) fn search_health(options: &crate::cli::SearchHealthOptions) -> bool {
-    use crate::app::search_regression::{Scenario, run};
+    use crate::app::search::search_regression::{Scenario, run};
 
     let scenarios = if options.scenarios.is_empty() {
         Scenario::ALL.to_vec()

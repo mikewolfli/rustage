@@ -39,6 +39,25 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [MS07: the first delivered source — deterministic generation and a real build/run](log/log-20261016-4.md):
+  `app::generate` (the plan, the pipeline over the library's own generator, the node-to-source map,
+  the merge that keeps hand-written regions, the reverse reader, the position recalculator, the
+  staged export and the golden comparisons) and `app::build` (the toolchain probe, check/build/
+  rebuild, the problem parser that links a compiler message to a node, the standalone run, tasks,
+  terminals, external tools, the end-to-end walk, the typed task graph with a real problem matcher,
+  reproducibility and the headless CI walk) — with the exact cargo argv printed, a real
+  `cargo check` run through `--compile execute`, and the same input generating byte-identical source.
+- [MS06 begins: data, events and preview — bindings, routes, state, adapters, the preview service
+  and inspection](log/log-20261016-3.md): `app::data` (typed bindings, event declarations apart from
+  their wiring, dispatch, routes, the state machine, adapters and the session log) and `app::preview`
+  (the service, live update, state keeping, the viewport matrix, inspection, baselines, recovery and
+  load), plus the `run.rs` split into `app::run/` — 16 tasks, 247 new tests.
+- [MS05 begins: basic visual design — canvas, layout, properties and CSS, and the whole of
+  blue5/MS04](log/log-20261016-2.md): `app::canvas`, `app::layout` and `app::style` (24 tasks) over the
+  object tree, the layout contract, the property schema, the CSS view, tokens, states and motion.
+- [MS03 ends and MS04 begins: the workbench, commands, layout, windows, chrome and in-place text
+  editing](log/log-20261016-1.md): `app::groups`, `app::clipboard`, `app::layout`, `app::windows`,
+  `app::chrome` and the editor, language-service and search families of MS04 (blue5).
 - [MS03 continues: the command palette, the workbench, panels and batch operations](log/log-20261015-8.md):
   `app::palette` (fuzzy search over the registry, so a disabled hit carries the registry's own reason
   and recents nudge without hiding anything new), `app::workbench` (the title derived from the active

@@ -37,10 +37,12 @@ use crate::project::record::format::{ProjectContent, ProjectFile};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod build;
 mod data_events;
 mod design;
 mod document;
 mod editor;
+mod generate;
 mod language;
 mod layout;
 mod preview;
@@ -48,10 +50,12 @@ mod project;
 mod search;
 mod style;
 mod workbench;
+use build::*;
 use data_events::*;
 use design::*;
 use document::*;
 use editor::*;
+use generate::*;
 use language::*;
 use layout::*;
 use preview::*;
@@ -700,6 +704,120 @@ pub fn run(command: Command) {
         }
         Command::Load(options) => {
             if !load(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Artifact(options) => {
+            if !artifact(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Generate(options) => {
+            if !generate(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Mapping(options) => {
+            if !mapping(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::GenMerge(options) => {
+            if !gen_merge(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Reverse(options) => {
+            if !reverse(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Position(options) => {
+            if !position(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Export(options) => {
+            if !export(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Golden(options) => {
+            if !golden(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Toolchain(options) => {
+            if !toolchain(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Compile(options) => {
+            if !compile(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::BuildDiag(options) => {
+            if !build_diag(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Run(options) => {
+            if !run_program(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Tasks(options) => {
+            if !tasks(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Terminal(options) => {
+            if !terminal(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::External(options) => {
+            if !external(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::E2e(options) => {
+            if !e2e(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Dag(options) => {
+            if !dag(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Reproducible(options) => {
+            if !reproducible(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Headless(options) => {
+            if !headless(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }

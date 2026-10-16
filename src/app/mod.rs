@@ -13,10 +13,12 @@
 //!   reader can get from a roadmap entry to a file without a second index.
 //! * [`run`] stays at the top rather than inside a group: it is the dispatcher every command passes
 //!   through, and its own submodules already follow this same domain split.
+pub mod build;
 pub mod canvas;
 pub mod commands;
 pub mod data;
 pub mod editor;
+pub mod generate;
 pub mod language;
 pub mod layout;
 pub mod preview;

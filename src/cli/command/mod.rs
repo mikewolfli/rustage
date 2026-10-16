@@ -29,11 +29,13 @@ use crate::project::{
     record::files::FileOperation,
 };
 
+pub mod build;
 pub mod canvas;
 pub mod commands;
 pub mod data;
 pub mod document;
 pub mod editor;
+pub mod generate;
 pub mod host;
 pub mod language;
 pub mod layout;
@@ -43,11 +45,13 @@ pub mod search;
 pub mod shell;
 pub mod style;
 
+pub use build::*;
 pub use canvas::*;
 pub use commands::*;
 pub use data::*;
 pub use document::*;
 pub use editor::*;
+pub use generate::*;
 pub use host::*;
 pub use language::*;
 pub use layout::*;
@@ -280,6 +284,44 @@ pub enum Command {
     Focus(FocusOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
+    /// Plans a project's generated files and their commit policy (task T15.01).
+    Artifact(ArtifactOptions),
+    /// Runs the generation pipeline with its target, style and layout prechecks (task T15.02).
+    Generate(GenerateOptions),
+    /// Builds a node-to-source map and reports its staleness (task T15.03).
+    Mapping(MappingOptions),
+    /// Merges a regenerated body into the committed file, keeping hand-written regions (task T15.04).
+    GenMerge(GenMergeOptions),
+    /// Reads a generated file back into a model candidate (task T15.05).
+    Reverse(ReverseOptions),
+    /// Recalculates positions, guards a regeneration loop and undoes across views (task T15.06).
+    Position(PositionOptions),
+    /// Commits generated files and states the standalone build contract (task T15.07).
+    Export(ExportOptions),
+    /// Compares generation against recorded goldens (task T15.08).
+    Golden(GoldenOptions),
+    /// Probes a toolchain and chooses a feature set (task T16.01).
+    Toolchain(ToolchainOptions),
+    /// Checks, builds or rebuilds (task T16.02).
+    Compile(CompileOptions),
+    /// Reads a build's problems and links them to nodes (task T16.03).
+    BuildDiag(BuildDiagOptions),
+    /// Runs the delivered program on its own (task T16.04).
+    Run(RunOptions),
+    /// Orders configured tasks and checks their cache (task T16.05).
+    Tasks(TasksOptions),
+    /// Drives a terminal session (task T16.06).
+    Terminal(TerminalOptions),
+    /// Configures and invokes an external tool (task T16.07).
+    External(ExternalOptions),
+    /// Records the generate → check → build → run → feedback walk (task T16.08).
+    E2e(E2eOptions),
+    /// Builds a typed task graph and matches its output (task T16.09).
+    Dag(DagOptions),
+    /// States a reproducible, offline build (task T16.10).
+    Reproducible(ReproducibleOptions),
+    /// Runs the headless walk and exports its CI (task T16.11).
+    Headless(HeadlessOptions),
 }
 
 /// One display on the command line, written `<id>:<x>,<y>,<w>,<h>,<scale>`.
@@ -1016,6 +1058,68 @@ pub fn help_text() -> &'static str {
         "                                     machine, which the document does not say\n",
         "       --file <member>:<path>        With --workspace, show that one file: two members can each\n",
         "                                     hold a path of the same name\n",
+        "       --artifact <op>...             Plan a project's generated files: entry:<source>=<output>,\n",
+        "                                     output:<source>, show; one source generates one file\n",
+        "                                     and the commit policy is stated\n",
+        "       --generate <op>...             Run the generation pipeline: document:<file>,\n",
+        "                                     node:<kind>:<children>, target:<default|stripped>,\n",
+        "                                     size:<w>x<h>, fn:<name>, style:<node>:<reason>,\n",
+        "                                     layout:<node>:<reason>, check, run, twice, show; a blocked\n",
+        "                                     precheck emits nothing and the same input is byte-stable\n",
+        "       --mapping <op>...              Build a node-to-source map: source:<file>, file:<path>,\n",
+        "                                     key:<node>:<key>, model:<n>, generator:<a>.<b>.<c>,\n",
+        "                                     locate:<node>, at:<byte>, staleness:<n>, show\n",
+        "       --gen-merge <op>...            Merge a regenerated body into a committed file: old:<file>,\n",
+        "                                     new:<file>, show; hand-written regions are kept\n",
+        "       --reverse <op>...              Read a generated file back: base:<file>, edited:<file>,\n",
+        "                                     mine:<file>, theirs:<file>, support, show; an\n",
+        "                                     unrecognised change keeps its text and can be cancelled\n",
+        "       --position <op>...             Recalculate positions and guard a loop: text:<file>,\n",
+        "                                     at:<byte>, line:<l>:<c>, edit:<start>:<end>:<inserted>,\n",
+        "                                     apply:<byte>, guard:<limit>, enter, leave, undo, redo, show\n",
+        "       --export <op>...               Commit generated files: root:<directory>,\n",
+        "                                     artifact:<path>=<file>, commit, contract, show; writes are\n",
+        "                                     staged so a failure keeps the old files\n",
+        "       --golden <op>...               Compare generation with recorded goldens: golden:<name>=<file>,\n",
+        "                                     produced:<name>=<file>, semantics:<file>, check, show\n",
+        "       --toolchain <op>...            Probe a toolchain and choose a feature set: profile:<name>,\n",
+        "                                     feature:<name>, target:<triple>, cargo:<version>,\n",
+        "                                     rustc:<version>, installed:<triple>, sdk:<name>, check, show;\n",
+        "                                     a missing environment and an unsupported capability are told apart\n",
+        "       --compile <op>...              Check, build or rebuild: action:<check|build|rebuild>,\n",
+        "                                     profile:<name>, feature:<name>, target:<triple>,\n",
+        "                                     package:<name>, manifest:<path>, exit:<code>, cancel, show\n",
+        "       --build-diag <op>...           Read a build's problems: output:<file>, model:<n>,\n",
+        "                                     source:<file>, key:<node>:<key>,\n",
+        "                                     span:<node>:<file>:<start>:<end>, current:<n>, show\n",
+        "       --run <op>...                  Run the delivered program: program:<path>, arg:<value>,\n",
+        "                                     env:<name>=<value>, directory:<path>, standalone:<yes|no>,\n",
+        "                                     start, exit:<code>, signal:<n>, stop, restart, show\n",
+        "       --tasks <op>...                Order configured tasks: task:<name>:<command>,\n",
+        "                                     after:<name>:<dependency>, input:<name>:<path>,\n",
+        "                                     fingerprint:<path>:<value>, output:<name>:<path>,\n",
+        "                                     default:<name>, order, key:<name>, cleanup:<name>, show\n",
+        "       --terminal <op>...            Drive a terminal session: session:<name>,\n",
+        "                                     directory:<path>, env:<name>=<value>, size:<c>x<r>,\n",
+        "                                     platform:<macos|linux|windows>, authorize, start,\n",
+        "                                     write:<text>, copy:<start>:<end>, resize:<c>x<r>, show\n",
+        "       --external <op>...             Configure and invoke an external tool: tool:<name>,\n",
+        "                                     program:<path>, arg:<value>, input:<path>, output:<path>,\n",
+        "                                     confirm:<yes|no>, placeholder:<name>=<value>, invoke,\n",
+        "                                     confirmed, show\n",
+        "       --e2e <op>...                  Record the generate/check/build/run/feedback walk:\n",
+        "                                     generate:<ok|fail>:<note>, check:…, build:…, run:…,\n",
+        "                                     feedback:…, skip, show\n",
+        "       --dag <op>...                  Build a typed task graph: node:<name>, after:<name>:<dep>,\n",
+        "                                     together:<name>:<dep>, background:<name>:<marker>,\n",
+        "                                     terminal:<name>:<terminal>, default:<name>,\n",
+        "                                     pattern:<owner>:<pattern>:<f>:<l>:<m>, match:<line>,\n",
+        "                                     waves, ready:<name>:<text>, show\n",
+        "       --reproducible <op>...         State a reproducible, offline build: locked:<yes|no>,\n",
+        "                                     offline:<yes|no>, vendor:<path>, cache:<path>, source:<path>, show\n",
+        "       --headless <op>...             Run the headless walk and export its CI: validate:<ok|fail>,\n",
+        "                                     generate:<ok|fail>, check:<ok|fail>, profile:<name>,\n",
+        "                                     workflow, json, show\n",
         "     Global options:\n",
         "       --log-level <level>           error | warn | info | debug | trace (default: info)\n",
     )
@@ -1064,7 +1168,7 @@ where
 
     // Each family knows its own flags and answers `None` for anything else, so a flag belongs to
     // exactly one family and the order below is a reading order rather than a precedence rule.
-    let families: [Family; 13] = [
+    let families: [Family; 15] = [
         host::parse_host,
         project::parse_project,
         document::parse_document,
@@ -1078,6 +1182,8 @@ where
         style::parse_style,
         data::parse_data,
         preview::parse_preview,
+        generate::parse_generate,
+        build::parse_build,
     ];
     for family in families {
         if let Some(command) = family(text, argument.clone(), &mut arguments) {

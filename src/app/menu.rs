@@ -237,6 +237,12 @@ pub fn built_in() -> Vec<Menu> {
             vec![
                 Item::command("Welcome", "view.welcome"),
                 Item::command("Command Palette", "view.palette"),
+                // The keyboard commands have a visible home too: T04.08's rule is that a key
+                // operation is reachable by eye as well as by key, and these three were bound
+                // with nothing in a menu to point at them.
+                Item::command("Keyboard Shortcuts", "keys.show"),
+                Item::command("Close Panel", "panel.close"),
+                Item::command("Activate Tree Item", "tree.activate"),
                 Item::submenu(
                     "Panels",
                     vec![

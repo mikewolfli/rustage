@@ -119,6 +119,16 @@ impl PageNode {
         self
     }
 
+    /// The same node under a different identity.
+    ///
+    /// A cross-project paste (T05.06) must not let an id copied out of one document collide with an
+    /// id already in another, so it reissues every id. Reissuing is the *only* change here, so the
+    /// kind, the properties, the children and any member this build does not know move across
+    /// untouched — nothing is rebuilt from parts that could drop something.
+    pub fn with_id(self, id: NodeId) -> Self {
+        Self { id, ..self }
+    }
+
     /// The node's identity.
     pub const fn id(&self) -> NodeId {
         self.id

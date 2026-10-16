@@ -62,7 +62,7 @@ impl PageId {
 ///
 /// The allocator belongs to the document, not to a view or a service: one document, one sequence.
 /// It deliberately holds no back-reference to the model, so it cannot be used to mutate anything.
-#[derive(Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct IdAllocator {
     next: u64,
     issued: BTreeSet<u64>,

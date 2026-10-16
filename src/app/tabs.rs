@@ -23,11 +23,51 @@
 //! * **Overflow is a list, not a loss.** Tabs past the strip's limit are [`Tabs::overflow`] rather than
 //!   dropped, so a strip that is full still has every open document — the caller scrolls or shows a
 //!   menu, and the model does not quietly forget.
+//!
+//! **The viewport belongs to the view.** Each [`Tab`] carries its own [`Viewport`] (scroll and
+//! selection), and [`Tabs::take`]/[`Tabs::insert`] carry it along when a view is moved to another
+//! group (task T04.04). Two views of one document therefore share the text and disagree about where
+//! they are looking, which is the difference between "the same file open twice" and "one view
+//! dragging the other around".
 
 // The tab strip's own accessors are read by the window and the tab context menu (T04.06/T05.05) as
 // those land; until then the tests and the `--tabs` script exercise them, and the silence is stated
 // once here with its reason, as the neighbouring trees do.
 #![allow(dead_code)]
+
+/// Where one view is looking: its scroll position and its selection (task T04.04).
+///
+/// A viewport belongs to a **view**, not to the document. Two views of one document share the text
+/// and each keep their own scroll and selection, which is what lets a person compare two parts of a
+/// file without one view dragging the other along. It is the counterpart of the shared buffer: the
+/// text has one owner, the viewport has one per viewer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Viewport {
+    scroll: u32,
+    selection: Option<(u32, u32)>,
+}
+
+impl Viewport {
+    /// The first visible line.
+    pub const fn scroll(&self) -> u32 {
+        self.scroll
+    }
+
+    /// The selection as an `(anchor, cursor)` pair, when there is one.
+    pub const fn selection(&self) -> Option<(u32, u32)> {
+        self.selection
+    }
+
+    /// The viewport as one line, for a report.
+    pub fn render(&self) -> String {
+        match self.selection {
+            Some((anchor, cursor)) => {
+                format!("scroll {} selection {anchor}..{cursor}", self.scroll)
+            }
+            None => format!("scroll {} no selection", self.scroll),
+        }
+    }
+}
 
 /// One tab: a view onto a document.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -35,12 +75,28 @@ pub struct Tab {
     document: String,
     preview: bool,
     dirty: bool,
+    viewport: Viewport,
 }
 
 impl Tab {
+    /// A fresh view onto a document: no unsaved changes and a viewport at the top.
+    fn view(document: impl Into<String>, preview: bool) -> Self {
+        Self {
+            document: document.into(),
+            preview,
+            dirty: false,
+            viewport: Viewport::default(),
+        }
+    }
+
     /// The document this view shows.
     pub fn document(&self) -> &str {
         &self.document
+    }
+
+    /// Where this view is looking. Its own, never the document's and never another view's.
+    pub const fn viewport(&self) -> &Viewport {
+        &self.viewport
     }
 
     /// Whether it is the preview tab (replaced by the next preview) rather than a permanent one.
@@ -151,20 +207,12 @@ impl Tabs {
             let candidate = &self.tabs[index];
             let sole_dirty_view = candidate.dirty && self.views_of(&candidate.document) == 1;
             if !sole_dirty_view {
-                self.tabs[index] = Tab {
-                    document,
-                    preview: true,
-                    dirty: false,
-                };
+                self.tabs[index] = Tab::view(document, true);
                 self.active = Some(index);
                 return;
             }
         }
-        self.tabs.push(Tab {
-            document,
-            preview: true,
-            dirty: false,
-        });
+        self.tabs.push(Tab::view(document, true));
         self.active = Some(self.tabs.len() - 1);
     }
 
@@ -174,11 +222,7 @@ impl Tabs {
     /// separate entry point from [`Tabs::pin`] on purpose: pinning a document that is already open
     /// activates its view rather than making a second one, so "another view" has to be asked for.
     pub fn another_view(&mut self, document: impl Into<String>) {
-        self.tabs.push(Tab {
-            document: document.into(),
-            preview: false,
-            dirty: false,
-        });
+        self.tabs.push(Tab::view(document, false));
         self.active = Some(self.tabs.len() - 1);
     }
 
@@ -200,11 +244,7 @@ impl Tabs {
                 self.active = Some(index);
             }
             None => {
-                self.tabs.push(Tab {
-                    document,
-                    preview: false,
-                    dirty: false,
-                });
+                self.tabs.push(Tab::view(document, false));
                 self.active = Some(self.tabs.len() - 1);
             }
         }
@@ -242,13 +282,62 @@ impl Tabs {
     }
 
     /// Closes one view. The document stays open wherever else it appears.
+    ///
+    /// Closing a view and taking a view out to move it elsewhere are the same removal; the
+    /// difference is only what the caller does with the tab afterwards, so this delegates to
+    /// [`Tabs::take`] rather than repeating the bookkeeping.
     pub fn close_view(&mut self, index: usize) -> Result<Tab, String> {
+        self.take(index)
+    }
+
+    /// Takes one view out of the strip and hands it back, without closing anything.
+    ///
+    /// This is how a tab migrates to another group (task T04.04): the view leaves this strip and is
+    /// inserted into another, carrying its dirty flag and its viewport with it. It is deliberately
+    /// the same removal [`Tabs::close_view`] performs, so there is one place that settles the active
+    /// pointer rather than two that could disagree.
+    pub fn take(&mut self, index: usize) -> Result<Tab, String> {
         if index >= self.tabs.len() {
             return Err(format!("there is no tab {index}"));
         }
         let tab = self.tabs.remove(index);
         self.active = Self::settle_active(self.active, index, self.tabs.len());
         Ok(tab)
+    }
+
+    /// Puts a view back into the strip at a position, and makes it active.
+    ///
+    /// The counterpart of [`Tabs::take`]: a tab that arrived from another group lands where the
+    /// caller says. A position past the end is refused rather than clamped, because a silently
+    /// clamped move is a move that happened somewhere the caller did not ask for.
+    pub fn insert(&mut self, index: usize, tab: Tab) -> Result<(), String> {
+        if index > self.tabs.len() {
+            return Err(format!(
+                "cannot put a view at {index}: the strip has {} tab(s)",
+                self.tabs.len()
+            ));
+        }
+        self.tabs.insert(index, tab);
+        self.active = Some(index);
+        Ok(())
+    }
+
+    /// Moves one view's scroll position. Only that view's; no other view moves.
+    pub fn scroll_to(&mut self, index: usize, offset: u32) -> Result<(), String> {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return Err(format!("there is no tab {index}"));
+        };
+        tab.viewport.scroll = offset;
+        Ok(())
+    }
+
+    /// Sets one view's selection. Only that view's; no other view is affected.
+    pub fn select(&mut self, index: usize, anchor: u32, cursor: u32) -> Result<(), String> {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return Err(format!("there is no tab {index}"));
+        };
+        tab.viewport.selection = Some((anchor, cursor));
+        Ok(())
     }
 
     /// Closes every view of a document, and says how many there were.

@@ -39,6 +39,39 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [Host interface i18n begins — the identified string vocabulary, the catalog and the generated English
+  language pack](log/log-20261016-4.md): `host::locale` (the known languages, the system's language read
+  and the `bundled` fact), `app::locale` (`catalog` — a `Pack` that round-trips through its file form, a
+  `Catalog` whose missing key answers with the key rather than nothing, and a `select` that refuses an
+  explicit unbundled request while falling back from the system; `vocabulary` — the interface strings
+  identified from the real command registry, menu tree and keymap, plus the diagnostic templates and the
+  shell lines, with the English pack *derived* from it so the two cannot drift), the global
+  `--ui-language <tag>` and the `--locale-report <directory>` producer, and the diagnostics
+  (`Refusal::message`, `why_not_exists`) plus the status/version lines now read through the catalog —
+  73 identified strings, 26 new tests. Done ahead of its milestone at the user's request; only English is
+  bundled, and what T24.03 still owes is listed in the record. Recorded in the same file as MS07–MS09.
+- [MS09: Rust event-logic hot update — a shared business core, typed local IPC, the candidate build,
+  state migration, the controlled replacement and the vector regression](log/log-20261016-4.md):
+  `app::logic` (`core` — a pure event/state → state/action reduction whose seam is a value, not a live
+  channel; `ipc` — a versioned, bounded, text-only channel with a handshake, a manifest and a
+  generation guard; `actions` — synchronous and high-frequency events kept in the UI and a bounded
+  queue whose overflow names the item it dropped; `candidate` — a debounced incremental build whose
+  `check` is not a candidate and which refuses to overwrite the running binary; `migration` — a
+  per-field migration preview that blocks the automatic switch on a real loss; `swap` — the ordered
+  pause/drain/snapshot/import/confirm/resume/retire walk with a bounded pause; `combination` — the
+  style-changes-need-no-build rule and late-result isolation; `regression` — the event vectors driven
+  over both call seams and the fault decisions that do not replay) — 8 tasks, 67 new tests. Recorded
+  in the same file as MS07 and MS08, as requested.
+- [MS08: full application-design productivity — components, form validation, the target app shell
+  and collection controls](log/log-20261016-4.md): `app::component` (definitions, instances and cycles,
+  authoring, variants with their inverses, custom-widget publishability, resource import/replacement,
+  per-target variants and capacity, package import/export, definition upgrade and the asset
+  manifest), `app::data::validation` (typed rules with no script, cross-field rules, submit/reset,
+  async cancellation and staleness), `app::application` (the *target* app's shell, shared actions,
+  menus, tool bars, context menus, dialogs, dock and the end-to-end walk) and `app::collection`
+  (content model, table columns, tree items, cell delegates, navigation containers, rich content,
+  specialised views and the large-collection walk) — 26 tasks, 238 new tests. Recorded in the same
+  file as MS07, as requested.
 - [MS07: the first delivered source — deterministic generation and a real build/run](log/log-20261016-4.md):
   `app::generate` (the plan, the pipeline over the library's own generator, the node-to-source map,
   the merge that keeps hand-written regions, the reverse reader, the position recalculator, the

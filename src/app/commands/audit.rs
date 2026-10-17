@@ -316,7 +316,11 @@ mod tests {
 
     #[test]
     fn a_menu_leaf_naming_an_unregistered_command_is_reported() {
-        let menu = Menu::new("File", vec![Item::command("Explode", "file.explode")]);
+        let menu = Menu::new(
+            "file",
+            "File",
+            vec![Item::command("Explode", "file.explode")],
+        );
         let report = audit(&registry(), &[menu], &Keymap::new());
         assert!(!report.is_clean());
         assert!(
@@ -382,6 +386,7 @@ mod tests {
         // per-area setup: the walk is over whatever tables it is given.
         let mut new_menus = menus();
         new_menus.push(Menu::new(
+            "publish",
             "Publish",
             vec![
                 Item::command("Publish", "publish.run"),

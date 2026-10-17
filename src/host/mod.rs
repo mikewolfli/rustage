@@ -15,6 +15,7 @@
 //! | Startup orchestration | [`startup`] | the ordered steps, the outcome, and what "started" means |
 //! | Errors | [`error`] | one error type and one exit-code mapping for the process |
 //! | Logging | [`log`] | levelled records, an injectable clock, and a sink that can be captured |
+//! | Language | [`locale`] | the interface languages the build knows, the one the system asks for, and which are bundled |
 //! | Paths | [`paths`] | system directories, the project-root rule from decision F1, and the four host directories |
 //! | File dialogs | [`dialog`] | the chooser request, its typed answer, the modal handoff, and what makes a chosen path usable |
 //! | Clipboard | [`clipboard`] | plain-text round trips that keep "empty", "not text" and "refused" apart |
@@ -62,6 +63,7 @@
 pub mod clipboard;
 pub mod dialog;
 pub mod error;
+pub mod locale;
 pub mod log;
 pub mod network;
 pub mod notify;

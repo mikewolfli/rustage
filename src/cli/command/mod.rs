@@ -18,6 +18,7 @@ use std::{
     time::Duration,
 };
 
+use crate::host::locale::Language;
 use crate::host::log::Level;
 use crate::project::{
     build::{
@@ -29,32 +30,42 @@ use crate::project::{
     record::files::FileOperation,
 };
 
+pub mod application;
 pub mod build;
 pub mod canvas;
+pub mod collection;
 pub mod commands;
+pub mod component;
 pub mod data;
 pub mod document;
 pub mod editor;
+pub mod form;
 pub mod generate;
 pub mod host;
 pub mod language;
 pub mod layout;
+pub mod logic;
 pub mod preview;
 pub mod project;
 pub mod search;
 pub mod shell;
 pub mod style;
 
+pub use application::*;
 pub use build::*;
 pub use canvas::*;
+pub use collection::*;
 pub use commands::*;
+pub use component::*;
 pub use data::*;
 pub use document::*;
 pub use editor::*;
+pub use form::*;
 pub use generate::*;
 pub use host::*;
 pub use language::*;
 pub use layout::*;
+pub use logic::*;
 pub use preview::*;
 pub use project::*;
 pub use search::*;
@@ -72,6 +83,8 @@ pub enum Command {
     ProbeApis(PathBuf),
     /// Runs the host capability checks and writes the report into the given directory.
     ProbeHost(PathBuf),
+    /// Writes the interface-vocabulary report and the English language pack (task T24.03).
+    LocaleReport(PathBuf),
     /// Reads a project file, reports what this build makes of it, and writes the round trip next to
     /// it as evidence that nothing in it was dropped.
     ProjectCheck(PathBuf),
@@ -322,6 +335,74 @@ pub enum Command {
     Reproducible(ReproducibleOptions),
     /// Runs the headless walk and exports its CI (task T16.11).
     Headless(HeadlessOptions),
+    /// Defines components, instances, parameters, slots and cycle checks (task T12.01).
+    Component(ComponentOptions),
+    /// Extracts, inserts and edits a component and shows the affected instances (task T12.02).
+    ComponentAuthor(ComponentAuthorOptions),
+    /// Applies variants and local overrides, and detaches/resets with an inverse (task T12.03).
+    ComponentOverride(ComponentOverrideOptions),
+    /// Registers a custom widget's schema, events and target contracts (task T12.04).
+    CustomWidget(CustomWidgetOptions),
+    /// Imports assets and maintains their references, thumbnails and repair (task T12.05).
+    ResourceImport(ResourceImportOptions),
+    /// Checks a resource's per-target variant and capacity (task T12.06).
+    ResourceTarget(ResourceTargetOptions),
+    /// Imports and exports component, asset and template packages (task T12.07).
+    AssetPackage(AssetPackageOptions),
+    /// Upgrades a definition across instances, paste and asset deletion (task T12.08).
+    ComponentUpgrade(ComponentUpgradeOptions),
+    /// States the asset manifest, packaging and derived-resource provenance (task T12.09).
+    AssetManifest(AssetManifestOptions),
+    /// Designs the target application's window shell and its capability seams (task T26.01).
+    AppShell(AppShellOptions),
+    /// Declares the shared action model and its state, icons and shortcuts (task T26.02).
+    AppAction(AppActionOptions),
+    /// Edits the target application's menu hierarchy, separators and roles (task T26.03).
+    AppMenu(AppMenuOptions),
+    /// Edits the target application's tool bar and status bar (task T26.04).
+    AppToolbar(AppToolbarOptions),
+    /// Edits a context menu, its scope parameters and enablement (task T26.05).
+    AppContext(AppContextOptions),
+    /// Designs dialogs, pop-ups and wizards with modality and focus (task T26.06).
+    AppDialog(AppDialogOptions),
+    /// States the target's dock/split layout capability (task T26.07).
+    AppDock(AppDockOptions),
+    /// Walks the app shell across preview and both generated modes (task T26.08).
+    AppRegression(AppRegressionOptions),
+    /// Defines collection content, item/column identity, samples and data source (task T27.01).
+    Collection(CollectionOptions),
+    /// Edits table columns, sorting, filtering and the empty state (task T27.02).
+    Table(TableOptions),
+    /// Edits tree/list items, hierarchy, lazy loading and icon roles (task T27.03).
+    Tree(TreeOptions),
+    /// Edits a cell through a delegate with validate/commit/cancel (task T27.04).
+    CellEdit(CellEditOptions),
+    /// Manages the internal pages of tab/stack/scroll/split containers (task T27.05).
+    Container(ContainerOptions),
+    /// Edits rich text, images and icons with fonts, links and alt text (task T27.06).
+    RichContent(RichContentOptions),
+    /// Declares the supported graphic/chart/media views and their placeholders (task T27.07).
+    View(ViewOptions),
+    /// Walks a collection across large/empty/error and both generated modes (task T27.08).
+    CollectionRegression(CollectionRegressionOptions),
+    /// Validates a form with typed rules and async staleness (task T13.09).
+    Form(FormOptions),
+    /// Reduces events against the shared business core (task T17.01).
+    LogicCore(LogicCoreOptions),
+    /// Opens a typed local channel and moves frames (task T17.02).
+    LogicIpc(LogicIpcOptions),
+    /// Validates actions and queues them across the boundary (task T17.03).
+    LogicActions(LogicActionsOptions),
+    /// Debounces edits and admits a candidate build (task T17.04).
+    LogicCandidate(LogicCandidateOptions),
+    /// Plans a state migration and confirms a reset (task T17.05).
+    LogicMigration(LogicMigrationOptions),
+    /// Walks the controlled replacement of the running logic (task T17.06).
+    LogicSwap(LogicSwapOptions),
+    /// Judges readiness and isolates a late result (task T17.07).
+    LogicCombination(LogicCombinationOptions),
+    /// Runs the event vectors and decides on a fault (task T17.08).
+    LogicRegression(LogicRegressionOptions),
 }
 
 /// One display on the command line, written `<id>:<x>,<y>,<w>,<h>,<scale>`.
@@ -430,6 +511,46 @@ where
     Ok(level)
 }
 
+/// Reads the global `--ui-language <tag>` option wherever it appears (task T24.03).
+///
+/// The interface language is a process-wide choice, so it is read here the same way `--log-level`
+/// is: the value is validated now (an unknown language is a usage error) and the command itself does
+/// not have to know about it. Whether the language is *bundled* is decided later, by
+/// [`crate::app::locale::catalog::select`], because that is a fact about the build rather than about
+/// the argument. The name is `--ui-language` rather than `--language` because the latter already
+/// names the language-service command and the `--highlight` option.
+pub fn ui_language_of<I, S>(arguments: I) -> Result<Option<Language>, ParseError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let arguments: Vec<OsString> = arguments
+        .into_iter()
+        .map(|value| value.as_ref().to_os_string())
+        .collect();
+    let mut language = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == OsStr::new("--ui-language") {
+            let Some(value) = arguments.get(index + 1) else {
+                return Err(ParseError {
+                    argument: arguments[index].clone(),
+                });
+            };
+            let Some(parsed) = value.to_str().and_then(Language::parse) else {
+                return Err(ParseError {
+                    argument: value.clone(),
+                });
+            };
+            language = Some(parsed);
+            index += 2;
+            continue;
+        }
+        index += 1;
+    }
+    Ok(language)
+}
+
 pub fn help_text() -> &'static str {
     concat!(
         "rustage - Rust desktop UI designer\n",
@@ -437,6 +558,7 @@ pub fn help_text() -> &'static str {
         "     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n",
         "            rustage [--render-icons <directory> | --probe-apis <directory>]\n",
         "            rustage [--probe-host <directory> | --project-check <file>]\n",
+        "            rustage [--locale-report <directory>]\n",
         "            rustage --new-project <directory> [--template <name>] [--name <name>]\n",
         "            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n",
         "            rustage [--project-tree <file>]\n",
@@ -477,6 +599,8 @@ pub fn help_text() -> &'static str {
         "       --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n",
         "       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n",
         "       --probe-host <directory>      Check the host platform services and write host-readiness.json\n",
+        "       --locale-report <directory>   Write the English language pack and the interface-vocabulary\n",
+        "                                     report into <directory>\n",
         "       --project-check <file>        Read a project file, report what is understood and what is\n",
         "                                     kept, and write <file>.roundtrip.json as evidence\n",
         "       --new-project <directory>     Create a project; --template empty|basic-page|application\n",
@@ -1120,8 +1244,132 @@ pub fn help_text() -> &'static str {
         "       --headless <op>...             Run the headless walk and export its CI: validate:<ok|fail>,\n",
         "                                     generate:<ok|fail>, check:<ok|fail>, profile:<name>,\n",
         "                                     workflow, json, show\n",
+        "       --component <op>...            Define components and instances: define:<name>,\n",
+        "                                     version:<n>, param:<name>[=<default>], slot:<name>,\n",
+        "                                     control:<kind>, nested:<definition>, useslot:<name>,\n",
+        "                                     commit, instance:<id>, of:<definition>, arg:<name>=<value>,\n",
+        "                                     place, expand:<id>, show\n",
+        "       --component-author <op>...     Extract/insert/edit a definition: kind:<kind>,\n",
+        "                                     property:<name>=<value>, extract:<name>, use:<definition>,\n",
+        "                                     insert:<id>, override:<id>:<name>=<value>, edit:<name>,\n",
+        "                                     change:<name>=<value>, commit, resolve:<id>, show\n",
+        "       --component-override <op>...   Detach/reset a variant: variant:<id>, of:<definition>,\n",
+        "                                     kind:<kind>, target:<name>, override:<name>=<value>,\n",
+        "                                     base:<name>=<value>, detach, reset, check:<target>, show\n",
+        "       --custom-widget <op>...        Register a custom widget: widget:<name>,\n",
+        "                                     field:<name>=<type>, event:<name>=<type>, impl:<target>,\n",
+        "                                     register, bind:<name>=<value>, publish:<target>, validate, show\n",
+        "       --resource-import <op>...      Import/replace/move an asset: asset:<id>:<path>:<kind>:<cap>:<bytes>,\n",
+        "                                     refer:<path>:<node>, replace:<id>:<path>:<bytes>,\n",
+        "                                     move:<id>:<path>, repoint:<from>:<to>, missing, show\n",
+        "       --resource-target <op>...      Check per-target variants: resource:<name>:<kind>,\n",
+        "                                     variant:<target>:<encoding>:<bytes>, check:<target>,\n",
+        "                                     block:<target>, show\n",
+        "       --asset-package <op>...        Plan a package import: package:<name>:<version>:<license>,\n",
+        "                                     depends:<package>, entry:<path>:<version>, existing:<path>,\n",
+        "                                     dependency:<name>:<dependency>, plan, commit, cancel, show\n",
+        "       --component-upgrade <op>...    Upgrade a definition: definition:<name>:<version>,\n",
+        "                                     property:<name>=<value>, instance:<id>:<definition>,\n",
+        "                                     override:<id>:<name>=<value>, asset:<path>, change:<name>=<value>,\n",
+        "                                     upgrade:<name>, delete-asset:<path>, roundtrip, static, show\n",
+        "       --asset-manifest <op>...       State the asset manifest: asset:<id>:<path>:<packaging>,\n",
+        "                                     derive:<id>:<source>:<transform>:<path>:<packaging>,\n",
+        "                                     move:<id>:<path>, resolve:<id>, missing:<id>, static, show\n",
+        "       --app-shell <op>...            Assemble the app shell: target:<name>, title:<text>,\n",
+        "                                     size:<w>x<h>, region:<menu|toolbar|status|dock>,\n",
+        "                                     provide:<menu|dock>, gap:<menu|dock>:<reason>, show\n",
+        "       --app-action <op>...           Define shared actions: action:<id>, title:<text>,\n",
+        "                                     icon:<name>, shortcut:<keys>, enabled:<yes|no>, checked:<yes|no>,\n",
+        "                                     group:<name>, target:<kind>:<value>, reference:<kind>:<id>,\n",
+        "                                     claim:<kind>:<id>, select:<id>, show\n",
+        "       --app-menu <op>...             Edit the app's menus: root:<id>:<title>, define:<id>,\n",
+        "                                     item:<menu>:<label>:<action>, separator:<menu>,\n",
+        "                                     role:<menu>:<role>, submenu:<parent>:<child>:<label>,\n",
+        "                                     platform:<macos|windows|linux>, show\n",
+        "       --app-toolbar <op>...          Edit the app's tool/status bars: item:<id>, label:<text>,\n",
+        "                                     present:<icon|text|both>, visible:<yes|no>,\n",
+        "                                     overflow:<collapse|wrap>, capacity:<n>, status:<label>:<value>, show\n",
+        "       --app-context <op>...          Edit the app's context menus: kind:<item|canvas|tree-node>,\n",
+        "                                     item:<kind>:<action>, enable:<action>:<yes|no>,\n",
+        "                                     param:<key>:<value>, click:<kind>, invoke:<action>, show\n",
+        "       --app-dialog <op>...           Model the app's dialogs: main:<id>,\n",
+        "                                     dialog:<id>:<owner>:<kind>:<modality>, default:<id>:<action>,\n",
+        "                                     cancel:<id>:<action>, field:<name>:<value>, open:<id>,\n",
+        "                                     close:<id>, accept:<id>, show\n",
+        "       --app-dock <op>...             State the target's dock support: target:<name>,\n",
+        "                                     layout:<single|split|docked>, panel:<name>,\n",
+        "                                     orientation:<horizontal|vertical>, persist:<yes|no>, show\n",
+        "       --app-regression <op>...       Walk the app shell: mode:<runtime|static>,\n",
+        "                                     bind:<kind>:<action>, preview, generate,\n",
+        "                                     activate:<kind>:<action>, show\n",
+        "       --collection <op>...           Edit collection content: control:<n>, origin:<sample|source>,\n",
+        "                                     column:<role>:<header>, row, set:<row>:<column>:<value>,\n",
+        "                                     move-row:<from>:<to>, move-column:<from>:<to>, business, show\n",
+        "       --table <op>...                Edit table columns: column:<name>:<type>, width:<name>:<n>,\n",
+        "                                     sort:<name>:<asc|desc|none>, filter:<name>:<text>,\n",
+        "                                     select:<index>, empty:<message>, source:<key>,\n",
+        "                                     field:<name>:<raw>, map, show\n",
+        "       --tree <op>...                 Edit tree items: node:<id>:<parent|->:<label>,\n",
+        "                                     icon:<id>:<role>, expand:<id>, collapse:<id>, select:<id>,\n",
+        "                                     reparent:<id>:<parent|->, lazy:<id>,\n",
+        "                                     answer:<ok|fail|cancel|unknown>:<text>, load:<id>:<target>, show\n",
+        "       --cell-edit <op>...            Edit a cell: row:<n>, column:<name>, current:<value>,\n",
+        "                                     candidate:<value>, delegate:<text|number|check|choice>,\n",
+        "                                     commit, cancel, show\n",
+        "       --container <op>...            Manage container pages: kind:<tabs|stack|scroll|split>,\n",
+        "                                     page:<id>:<title>:<node>, activate:<id>, remove:<id>,\n",
+        "                                     reorder:<id>:<to>, next, previous, show\n",
+        "       --rich-content <op>...         Edit rich content: font:<family>:<size>:<weight>,\n",
+        "                                     run:<format>:<text>, link:<target>:<alt>, image:<asset>:<alt>,\n",
+        "                                     limit-length:<n>, limit-format:<format>, trust,\n",
+        "                                     network:<yes|no>, authorize, execute-link, show\n",
+        "       --view <op>...                 Describe a specialised view: kind:<gauge|bar-chart|...>,\n",
+        "                                     data:<text>, capability, editor, show\n",
+        "       --collection-regression <op>... Run the collection walk: total:<n>, viewport:<height>,\n",
+        "                                     first:<n>, mode:<static|live>, locale:<tag>, empty:<message>,\n",
+        "                                     error:<reason>, select:<index>, edit:<index>:<value>,\n",
+        "                                     key:<command>, check, show\n",
+        "       --form <op>...                 Validate a form: field:<name>:<kind>, required:<name>,\n",
+        "                                     same-as:<name>:<other>, different-from:<name>:<other>,\n",
+        "                                     required-when:<name>:<other>=<value>, min-length:<name>:<n>,\n",
+        "                                     at-least:<name>:<n>, one-of:<name>:<a>|<b>,\n",
+        "                                     value:<name>=<text>, revision:<n>, pending:<field>:<revision>,\n",
+        "                                     mode:<preview|runtime|static>, validate, submit, reset, show\n",
+        "       --logic-core <op>...           Reduce events against the shared core: init:<state>,\n",
+        "                                     transition:<state>:<event>:<next>,\n",
+        "                                     guard:<state>:<event>:<field>=<type>:<value>,\n",
+        "                                     set:<state>:<event>:<field>=<type>:<value>,\n",
+        "                                     need:<state>:<event>:<function>:<into>=<type>:<value>,\n",
+        "                                     seam:<function>=<type>:<value>, event:<name>=<type>:<value>, run, show\n",
+        "       --logic-ipc <op>...            Open a typed local channel: session:<id>, version:<n>,\n",
+        "                                     generation:<n>, manifest:<name>:<version>, capability:<name>,\n",
+        "                                     frame:<kind>:<generation>:<payload>, receive:<encoded>, open, show\n",
+        "       --logic-actions <op>...        Validate and queue actions: capacity:<n>,\n",
+        "                                     item:<event>:<class>:<needs|ui>[:<deadline>], take,\n",
+        "                                     tick:<now>, check, show\n",
+        "       --logic-candidate <op>...      Debounce edits and admit a candidate: revision:<n>,\n",
+        "                                     window:<ms>, edit:<source>, flush:<now>,\n",
+        "                                     action:<check|build|rebuild>, outcome:<success|failure>,\n",
+        "                                     stamp:<revision>, artifact:<path>, running:<path>, admit, show\n",
+        "       --logic-migration <op>...      Plan a state migration: from:<n>, to:<n>,\n",
+        "                                     from-field:<name>:<type>:<since>, to-field:<name>:<type>:<since>,\n",
+        "                                     value:<name>=<type>:<value>, owner:<name>, task:<name>,\n",
+        "                                     plan, reset, confirm, check, show\n",
+        "       --logic-swap <op>...           Walk a controlled replacement: old:<name>, new:<name>,\n",
+        "                                     limit:<ms>, pause:<elapsed>, drain, snapshot:<version>,\n",
+        "                                     import:<yes|no>, confirm, resume, retire, fail:<reason>, show\n",
+        "       --logic-combination <op>...    Judge readiness and isolate a late result: building:<yes|no>,\n",
+        "                                     protocol:<yes|no>, plan:<style|document|binding|logic|protocol>,\n",
+        "                                     interaction:<name>, needs:<change>, generation:<n>,\n",
+        "                                     result:<generation>:<value>, check, show\n",
+        "       --logic-regression <op>...     Run the event vectors: init:<state>,\n",
+        "                                     transition:<state>:<event>:<next>, vector:<name>, say:<event>,\n",
+        "                                     fault:unknown:<call>, fault:timeout:<step>,\n",
+        "                                     fault:crash:<generation>, fault:rapid:<count>, run, decide, check, show\n",
         "     Global options:\n",
         "       --log-level <level>           error | warn | info | debug | trace (default: info)\n",
+        "       --ui-language <tag>           Interface language; only `en` is bundled so far (default: follow\n",
+        "                                     the system)\n",
     )
 }
 
@@ -1156,6 +1404,20 @@ where
             index += 2;
             continue;
         }
+        if collected[index] == OsStr::new("--ui-language") {
+            let Some(value) = collected.get(index + 1) else {
+                return Err(ParseError {
+                    argument: collected[index].clone(),
+                });
+            };
+            if value.to_str().and_then(Language::parse).is_none() {
+                return Err(ParseError {
+                    argument: value.clone(),
+                });
+            }
+            index += 2;
+            continue;
+        }
         stripped.push(collected[index].clone());
         index += 1;
     }
@@ -1168,7 +1430,7 @@ where
 
     // Each family knows its own flags and answers `None` for anything else, so a flag belongs to
     // exactly one family and the order below is a reading order rather than a precedence rule.
-    let families: [Family; 15] = [
+    let families: [Family; 20] = [
         host::parse_host,
         project::parse_project,
         document::parse_document,
@@ -1184,6 +1446,11 @@ where
         preview::parse_preview,
         generate::parse_generate,
         build::parse_build,
+        component::parse_component,
+        application::parse_application,
+        collection::parse_collection,
+        form::parse_form,
+        logic::parse_logic,
     ];
     for family in families {
         if let Some(command) = family(text, argument.clone(), &mut arguments) {

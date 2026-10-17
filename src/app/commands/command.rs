@@ -508,18 +508,41 @@ pub enum Refusal {
 
 impl Refusal {
     /// The refusal in one sentence.
+    ///
+    /// The sentence comes from the interface catalog (T24.03), so a translated pack changes the
+    /// diagnostic a person reads; the language is the process's installed one
+    /// ([`crate::app::locale::catalog::Catalog::current`]), and the reason a caller passed in stays as
+    /// it was.
     pub fn message(&self) -> String {
+        let catalog = crate::app::locale::catalog::Catalog::current();
         match self {
-            Self::Unknown { id } => format!("there is no command {id}"),
-            Self::Disabled { id, reason } => format!("{id} is not available: {reason}"),
-            Self::Missing { id, name } => format!("{id} needs a {name} argument"),
+            Self::Unknown { id } => catalog.fill("diag.command.unknown", &[("id", id)]),
+            Self::Disabled { id, reason } => {
+                let id = id.to_string();
+                catalog.fill(
+                    "diag.command.disabled",
+                    &[("id", id.as_str()), ("reason", reason)],
+                )
+            }
+            Self::Missing { id, name } => {
+                let id = id.to_string();
+                catalog.fill(
+                    "diag.command.missing",
+                    &[("id", id.as_str()), ("name", name)],
+                )
+            }
             Self::BadArgument { id, name, reason } => {
-                format!("{id}: {name} is not valid: {reason}")
+                let id = id.to_string();
+                catalog.fill(
+                    "diag.command.bad-argument",
+                    &[("id", id.as_str()), ("name", name), ("reason", reason)],
+                )
             }
             Self::Unauthorized { id, effect } => {
-                format!(
-                    "{id} has the {} effect, which is not authorized",
-                    effect.name()
+                let id = id.to_string();
+                catalog.fill(
+                    "diag.command.unauthorized",
+                    &[("id", id.as_str()), ("effect", effect.name())],
                 )
             }
         }
@@ -668,10 +691,11 @@ impl Registry {
     /// The menu tree (T05.02) asks this: a leaf that claims a command has to name one that exists,
     /// and this is the registry's own answer rather than a second list the menu keeps.
     pub fn why_not_exists(&self, id: &str) -> Option<String> {
+        let catalog = crate::app::locale::catalog::Catalog::current();
         match CommandId::parse(id) {
             Some(parsed) if self.commands.contains_key(&parsed) => None,
-            Some(_) => Some(format!("there is no command {id}")),
-            None => Some(format!("{id:?} is not a command id")),
+            Some(_) => Some(catalog.fill("diag.command.no-such-command", &[("id", id)])),
+            None => Some(catalog.fill("diag.command.not-an-id", &[("id", id)])),
         }
     }
 

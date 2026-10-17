@@ -37,27 +37,39 @@ use crate::project::record::format::{ProjectContent, ProjectFile};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod application;
 mod build;
+mod collection;
+mod component;
 mod data_events;
 mod design;
 mod document;
 mod editor;
+mod form;
 mod generate;
 mod language;
 mod layout;
+mod locale;
+mod logic;
 mod preview;
 mod project;
 mod search;
 mod style;
 mod workbench;
+use application::*;
 use build::*;
+use collection::*;
+use component::*;
 use data_events::*;
 use design::*;
 use document::*;
 use editor::*;
+use form::*;
 use generate::*;
 use language::*;
 use layout::*;
+use locale::*;
+use logic::*;
 use preview::*;
 use project::*;
 use search::*;
@@ -68,15 +80,12 @@ use workbench::*;
 pub fn run(command: Command) {
     match command {
         Command::Help => print!("{}", cli::help_text()),
-        Command::Version => println!("rustage {}", env!("CARGO_PKG_VERSION")),
+        Command::Version => println!("{}", version_line()),
         Command::Status => {
-            println!(
-                "rustage {}\n\
-                 The desktop designer is not implemented yet.\n\
-                 The icon strip is: run `rustage --render-icons <directory>` to render it.\n\
-                 The dependency contract probes are: run `rustage --probe-apis <directory>`.",
-                env!("CARGO_PKG_VERSION")
-            );
+            println!("{}", version_line());
+            println!("{}", line("shell.status.not-implemented"));
+            println!("{}", line("shell.status.icon-strip"));
+            println!("{}", line("shell.status.probes"));
             // The contract vocabulary is derived from the code the binary was built with, so this
             // section cannot claim a policy the build does not implement.
             println!("{}", crate::contracts::vocabulary::version_line());
@@ -822,6 +831,210 @@ pub fn run(command: Command) {
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
         }
+        Command::Component(options) => {
+            if !component(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::ComponentAuthor(options) => {
+            if !component_author(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::ComponentOverride(options) => {
+            if !component_override(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::CustomWidget(options) => {
+            if !custom_widget(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::ResourceImport(options) => {
+            if !resource_import(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::ResourceTarget(options) => {
+            if !resource_target(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AssetPackage(options) => {
+            if !asset_package(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::ComponentUpgrade(options) => {
+            if !component_upgrade(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AssetManifest(options) => {
+            if !asset_manifest(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppShell(options) => {
+            if !app_shell(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppAction(options) => {
+            if !app_action(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppMenu(options) => {
+            if !app_menu(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppToolbar(options) => {
+            if !app_toolbar(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppContext(options) => {
+            if !app_context(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppDialog(options) => {
+            if !app_dialog(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppDock(options) => {
+            if !app_dock(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::AppRegression(options) => {
+            if !app_regression(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Collection(options) => {
+            if !collection(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Table(options) => {
+            if !table(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Tree(options) => {
+            if !tree(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::CellEdit(options) => {
+            if !cell_edit(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Container(options) => {
+            if !container(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::RichContent(options) => {
+            if !rich_content(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::View(options) => {
+            if !view(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::CollectionRegression(options) => {
+            if !collection_regression(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Form(options) => {
+            if !form(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicCore(options) => {
+            if !logic_core(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicIpc(options) => {
+            if !logic_ipc(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicActions(options) => {
+            if !logic_actions(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicCandidate(options) => {
+            if !logic_candidate(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicMigration(options) => {
+            if !logic_migration(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicSwap(options) => {
+            if !logic_swap(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicCombination(options) => {
+            if !logic_combination(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicRegression(options) => {
+            if !logic_regression(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
         Command::Focus(options) => {
             if !focus(&options) {
                 crate::host::log::flush();
@@ -895,6 +1108,12 @@ pub fn run(command: Command) {
                 std::process::exit(1);
             }
         },
+        Command::LocaleReport(directory) => {
+            if !locale_report(&directory) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
     }
 }
 
@@ -1162,7 +1381,10 @@ fn numbers(argument: &str) -> Option<Vec<usize>> {
 
 /// Prints a refusal and answers false, so an operation loop can `return report(reason)`.
 fn report(reason: String) -> bool {
-    println!("rustage: {reason}");
+    println!(
+        "{}",
+        line_with("shell.error.prefix", &[("message", reason.as_str())])
+    );
     false
 }
 

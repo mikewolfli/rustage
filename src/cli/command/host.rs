@@ -57,7 +57,8 @@ pub(super) fn parse_host(
             }
             return Some(Ok(Command::Launch(options)));
         }
-        "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check" => {
+        "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check"
+        | "--locale-report" => {
             let Some(value) = arguments.next() else {
                 return Some(Err(ParseError { argument }));
             };
@@ -70,6 +71,7 @@ pub(super) fn parse_host(
                 "--render-icons" => Command::RenderIcons(path),
                 "--probe-apis" => Command::ProbeApis(path),
                 "--project-check" => Command::ProjectCheck(path),
+                "--locale-report" => Command::LocaleReport(path),
                 _ => Command::ProbeHost(path),
             }));
         }
@@ -102,6 +104,10 @@ mod tests {
         assert_eq!(
             parse(["--project-check", "demo/project.json"]),
             Ok(Command::ProjectCheck(PathBuf::from("demo/project.json")))
+        );
+        assert_eq!(
+            parse(["--locale-report", "out/locale"]),
+            Ok(Command::LocaleReport(PathBuf::from("out/locale")))
         );
     }
 

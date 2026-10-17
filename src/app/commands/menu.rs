@@ -55,6 +55,8 @@ pub enum Item {
     Separator,
     /// A submenu.
     Submenu {
+        /// The submenu's stable id, which its labels are keyed by.
+        id: String,
         /// The title the menu shows.
         title: String,
         /// Its items.
@@ -85,28 +87,36 @@ impl Item {
     }
 
     /// A submenu.
-    pub fn submenu(title: impl Into<String>, items: Vec<Item>) -> Self {
+    pub fn submenu(id: impl Into<String>, title: impl Into<String>, items: Vec<Item>) -> Self {
         Self::Submenu {
+            id: id.into(),
             title: title.into(),
             items,
         }
     }
 }
 
-/// A menu: a title and its items.
+/// A menu: a stable id, a title and its items.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Menu {
+    id: String,
     title: String,
     items: Vec<Item>,
 }
 
 impl Menu {
-    /// A menu.
-    pub fn new(title: impl Into<String>, items: Vec<Item>) -> Self {
+    /// A menu with an id.
+    pub fn new(id: impl Into<String>, title: impl Into<String>, items: Vec<Item>) -> Self {
         Self {
+            id: id.into(),
             title: title.into(),
             items,
         }
+    }
+
+    /// The menu's stable id.
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// The menu's title.
@@ -197,7 +207,7 @@ fn collect_commands(items: &[Item], found: &mut Vec<(String, String)>) {
 fn collect_leaves<'a>(path: &str, items: &'a [Item], found: &mut Vec<(String, &'a Item)>) {
     for item in items {
         match item {
-            Item::Submenu { title, items } => {
+            Item::Submenu { title, items, .. } => {
                 let child = format!("{path} > {title}");
                 collect_leaves(&child, items, found);
             }
@@ -211,6 +221,7 @@ fn collect_leaves<'a>(path: &str, items: &'a [Item], found: &mut Vec<(String, &'
 pub fn built_in() -> Vec<Menu> {
     vec![
         Menu::new(
+            "file",
             "File",
             vec![
                 Item::command("Save", "file.save"),
@@ -223,6 +234,7 @@ pub fn built_in() -> Vec<Menu> {
             ],
         ),
         Menu::new(
+            "edit",
             "Edit",
             vec![
                 Item::command("Undo", "edit.undo"),
@@ -233,6 +245,7 @@ pub fn built_in() -> Vec<Menu> {
             ],
         ),
         Menu::new(
+            "view",
             "View",
             vec![
                 Item::command("Welcome", "view.welcome"),
@@ -244,6 +257,7 @@ pub fn built_in() -> Vec<Menu> {
                 Item::command("Close Panel", "panel.close"),
                 Item::command("Activate Tree Item", "tree.activate"),
                 Item::submenu(
+                    "panels",
                     "Panels",
                     vec![
                         Item::planned("Outline", "panel.outline", "T04.02"),
@@ -252,7 +266,7 @@ pub fn built_in() -> Vec<Menu> {
                 ),
             ],
         ),
-        Menu::new("Build", vec![Item::command("Run", "build.run")]),
+        Menu::new("build", "Build", vec![Item::command("Run", "build.run")]),
     ]
 }
 
@@ -290,7 +304,11 @@ mod tests {
     #[test]
     fn a_leaf_that_names_a_command_the_registry_does_not_know_is_a_problem() {
         let registry = registry();
-        let menu = Menu::new("File", vec![Item::command("Explode", "file.explode")]);
+        let menu = Menu::new(
+            "file",
+            "File",
+            vec![Item::command("Explode", "file.explode")],
+        );
         let problems = menu.problems(&registry);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("file.explode"), "{problems:?}");
@@ -301,6 +319,7 @@ mod tests {
     fn two_leaves_may_not_share_one_command_id() {
         let registry = registry();
         let menu = Menu::new(
+            "file",
             "File",
             vec![
                 Item::command("Save", "file.save"),
@@ -319,7 +338,11 @@ mod tests {
     #[test]
     fn a_planned_leaf_that_names_a_registered_command_is_the_same_mismatch_the_other_way() {
         let registry = registry();
-        let menu = Menu::new("File", vec![Item::planned("Save", "file.save", "T99.99")]);
+        let menu = Menu::new(
+            "file",
+            "File",
+            vec![Item::planned("Save", "file.save", "T99.99")],
+        );
         let problems = menu.problems(&registry);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("would be hiding"), "{problems:?}");

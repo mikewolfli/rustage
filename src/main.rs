@@ -20,6 +20,23 @@ fn main() {
     };
     host::log::install(host::log::Logger::to_stderr(level));
 
+    // The interface language is read and installed the same way the log level is: an unknown tag is a
+    // usage error, and a language this build does not bundle is refused here rather than silently
+    // answered in English (principle #67).
+    let language = match cli::ui_language_of(arguments.iter()) {
+        Ok(language) => language,
+        Err(error) => {
+            eprintln!("rustage: {error}\nTry `rustage --help` for usage.");
+            std::process::exit(cli::ExitCode::Usage.code());
+        }
+    };
+    let selection = app::locale::catalog::select(language.map(|language| language.tag()));
+    if let app::locale::catalog::Selection::Refused { reason, .. } = &selection {
+        eprintln!("rustage: {reason}");
+        std::process::exit(cli::ExitCode::Reported.code());
+    }
+    app::locale::catalog::install(selection);
+
     let command = match cli::parse(arguments) {
         Ok(command) => command,
         Err(error) => {

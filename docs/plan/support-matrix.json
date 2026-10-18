@@ -15,8 +15,8 @@
     {
       "id": "macos",
       "triple": "aarch64-apple-darwin",
-      "designerHost": "build-verified",
-      "reason": "cargo build（desktop profile）已记录，见 docs/log/log-20261013-4.md"
+      "designerHost": "certified",
+      "reason": "cargo build --bin rustage 与 target/debug/rustage --version；x86_64-apple-darwin 交叉构建后在 Rosetta 下运行通过（MS10，见 docs/log/log-20261016-4.md §28）"
     },
     {
       "id": "windows",
@@ -61,24 +61,24 @@
       "feature": "mini",
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
-      "mode2": "unverified",
-      "mode2Reason": null
+      "mode2": "build-verified",
+      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features mini --lib 真实构建通过；见 docs/log/log-20261016-4.md §28"
     },
     {
       "id": "embedded",
       "feature": "embedded",
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
-      "mode2": "unverified",
-      "mode2Reason": null
+      "mode2": "build-verified",
+      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features embedded --lib 真实构建通过；见 docs/log/log-20261016-4.md §28"
     }
   ],
   "cells": [
     {
       "host": "macos",
       "profile": "desktop",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "cargo build --bin rustage（rust_widgets desktop feature）通过，并用 --generate 产出 default 模板源码；生成物本身尚未链接"
     },
     {
       "host": "macos",
@@ -95,14 +95,14 @@
     {
       "host": "macos",
       "profile": "mini",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mini --lib 真实构建通过（84,282,248 字节 rlib）；生成物本身尚未链接"
     },
     {
       "host": "macos",
       "profile": "embedded",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features embedded --lib 真实构建通过（69,528,992 字节 rlib）；生成物本身尚未链接"
     },
     {
       "host": "windows",

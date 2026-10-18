@@ -50,6 +50,7 @@ pub mod project;
 pub mod search;
 pub mod shell;
 pub mod style;
+pub mod target;
 
 pub use application::*;
 pub use build::*;
@@ -71,6 +72,7 @@ pub use project::*;
 pub use search::*;
 pub use shell::*;
 pub use style::*;
+pub use target::*;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -403,6 +405,22 @@ pub enum Command {
     LogicCombination(LogicCombinationOptions),
     /// Runs the event vectors and decides on a fault (task T17.08).
     LogicRegression(LogicRegressionOptions),
+    /// Configures one output target (task T18.01).
+    TargetConfig(TargetConfigOptions),
+    /// Captures or applies a versioned capability snapshot (task T18.02).
+    TargetCapability(TargetCapabilityOptions),
+    /// Fills the desktop build/behaviour matrix (task T18.03).
+    TargetMatrix(TargetMatrixOptions),
+    /// Checks a tablet/mobile target (task T18.04).
+    TargetMobile(TargetMobileOptions),
+    /// Checks a mini/embedded target and its links (task T18.05).
+    TargetRestricted(TargetRestrictedOptions),
+    /// Discovers a local device and plans an install (task T18.06).
+    TargetLocal(TargetLocalOptions),
+    /// Queues builds, deliveries and signing references (task T18.07).
+    TargetQueue(TargetQueueOptions),
+    /// Fills the five-profile certification report (task T18.08).
+    TargetCertification(TargetCertificationOptions),
 }
 
 /// One display on the command line, written `<id>:<x>,<y>,<w>,<h>,<scale>`.
@@ -559,6 +577,10 @@ pub fn help_text() -> &'static str {
         "            rustage [--render-icons <directory> | --probe-apis <directory>]\n",
         "            rustage [--probe-host <directory> | --project-check <file>]\n",
         "            rustage [--locale-report <directory>]\n",
+        "            rustage [--target-config <op>... | --target-capability <op>...]\n",
+        "            rustage [--target-build-matrix <op>... | --target-mobile <op>...]\n",
+        "            rustage [--target-restricted <op>... | --target-local <op>...]\n",
+        "            rustage [--target-queue <op>... | --target-certification <op>...]\n",
         "            rustage --new-project <directory> [--template <name>] [--name <name>]\n",
         "            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n",
         "            rustage [--project-tree <file>]\n",
@@ -1366,6 +1388,34 @@ pub fn help_text() -> &'static str {
         "                                     transition:<state>:<event>:<next>, vector:<name>, say:<event>,\n",
         "                                     fault:unknown:<call>, fault:timeout:<step>,\n",
         "                                     fault:crash:<generation>, fault:rapid:<count>, run, decide, check, show\n",
+        "       --target-config <op>...        Configure a target: profile:<name>, triple:<triple>,\n",
+        "                                     toolchain:<version>, sdk:<name>, mode:<one|two>,\n",
+        "                                     runner:<host|simulator|device|none>, host:<system>, check, show\n",
+        "       --target-capability <op>...    Capture or apply a capability snapshot: generator:<version>,\n",
+        "                                     built-for:<profile>, name:<kind>, read:<path>, save:<path>,\n",
+        "                                     compare:<path>, node:<kind>:<children>, switch:<from>:<to>,\n",
+        "                                     stale:<version>, check, show\n",
+        "       --target-build-matrix <op>...  Fill the desktop matrix: start:<triple>,\n",
+        "                                     pass:<triple>:<proof>:<note>, fail:<triple>:<reason>,\n",
+        "                                     cancel:<triple>, check, show\n",
+        "       --target-mobile <op>...        Check a tablet/mobile target: profile:<tablet|mobile>,\n",
+        "                                     size:<w>x<h>, input:<touch|pointer>:<w>x<h>,\n",
+        "                                     asset:<name>:<kind>:<bytes>, sdk:<platform>:<yes|no>[:<version>],\n",
+        "                                     evidence:<simulator|device>:<name>:<proof>:<note>, check, show\n",
+        "       --target-restricted <op>...    Check a restricted target: profile:<mini|embedded>,\n",
+        "                                     children:<n>, mode:<one|two>, feature:<name>, tree:<path>,\n",
+        "                                     dev:<crate>, build:<yes|no>, check, show\n",
+        "       --target-local <op>...         Local delivery: profile:<name>, host:<system>,\n",
+        "                                     platform:<ios|android>, program:<name>, device:<id>:<model>:<yes|no>,\n",
+        "                                     select:<id>, authorize:<id>, package:<id>:<version>:<artifact>,\n",
+        "                                     export:<directory>, install, remote:<host>,\n",
+        "                                     fail:<step>:<reason>, previous:<version>, check, show\n",
+        "       --target-queue <op>...         Queue and track: job:<id>:<target>:<build|deploy|sign>,\n",
+        "                                     signing:<identity>:<credential>:<source>, start:<id>,\n",
+        "                                     pass:<id>:<proof>:<artifact>, fail:<id>:<reason>, cancel:<id>,\n",
+        "                                     secret:<value>, log:<text>, check, show\n",
+        "       --target-certification <op>... Fill the report: profile:<name>,\n",
+        "                                     stage:<stage>:<proof>:<command>:<note>, consistency, check, show\n",
         "     Global options:\n",
         "       --log-level <level>           error | warn | info | debug | trace (default: info)\n",
         "       --ui-language <tag>           Interface language; only `en` is bundled so far (default: follow\n",
@@ -1430,7 +1480,7 @@ where
 
     // Each family knows its own flags and answers `None` for anything else, so a flag belongs to
     // exactly one family and the order below is a reading order rather than a precedence rule.
-    let families: [Family; 20] = [
+    let families: [Family; 21] = [
         host::parse_host,
         project::parse_project,
         document::parse_document,
@@ -1451,6 +1501,7 @@ where
         collection::parse_collection,
         form::parse_form,
         logic::parse_logic,
+        target::parse_target,
     ];
     for family in families {
         if let Some(command) = family(text, argument.clone(), &mut arguments) {

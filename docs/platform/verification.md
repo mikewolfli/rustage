@@ -38,8 +38,10 @@
 | A4 | Linux **原生** GTK 会话 | 本机 linux x86_64 + X11 + GTK3，后端 `gtk` | [log-20261015-1 §7](../log/log-20261015-1.md) |
 | A18 | Windows 交叉构建（`x86_64-pc-windows-gnu`） | 本机 linux，mingw-w64 GCC 13 | [log-20261015-2 §2](../log/log-20261015-2.md) |
 | A20 | 宿主构建（macOS、Linux） | 两台机器各自的 `cargo build` | [log-20261013-4](../log/log-20261013-4.md)、[log-20261015-1 §11](../log/log-20261015-1.md) |
+| A23 | macOS x86_64 交叉构建与 **Rosetta 运行** | 本机 macOS（Apple Silicon），`rustup target add x86_64-apple-darwin` | [log-20261016-4 §28](../log/log-20261016-4.md)：`cargo build --target x86_64-apple-darwin` 通过，`target/x86_64-apple-darwin/debug/rustage --version` 返回 `rustage 0.1.0` |
+| A24 | 固定依赖 `rust_widgets` 的 `mini`/`embedded` profile 构建 | 本机 macOS，`--no-default-features --features <profile> --lib` | [log-20261016-4 §28](../log/log-20261016-4.md)：两个 profile 均 `cargo build` 通过，rlib 84,282,248 / 69,528,992 字节；生成物未链接 |
 
-**只有这 5 项**。其余每一项都需要一台机器、一块设备、一次人工确认，或一个 SDK；逐项见下。
+**只有这 7 项**。其余每一项都需要一台机器、一块设备、一次人工确认，或一个 SDK；逐项见下。
 
 ## 1. 三桌面宿主（T01.01 启动、T01.02 平台服务、T01.08 探针）
 
@@ -70,22 +72,23 @@
 
 ## 2. 输出 profile 与设备（T00.03 的 15 格 + F18 多目标与部署）
 
-[支持矩阵](../plan/support-matrix.md) 的 15 格目前**全部 `unverified`**：本仓库没有任何一次面向输出
-profile 的交叉构建或设备运行。逐格补法是"在某一宿主上为某一 profile 建立构建或运行证据"：
+[支持矩阵](../plan/support-matrix.md) 的 15 格中，MS10 之后有 3 格为 `build-verified`
+（macos × desktop/mini/embedded），其余 12 格仍为 `unverified`。逐格补法是"在某一宿主上为某一 profile
+建立构建或运行证据"：
 
 | # | 格 | 需要什么 | 状态 |
 |---|---|---|---|
 | B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ⏳ 待真机（本机即可做，尚未做） |
 | B2 | linux × tablet / mobile | Android SDK/NDK；iOS 需 macOS | ⛔ 阻塞（缺 SDK） |
 | B3 | linux × mini / embedded | `no_std`/嵌入式目标（如 `thumbv7em-none-eabihf`）与板卡 | ⛔ 阻塞（缺工具链与设备） |
-| B4 | macos × desktop | macOS 机器 | ⏳ 待真机 |
+| B4 | macos × desktop | macOS 机器 | ⏳ 部分：desktop feature 构建与 default 模板生成已通过；生成物未链接 |
 | B5 | macos × tablet / mobile | 同 B2，另需在本机 macOS 上装 Xcode | ⛔ 阻塞 |
-| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ⛔ 阻塞 |
+| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ⏳ 部分：两个 profile 的 rlib 真实构建通过；生成物未链接、无板卡 |
 | B7–B11 | windows × 五个 profile | Windows 机器（构建可用交叉编译起步，运行仍需机器） | ⏳ 待真机；mini/embedded 另需板卡（⛔） |
 | B12 | tablet/mobile 的**真设备**运行 | Android/iOS 真机 | ⏳ 待真机：路线图 T18.04 要求**模拟器与真设备分别记录**，不得互相顶替 |
-| B13 | mini/embedded 的容量与链接审计 | 目标设备 + 容量门禁 | ⛔ 阻塞：T18.05 要求实际 target build 达门禁 |
-| B14 | 本地设备发现/选择/认证、打包导出与安装 | 每类设备 | ⏳ 待真机（T18.06） |
-| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 待真机（T18.08 要求分列"生成/check/build/运行/设备"级别） |
+| B13 | mini/embedded 的容量与链接审计 | 目标设备 + 容量门禁 | ⏳ 部分：实际 profile build 通过，链接审计基于真实 `cargo tree`；无目标设备 |
+| B14 | 本地设备发现/选择/认证、打包导出与安装 | 每类设备 | ⏳ 待真机（T18.06）：本轮只到真实 package 导出与安装计划 |
+| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；12 个格未验证（[§28](../log/log-20261016-4.md)） |
 
 ## 3. 鸿蒙 2in1（不在"三宿主"内，单独跟踪）
 

@@ -55,6 +55,7 @@ mod preview;
 mod project;
 mod search;
 mod style;
+mod target;
 mod workbench;
 use application::*;
 use build::*;
@@ -74,6 +75,7 @@ use preview::*;
 use project::*;
 use search::*;
 use style::*;
+use target::*;
 use workbench::*;
 
 /// Executes a parsed command.
@@ -1031,6 +1033,54 @@ pub fn run(command: Command) {
         }
         Command::LogicRegression(options) => {
             if !logic_regression(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetConfig(options) => {
+            if !target_config(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetCapability(options) => {
+            if !target_capability(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetMatrix(options) => {
+            if !target_matrix(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetMobile(options) => {
+            if !target_mobile(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetRestricted(options) => {
+            if !target_restricted(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetLocal(options) => {
+            if !target_local(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetQueue(options) => {
+            if !target_queue(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetCertification(options) => {
+            if !target_certification(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }

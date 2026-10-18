@@ -39,6 +39,22 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [MS10: multi-target projects — target configuration, the versioned capability snapshot, the local
+  desktop matrix, the restricted profiles and the certification report](log/log-20261016-4.md):
+  `app::targets` (`configuration` — profile, triple, toolchain, SDK, mode and runner, with a profile
+  that is not an OS and no mode 1 on mini/embedded; `snapshot` — a versioned four-level capability
+  answer, a switch that marks instead of deleting; `matrix` — four committed desktop combinations
+  with independent artifacts and a success that needs a run; `devices` — tablet/mobile sizes, touch
+  targets, resource capacity, and simulator/device evidence that is never averaged; `restricted` —
+  static/`no_std` applicability, the three capacity boundaries and a link audit over the real
+  `cargo tree` closure plus a gate only a real build passes; `local` — local tools with a distinct
+  "not applicable" state, package export that reads itself back, install plans and recovery;
+  `queue` — per-job failure that keeps the matrix from looking green, measured artifacts and
+  credential references that cannot hold a secret; `certification` — five stages per profile with
+  evidence-required cells and the F17 IPC/static consistency measurement), the global
+  `--target-*` commands, and the support matrix updated from real evidence — 8 tasks, 92 new tests,
+  with Linux/Windows runs, mobile SDKs/devices and linked generated artifacts explicitly
+  unverified. Recorded in the same file as MS07–MS09 and the host-UI i18n work.
 - [Host interface i18n begins — the identified string vocabulary, the catalog and the generated English
   language pack](log/log-20261016-4.md): `host::locale` (the known languages, the system's language read
   and the `bundled` fact), `app::locale` (`catalog` — a `Pack` that round-trips through its file form, a

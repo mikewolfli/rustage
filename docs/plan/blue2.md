@@ -468,6 +468,8 @@
   工程修订：本轮提交（`git log --oneline -1`，标题以 MS00/MS01 acceptance review 开头）。
 - **边界（签收不等于所有格都有证据）：** 演示脚本要求的"三桌面探针环境"只有 Linux 一侧有真实结果
   （`docs/plan/host-probe.md` 的 macos/windows 两列全为 `blocked`，缺测试机）；GUI 面（多根树、
-  依赖面板、Kit/profile 选择、凭据选择器、向导窗口）属 T04/T18/T26；支持矩阵 15 格仍为 `unverified`；
+  依赖面板、Kit/profile 选择、凭据选择器、向导窗口）属 T04/T18/T26；签收当时支持矩阵 15 格均为
+  `unverified`，后续 MS10 与 2026-10-19 复核已把其中 4 格更新为 `build-verified`
+  （见 [`support-matrix.md`](support-matrix.md)）；
   本构建无 TLS/HTTP 客户端，`url-handover` 为 `not-verified`（探针不得打开用户的浏览器）。逐条见
   [`log-20261015-1.md`](../log/log-20261015-1.md) §12。

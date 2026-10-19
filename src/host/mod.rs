@@ -73,6 +73,7 @@ pub mod permission;
 pub mod platform;
 pub mod readiness;
 pub mod registry;
+pub mod smoke;
 pub mod startup;
 pub mod subprocess;
 pub mod tasks;

@@ -140,6 +140,57 @@ impl LogicRegressionOptions {
     }
 }
 
+/// Serves one business program over standard input/output (task T17.02).
+///
+/// This is the replaceable side of a hot update, started by `--logic-process` (and available to a
+/// person debugging a channel by hand). It reports nothing on standard output except encoded frames.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LogicWorkerOptions {
+    /// The operations: `name:<name>`, `version:<version>`, `initial:<state>`,
+    /// `transition:<state>:<event>:<next>` and `set:<state>:<event>:<field>=<type>:<value>`
+    /// (both repeatable), plus `schema-version:<n>` and `schema:<name>:<type>:<since>`
+    /// (repeatable). A declared schema is this generation's own `restore` contract: an undeclared
+    /// field or a wrongly typed value is refused.
+    pub ops: Vec<String>,
+}
+
+impl LogicWorkerOptions {
+    /// A worker with no program.
+    pub fn new() -> Self {
+        Self { ops: Vec::new() }
+    }
+}
+
+/// Drives two real business processes across the typed channel (tasks T17.02 and T17.06).
+#[derive(Debug, PartialEq, Eq)]
+pub struct LogicProcessOptions {
+    /// The operations: `session:<id>`, `name:<name>`, `version:<version>`,
+    /// `generation:<n>`, `new-generation:<n>`, `first:<state>`, `second:<state>`,
+    /// `first-transition:<state>:<event>:<next>` (repeatable),
+    /// `second-transition:<state>:<event>:<next>` (repeatable),
+    /// `first-set:<state>:<event>:<field>=<type>:<value>` (repeatable),
+    /// `second-set:<state>:<event>:<field>=<type>:<value>` (repeatable),
+    /// `first-event:<name>[:<type>:<value>]` (repeatable),
+    /// `second-event:<name>[:<type>:<value>]` (repeatable),
+    /// `second-binary:<path>` (run a built candidate instead of this executable),
+    /// `first-schema:<name>:<type>:<since>` (repeatable, declares the old state schema),
+    /// `second-schema:<name>:<type>:<since>` (repeatable, declares the new state schema),
+    /// `from-version:<n>` / `to-version:<n>` (the schema versions around the migration),
+    /// `preserve` (snapshot the old state and restore it into the new generation),
+    /// `expect:<state>` (repeatable, in the order the events run), `check`, `show`.
+    ///
+    /// A schema migration needs `preserve` and both schema sides: an undeclared side would classify
+    /// no field and silently drop the state it does not know about.
+    pub ops: Vec<String>,
+}
+
+impl LogicProcessOptions {
+    /// A driver with no programs.
+    pub fn new() -> Self {
+        Self { ops: Vec::new() }
+    }
+}
+
 /// Parses this family's flags, answering `None` when the flag is another family's.
 pub(super) fn parse_logic(
     text: &str,
@@ -168,6 +219,8 @@ pub(super) fn parse_logic(
         "--logic-swap" => ops!(LogicSwapOptions::new(), Command::LogicSwap),
         "--logic-combination" => ops!(LogicCombinationOptions::new(), Command::LogicCombination),
         "--logic-regression" => ops!(LogicRegressionOptions::new(), Command::LogicRegression),
+        "--logic-worker" => ops!(LogicWorkerOptions::new(), Command::LogicWorker),
+        "--logic-process" => ops!(LogicProcessOptions::new(), Command::LogicProcess),
         _ => None,
     }
 }
@@ -229,6 +282,14 @@ mod tests {
         assert_eq!(
             parse(["--logic-regression"]),
             Ok(Command::LogicRegression(LogicRegressionOptions::new())),
+        );
+        assert_eq!(
+            parse(["--logic-worker"]),
+            Ok(Command::LogicWorker(LogicWorkerOptions::new())),
+        );
+        assert_eq!(
+            parse(["--logic-process"]),
+            Ok(Command::LogicProcess(LogicProcessOptions::new())),
         );
     }
 }

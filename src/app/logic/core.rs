@@ -359,6 +359,11 @@ impl Core {
         State::new(self.initial.clone())
     }
 
+    /// The transitions it was given, in the order they were added.
+    pub fn transitions(&self) -> &[Transition] {
+        &self.transitions
+    }
+
     /// Reduces one event against a state.
     pub fn reduce(&self, state: &State, event: &Event) -> Result<Step, Refusal> {
         let transition = self

@@ -227,7 +227,8 @@
 - **验收人 / 日期 / 工程修订：** 复核方：第七次开发记录
   [`log-20261015-1.md`](../log/log-20261015-1.md) §10.1（逐条证据）；日期 2026-10-15；
   工程修订：本轮提交（`git log --oneline -1`，标题以 MS00/MS01 acceptance review 开头）。
-- **边界（签收不等于所有格都有证据）：** 15 个宿主 × profile 产物格仍为 `unverified`（无目标构建、
-  无设备）；基准环境没有性能数据点；`cargo test`/`fmt`/`clippy`/`--probe-apis` 四个 Rust 门禁仍是
+- **边界（签收不等于所有格都有证据）：** 签收当时 15 个宿主 × profile 产物格均为 `unverified`
+  （无目标构建、无设备）；后续 MS10 与 2026-10-19 复核已把其中 4 格更新为 `build-verified`
+  （见 [`support-matrix.md`](support-matrix.md)）；基准环境没有性能数据点；`cargo test`/`fmt`/`clippy`/`--probe-apis` 四个 Rust 门禁仍是
   人工门禁，未进 CI；MS00 没有端到端界面演示（其交付物是契约、登记、原型、数据集与门禁）。逐条见
   [`log-20261015-1.md`](../log/log-20261015-1.md) §12。

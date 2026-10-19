@@ -20,12 +20,26 @@ use super::*;
 #[derive(Debug, PartialEq, Eq)]
 pub struct LaunchOptions {
     pub exit_after: Duration,
+    /// Mount one button in the window and require at least one real click before the session is
+    /// called successful. This is the GUI evidence path: a window that only exists cannot show
+    /// that pointer input reached a control.
+    pub smoke: bool,
+    /// Also forward each smoke click to a real `--logic-worker` process over the typed channel.
+    pub smoke_worker: bool,
+    /// Wire a real GTK input-method context to the smoke field (Linux X11 only).
+    pub ime: bool,
+    /// Seed the smoke field with this text before the session (visual evidence).
+    pub smoke_text: Option<String>,
 }
 
 impl Default for LaunchOptions {
     fn default() -> Self {
         Self {
             exit_after: crate::host::platform::BASELINE_SESSION,
+            smoke: false,
+            smoke_worker: false,
+            ime: false,
+            smoke_text: None,
         }
     }
 }
@@ -51,6 +65,28 @@ pub(super) fn parse_host(
                         return Some(Err(ParseError { argument: value }));
                     };
                     options.exit_after = Duration::from_millis(milliseconds);
+                    continue;
+                }
+                if argument == OsStr::new("--smoke") {
+                    options.smoke = true;
+                    continue;
+                }
+                if argument == OsStr::new("--smoke-worker") {
+                    options.smoke = true;
+                    options.smoke_worker = true;
+                    continue;
+                }
+                if argument == OsStr::new("--ime") {
+                    options.smoke = true;
+                    options.ime = true;
+                    continue;
+                }
+                if argument == OsStr::new("--smoke-text") {
+                    let Some(value) = rest.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    options.smoke = true;
+                    options.smoke_text = Some(value.to_string_lossy().into_owned());
                     continue;
                 }
                 return Some(Err(ParseError { argument }));
@@ -125,7 +161,11 @@ mod tests {
         assert_eq!(
             parse(["--launch", "--log-level", "trace", "--exit-after-ms", "10"]),
             Ok(Command::Launch(LaunchOptions {
-                exit_after: Duration::from_millis(10)
+                exit_after: Duration::from_millis(10),
+                smoke: false,
+                smoke_worker: false,
+                ime: false,
+                smoke_text: None,
             })),
         );
 
@@ -146,7 +186,41 @@ mod tests {
         assert_eq!(
             parse(["--launch", "--exit-after-ms", "1500"]),
             Ok(Command::Launch(LaunchOptions {
-                exit_after: Duration::from_millis(1500)
+                exit_after: Duration::from_millis(1500),
+                smoke: false,
+                smoke_worker: false,
+                ime: false,
+                smoke_text: None,
+            })),
+        );
+        assert_eq!(
+            parse(["--launch", "--smoke", "--exit-after-ms", "1500"]),
+            Ok(Command::Launch(LaunchOptions {
+                exit_after: Duration::from_millis(1500),
+                smoke: true,
+                smoke_worker: false,
+                ime: false,
+                smoke_text: None,
+            })),
+        );
+        assert_eq!(
+            parse(["--launch", "--smoke-worker", "--exit-after-ms", "1500"]),
+            Ok(Command::Launch(LaunchOptions {
+                exit_after: Duration::from_millis(1500),
+                smoke: true,
+                smoke_worker: true,
+                ime: false,
+                smoke_text: None,
+            })),
+        );
+        assert_eq!(
+            parse(["--launch", "--ime", "--exit-after-ms", "1500"]),
+            Ok(Command::Launch(LaunchOptions {
+                exit_after: Duration::from_millis(1500),
+                smoke: true,
+                smoke_worker: false,
+                ime: true,
+                smoke_text: None,
             })),
         );
         assert_ne!(

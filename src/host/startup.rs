@@ -44,6 +44,12 @@ pub struct StartupRequest {
     /// The baseline start must be able to **end**: a smoke test that hangs is not evidence, and a
     /// person running it wants their terminal back. Zero means "run until something else quits".
     pub exit_after: Duration,
+    /// Mount one button and require a real click before the session is a success.
+    pub smoke: bool,
+    /// Wire a real GTK input-method context to the smoke field (Linux X11 only).
+    pub ime: bool,
+    /// Seed the smoke field with this text before the loop (visual evidence).
+    pub smoke_text: Option<String>,
 }
 
 impl Default for StartupRequest {
@@ -53,6 +59,9 @@ impl Default for StartupRequest {
             width: 1280,
             height: 800,
             exit_after: Duration::from_millis(750),
+            smoke: false,
+            ime: false,
+            smoke_text: None,
         }
     }
 }
@@ -88,6 +97,13 @@ pub trait StartupPlatform {
     fn run_loop(&mut self, request: &StartupRequest) -> HostResult<LoopEnd>;
     /// Closes the window created by [`StartupPlatform::create_window`].
     fn close_window(&mut self, window: u64) -> HostResult<()>;
+    /// How many real clicks the smoke control received, when one was requested.
+    ///
+    /// The default is zero: a platform that does not implement the smoke must not inherit a
+    /// success it never observed.
+    fn smoke_clicks(&self) -> usize {
+        0
+    }
 }
 
 /// How the event loop ended.
@@ -124,6 +140,10 @@ pub struct StartupReport {
     pub gui_mode: RuntimeGuiMode,
     /// How long the whole attempt took.
     pub elapsed: Duration,
+    /// Whether the caller asked for the click smoke.
+    pub smoke: bool,
+    /// How many real clicks the smoke button received.
+    pub smoke_clicks: usize,
 }
 
 impl StartupReport {
@@ -135,8 +155,22 @@ impl StartupReport {
     /// The exit code the process should use.
     pub fn exit_code(&self) -> ExitCode {
         match &self.outcome {
+            StartupOutcome::Started { .. } if self.smoke && self.smoke_clicks == 0 => {
+                // A requested click smoke that observed no click is not a success. Reporting 0
+                // would turn "the harness never clicked" into "the GUI works".
+                ExitCode::Reported
+            }
             StartupOutcome::Started { .. } => ExitCode::Ok,
             StartupOutcome::Refused { exit_code, .. } => *exit_code,
+        }
+    }
+
+    /// The smoke outcome in one phrase, when the caller asked for it.
+    fn smoke_note(&self) -> String {
+        if self.smoke {
+            format!(", smoke {} click(s)", self.smoke_clicks)
+        } else {
+            String::new()
         }
     }
 
@@ -145,10 +179,11 @@ impl StartupReport {
         match &self.outcome {
             StartupOutcome::Started { window, end } => format!(
                 "desktop session started: backend {backend}, gui mode {mode:?}, window {window}, \
-                 ended {end:?}, {elapsed} ms",
+                 ended {end:?}, {elapsed} ms{smoke}",
                 backend = self.backend,
                 mode = self.gui_mode,
                 elapsed = self.elapsed.as_millis(),
+                smoke = self.smoke_note(),
             ),
             StartupOutcome::Refused { reason, .. } => format!(
                 "desktop session refused: backend {backend}, gui mode {mode:?}: {reason}",
@@ -176,6 +211,8 @@ pub fn launch_with(request: &StartupRequest, platform: &mut dyn StartupPlatform)
         backend: backend.clone(),
         gui_mode,
         elapsed,
+        smoke: request.smoke,
+        smoke_clicks: 0,
     };
 
     if let Err(error) = request.validate() {
@@ -233,6 +270,8 @@ pub fn launch_with(request: &StartupRequest, platform: &mut dyn StartupPlatform)
                 backend,
                 gui_mode,
                 elapsed: started.elapsed(),
+                smoke: request.smoke,
+                smoke_clicks: platform.smoke_clicks(),
             }
         }
         (Err(error), _) | (_, Err(error)) => {
@@ -244,7 +283,9 @@ pub fn launch_with(request: &StartupRequest, platform: &mut dyn StartupPlatform)
 
 #[cfg(test)]
 mod tests {
-    use super::{LoopEnd, StartupOutcome, StartupPlatform, StartupRequest, launch_with};
+    use super::{
+        LoopEnd, StartupOutcome, StartupPlatform, StartupReport, StartupRequest, launch_with,
+    };
     use crate::host::error::{ExitCode, HostError, HostResult};
     use crate::host::log::{FixedClock, Level, Logger};
     use rust_widgets::platform::RuntimeGuiMode;
@@ -469,5 +510,28 @@ mod tests {
         );
         assert_eq!(request.width, 1280);
         assert_eq!(request.height, 800);
+        assert!(!request.smoke, "a click smoke is opt-in");
+        assert!(!request.ime, "an IME context is opt-in");
+        assert!(request.smoke_text.is_none());
+    }
+
+    #[test]
+    fn a_requested_smoke_with_no_click_is_not_a_success() {
+        let report = |clicks| StartupReport {
+            outcome: StartupOutcome::Started {
+                window: 1,
+                end: LoopEnd::HostEnded,
+            },
+            backend: "gtk".to_owned(),
+            gui_mode: RuntimeGuiMode::NativeInteractive,
+            elapsed: Duration::from_millis(10),
+            smoke: true,
+            smoke_clicks: clicks,
+        };
+
+        assert_eq!(report(0).exit_code(), ExitCode::Reported);
+        assert!(report(0).summary().contains("smoke 0 click(s)"));
+        assert_eq!(report(1).exit_code(), ExitCode::Ok);
+        assert!(report(1).summary().contains("smoke 1 click(s)"));
     }
 }

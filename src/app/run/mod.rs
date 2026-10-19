@@ -47,6 +47,7 @@ mod document;
 mod editor;
 mod form;
 mod generate;
+mod gui_smoke;
 mod language;
 mod layout;
 mod locale;
@@ -103,7 +104,25 @@ pub fn run(command: Command) {
         Command::Launch(options) => {
             let request = StartupRequest {
                 exit_after: options.exit_after,
+                smoke: options.smoke,
+                ime: options.ime,
+                smoke_text: options.smoke_text,
                 ..StartupRequest::default()
+            };
+            let bridge = if options.smoke_worker {
+                match gui_smoke::Bridge::start() {
+                    Ok(bridge) => {
+                        crate::host::smoke::install(bridge.sender());
+                        Some(bridge)
+                    }
+                    Err(reason) => {
+                        crate::host::log::flush();
+                        eprintln!("rustage: gui smoke: {reason}");
+                        std::process::exit(crate::host::error::ExitCode::Reported.code());
+                    }
+                }
+            } else {
+                None
             };
             if !options.exit_after.is_zero() {
                 // Say what will happen before it does: a bounded session asks the dependency to stop
@@ -119,9 +138,16 @@ pub fn run(command: Command) {
             // started" without a window is the failure this command exists to avoid claiming.
             print!("{}", report.summary());
             println!();
+            crate::host::smoke::clear();
+            if let Some(bridge) = bridge {
+                bridge.finish();
+            }
             crate::host::log::flush();
-            if !report.is_started() {
-                std::process::exit(report.exit_code().code());
+            // The exit code is the report's, not just "did it start": a requested smoke that saw no
+            // click is a reported failure even though a window existed.
+            let code = report.exit_code();
+            if code.code() != 0 {
+                std::process::exit(code.code());
             }
         }
         Command::RenderIcons(directory) => match render_icons(&directory) {
@@ -1033,6 +1059,18 @@ pub fn run(command: Command) {
         }
         Command::LogicRegression(options) => {
             if !logic_regression(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicWorker(options) => {
+            if !logic_worker(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::LogicProcess(options) => {
+            if !logic_process(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }

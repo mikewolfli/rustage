@@ -40,6 +40,7 @@
 | A20 | 宿主构建（macOS、Linux） | 两台机器各自的 `cargo build` | [log-20261013-4](../log/log-20261013-4.md)、[log-20261015-1 §11](../log/log-20261015-1.md) |
 | A23 | macOS x86_64 交叉构建与 **Rosetta 运行** | 本机 macOS（Apple Silicon），`rustup target add x86_64-apple-darwin` | [log-20261016-4 §28](../log/log-20261016-4.md)：`cargo build --target x86_64-apple-darwin` 通过，`target/x86_64-apple-darwin/debug/rustage --version` 返回 `rustage 0.1.0` |
 | A24 | 固定依赖 `rust_widgets` 的 `mini`/`embedded` profile 构建 | 本机 macOS，`--no-default-features --features <profile> --lib` | [log-20261016-4 §28](../log/log-20261016-4.md)：两个 profile 均 `cargo build` 通过，rlib 84,282,248 / 69,528,992 字节；生成物未链接 |
+| A25 | Linux GTK 控件事件、键盘与真实 IME | 本机 linux x86_64 + X11 + GTK3 + fcitx5（激活 `pinyin`） | [log-20261019-1 §11](../log/log-20261019-1.md)：声明事件/绑定/多控件路由经真实控件进入 `--logic-worker`；`--keys` 得到 `abc`；`--ime` 连续 8 次得到 preedit 与 `commit: 你好`；`你好世界` 全字形截图 |
 
 **只有这 7 项**。其余每一项都需要一台机器、一块设备、一次人工确认，或一个 SDK；逐项见下。
 
@@ -48,7 +49,7 @@
 | # | 项 | 需要什么 | 怎么补 | 状态 | 证据 / 缺口 |
 |---|---|---|---|---|---|
 | A1 | macOS 基线会话真实启动 | 一台 macOS + 图形会话 | `cargo run -- --launch --exit-after-ms 600` | ✅ 已验证 | [log-20261013-4 §16](../log/log-20261013-4.md)：后端 `cocoa`、模式 `NativeInteractive`、窗口 id 与几何为运行时返回值 |
-| A2 | 窗口真的**出现在屏幕上并接受输入**（三桌面各一次） | 人在屏幕前 | `cargo run -- --launch`，用鼠标点窗口、关窗口，记录 `run()` 返回与日志 | ⏳ 待真机 | 本机 Linux 与 macOS 都只到"窗口被创建、循环进入"；合成与输入无人确认（[log-20261015-1 §12.1](../log/log-20261015-1.md)） |
+| A2 | 窗口真的**出现在屏幕上并接受输入**（三桌面各一次） | 人在屏幕前 | `cargo run -- --launch`，用鼠标点窗口、关窗口，记录 `run()` 返回与日志 | ⏳ 待真机 | 本机 Linux 与 macOS 都只到"窗口被创建、循环进入"；合成与输入无人确认（[log-20261015-1 §12.1](../log/log-20261015-1.md)）。2026-10-19 已有 XTest 合成点击/拖拽、`--smoke-worker` 跨进程状态与 §11 的多控件事件路由证据（[log-20261019-1 §5.7、§11](../log/log-20261019-1.md)），键盘/IME 见 A16；但合成输入仍不等于人工确认 |
 | A3 | Linux 默认构建的 15 项探针 | 一台 Linux + 任意会话 | `cargo run -- --probe-host target/host` | ✅ 已验证 | [host-probe.md](../plan/host-probe.md) linux 六组 `probed`；`12 ready / 1 gap / 2 not-verified` |
 | A4 | Linux **原生** GTK 会话 | Linux + X11（本机有） | `cargo run --features linux-native -- --probe-host target/host` | ✅ 已验证 | [log-20261015-1 §7](../log/log-20261015-1.md)：后端 `gtk`、模式 `NativeInteractive`、窗口创建成功；re-pin 后重跑为 `13 ready / 0 gap / 2 not-verified`（[log-20261015-3](../log/log-20261015-3.md)） |
 | A5 | Linux **Wayland** 原生会话 | Wayland 会话（本机 `WAYLAND_DISPLAY` 为空） | 在 Wayland 桌面里用上游 `wayland-native` feature 重跑探针 | ⏳ 待真机 | 上游用 `wayland-native` 选择该后端；本机没有 Wayland 合成器 |
@@ -62,7 +63,7 @@
 | A13 | 非 unix 的进程树语义 | 一台 Windows | `process-trees` 检查；记录是 `DirectOnly` 还是 Job Object | ⏳ 待真机 | `Termination::DirectOnly`、`ProcessPresence` 的非 unix 分支只有代码与文档（[log-20261015-1 §12.2](../log/log-20261015-1.md)） |
 | A14 | 系统凭据存储 | macOS 钥匙串 / Windows 凭据管理器 | `default_store()` 与 `network-services` 检查 | ⏳ 待真机 | 本机（与多数 Linux 会话）没有可用 keyring，走的是环境变量存储（[log-20261014-1 §27.6](../log/log-20261014-1.md)） |
 | A15 | 真实 DPI 缩放与多屏 | 可切换缩放的桌面、多显示器 | 改系统缩放后跑 `--probe-host`，比较 `dpi_scale_factor` 与几何 | ⏳ 待真机 | `GDK_SCALE`/`GDK_DPI_SCALE` 有代码路径，无真实切换证据（[log-20261015-1 §12.1](../log/log-20261015-1.md)） |
-| A16 | 编辑器绘制、IME、鼠标/触摸路径 | 真实显示会话 + 输入法 | 打开编辑器窗口，用鼠标选词、用 IME 输入 | ⏳ 待真机 | T00.02 的未覆盖项；契约探针只覆盖无显示的编辑原语（[log-20261013-4 §17](../log/log-20261013-4.md)） |
+| A16 | 编辑器绘制、IME、鼠标/触摸路径 | 真实显示会话 + 输入法 | 打开编辑器窗口，用鼠标选词、用 IME 输入 | ⏳ 部分 | T00.02 的未覆盖项。`--smoke` 的字段路径已验证：键盘 `abc`、真实 fcitx preedit/commit `你好`、`你好世界` 全字形截图（[log-20261019-1 §11](../log/log-20261019-1.md)）；依赖宿主 `grab_focus` workaround 与已激活的 `pinyin`。编辑器控件的绘制/选词/触摸仍未在真实编辑器窗口中验证（[log-20261013-4 §17](../log/log-20261013-4.md)） |
 | A17 | 可访问性桥（AT-SPI/Narrator/VoiceOver） | 各平台辅助技术 | 用真实读屏软件读一遍工具栏与面板 | ⏳ 待真机 | 本仓库没有用真实辅助技术验证过；`accessibility` 目前只是库的能力位 |
 | A18 | **Windows 交叉构建** | mingw-w64（本机已装） | `cargo build --target x86_64-pc-windows-gnu` | ✅ 已验证 | [log-20261015-2 §2](../log/log-20261015-2.md)：1m01s 通过，产出 `rustage.exe`；同目标 `clippy --all-targets` 亦通过 |
 | A19 | Windows `x86_64-pc-windows-msvc` 构建 | MSVC CRT/SDK 或 `cargo-xwin` | `cargo build --target x86_64-pc-windows-msvc` | ⏳ 待真机 | 只有 `-gnu` 的构建证据（[log-20261015-2 §8](../log/log-20261015-2.md)） |
@@ -72,13 +73,13 @@
 
 ## 2. 输出 profile 与设备（T00.03 的 15 格 + F18 多目标与部署）
 
-[支持矩阵](../plan/support-matrix.md) 的 15 格中，MS10 之后有 3 格为 `build-verified`
-（macos × desktop/mini/embedded），其余 12 格仍为 `unverified`。逐格补法是"在某一宿主上为某一 profile
-建立构建或运行证据"：
+[支持矩阵](../plan/support-matrix.md) 的 15 格中，MS10 之后有 4 格为 `build-verified`
+（macos × desktop/mini/embedded、linux × desktop），其余 11 格仍为 `unverified`。逐格补法是"在某一宿主上为某一
+profile 建立构建或运行证据"：
 
 | # | 格 | 需要什么 | 状态 |
 |---|---|---|---|
-| B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ⏳ 待真机（本机即可做，尚未做） |
+| B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ✅ `build-verified`：本机 `cargo build --bin rustage` 与 `--features linux-native` 原生会话（[log-20261019-1 §5.7、§11](../log/log-20261019-1.md)）；生成物本身未链接，故不写 `certified` |
 | B2 | linux × tablet / mobile | Android SDK/NDK；iOS 需 macOS | ⛔ 阻塞（缺 SDK） |
 | B3 | linux × mini / embedded | `no_std`/嵌入式目标（如 `thumbv7em-none-eabihf`）与板卡 | ⛔ 阻塞（缺工具链与设备） |
 | B4 | macos × desktop | macOS 机器 | ⏳ 部分：desktop feature 构建与 default 模板生成已通过；生成物未链接 |

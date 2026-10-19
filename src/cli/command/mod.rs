@@ -405,6 +405,10 @@ pub enum Command {
     LogicCombination(LogicCombinationOptions),
     /// Runs the event vectors and decides on a fault (task T17.08).
     LogicRegression(LogicRegressionOptions),
+    /// Serves one business program over standard input/output (task T17.02).
+    LogicWorker(LogicWorkerOptions),
+    /// Drives two real business processes across the typed channel (tasks T17.02 and T17.06).
+    LogicProcess(LogicProcessOptions),
     /// Configures one output target (task T18.01).
     TargetConfig(TargetConfigOptions),
     /// Captures or applies a versioned capability snapshot (task T18.02).
@@ -573,7 +577,7 @@ pub fn help_text() -> &'static str {
     concat!(
         "rustage - Rust desktop UI designer\n",
         "\n",
-        "     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>]]\n",
+        "     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>] [--smoke] [--smoke-worker] [--ime] [--smoke-text <text>]]\n",
         "            rustage [--render-icons <directory> | --probe-apis <directory>]\n",
         "            rustage [--probe-host <directory> | --project-check <file>]\n",
         "            rustage [--locale-report <directory>]\n",
@@ -618,6 +622,10 @@ pub fn help_text() -> &'static str {
         "       -V, --version                 Print the application version\n",
         "       --launch                      Start the baseline desktop session, then leave it again\n",
         "       --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n",
+        "       --smoke                       With --launch, mount a button and field; require one real click\n",
+        "       --smoke-worker                With --smoke, forward each click to a real --logic-worker process\n",
+        "       --ime                         With --smoke, wire a real GTK input-method context (Linux X11)\n",
+        "       --smoke-text <text>           With --smoke, seed the field with this text (visual evidence)\n",
         "       --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n",
         "       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n",
         "       --probe-host <directory>      Check the host platform services and write host-readiness.json\n",
@@ -1371,6 +1379,7 @@ pub fn help_text() -> &'static str {
         "                                     tick:<now>, check, show\n",
         "       --logic-candidate <op>...      Debounce edits and admit a candidate: revision:<n>,\n",
         "                                     window:<ms>, edit:<source>, flush:<now>,\n",
+        "                                     build:<manifest-path>, bin:<name>, target-dir:<path>,\n",
         "                                     action:<check|build|rebuild>, outcome:<success|failure>,\n",
         "                                     stamp:<revision>, artifact:<path>, running:<path>, admit, show\n",
         "       --logic-migration <op>...      Plan a state migration: from:<n>, to:<n>,\n",
@@ -1388,6 +1397,18 @@ pub fn help_text() -> &'static str {
         "                                     transition:<state>:<event>:<next>, vector:<name>, say:<event>,\n",
         "                                     fault:unknown:<call>, fault:timeout:<step>,\n",
         "                                     fault:crash:<generation>, fault:rapid:<count>, run, decide, check, show\n",
+        "       --logic-worker <op>...         Serve one business program on stdin/stdout: name:<name>,\n",
+        "                                     version:<version>, initial:<state>,\n",
+        "                                     transition:<state>:<event>:<next>,\n",
+        "                                     set:<state>:<event>:<field>=<type>:<value>; frames only on stdout\n",
+        "       --logic-process <op>...        Drive two real business processes: session:<id>, name:<name>,\n",
+        "                                     version:<version>, generation:<n>, new-generation:<n>,\n",
+        "                                     first:<state>, second:<state>, first-transition:<s>:<e>:<n>,\n",
+        "                                     second-transition:<s>:<e>:<n>,\n",
+        "                                     first-set:<s>:<e>:<field>=<type>:<v>, second-set:<s>:<e>:<field>=<type>:<v>,\n",
+        "                                     first-event:<e>[:<type>:<v>],\n",
+        "                                     second-event:<e>[:<type>:<v>], second-binary:<path>,\n",
+        "                                     preserve, expect:<state>, check, show\n",
         "       --target-config <op>...        Configure a target: profile:<name>, triple:<triple>,\n",
         "                                     toolchain:<version>, sdk:<name>, mode:<one|two>,\n",
         "                                     runner:<host|simulator|device|none>, host:<system>, check, show\n",

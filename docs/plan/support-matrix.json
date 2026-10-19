@@ -27,8 +27,8 @@
     {
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
-      "designerHost": "unverified",
-      "reason": null
+      "designerHost": "certified",
+      "reason": "cargo build --bin rustage 与 target/debug/rustage --version 在 Linux x86_64、rustc 1.98.1 上通过；cargo build --features linux-native 亦通过，--launch --exit-after-ms 8000 在 X11 下映射出真实 1280x800 GTK 窗口（xwininfo），绘制回调填充 clear colour；--launch --smoke 画出真实按钮与文本框并经 XTest 指针事件触发回调；--smoke-worker 把点击经管道送进真实 --logic-worker 并观察到 running/idle；见 docs/log/log-20261019-1.md §2、§5.7"
     }
   ],
   "profiles": [
@@ -137,8 +137,8 @@
     {
       "host": "linux",
       "profile": "desktop",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "cargo build --bin rustage（rust_widgets desktop feature）通过，并在 Linux x86_64 上运行 --version；生成物本身尚未链接；见 docs/log/log-20261019-1.md §2"
     },
     {
       "host": "linux",

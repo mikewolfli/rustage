@@ -198,3 +198,32 @@
 - [x] 对应用户旅程/命令/菜单/面板/支持矩阵已更新，后续依赖已确认；无未经批准的 FUTURE 依赖。
 - **验收结论：** 完成（待验收）。
 - **验收人 / 日期 / 工程修订：** 待验收人填写；实现与证据见 [`docs/log/log-20261016-4.md`](../log/log-20261016-4.md) §26。
+- **2026-10-19 复核补充：** §26.3.4 声明为未覆盖的两项——真实双进程对跑与候选真实编译——
+  已在 [`log-20261019-1.md`](../log/log-20261019-1.md) §3–§4 补成可复跑的闭环（`--logic-worker`、
+  `--logic-process`、`--logic-candidate build:<manifest>`、`fixtures/logic-candidate`）；
+  `preserve` 的 `snapshot`/`restore` 进一步证明旧状态及其字段能跨真实进程进入新代。状态仍为
+  “完成（待验收）”，因为还没有验收人签字，且 §8 列出的 GUI 事件接线与设备目标仍未覆盖。
+  Linux 原生会话已能映射真实 1280x800 窗口并执行背景绘制（[log-20261019-1.md](../log/log-20261019-1.md)
+  §5.7）；`--launch --smoke` 画出真实按钮与文本框并被 XTest 的指针事件点击，`--smoke-worker`
+  还把点击经管道送进真实 `--logic-worker`，观察到 `running`/`idle` 状态切换。设计器的声明事件、
+  绑定与多控件路由（F13/F14）现已接到真实控件：主按钮 `click`、字段 `change`、提交按钮
+  `submit` 各自经过 `Registry`/`Wiring`/`Dispatcher`，未声明/未接线/未绑定/非法载荷会被拒绝且
+  不发送。键盘/IME 在固定修订上曾受 rust-widgets 焦点问题阻塞（feedback §17）；本轮用宿主
+  `grab_focus` + `XSetInputFocus` workaround 使 `run.py --keys` 直接得到 `smoke field final: "abc"`，
+  并在激活的 fcitx `pinyin` 下连续 8 次得到真实 preedit 与 `commit: 你好`（
+  [`log-20261019-1.md`](../log/log-20261019-1.md) §11）。仓库依赖仍保持固定修订；设计期
+  `panel.events`/`panel.data` 的绑定编辑 UI 仍未做。
+- **2026-10-19 导入失败补充：** 候选进程可用 `schema:` 声明自己接受的 `restore` 契约；类型不符
+  时拒绝导入，宿主观测到旧代仍在服务并以 exit 4 结束（`tests/logic_process.rs`
+  `a_generation_that_refuses_the_import_does_not_replace_the_old_one`）。`swap` 的暂停/排空模型
+  仍是单元级证据。
+- **2026-10-19 F13/F14 与 IME 补充：** `--smoke-worker` 不再直接把控件字符串送进 worker，而是先
+  经设计器的事件模型：`click`/`change`/`submit` 三个声明事件，`Wiring` 绑定到三个不同节点，
+  `Dispatcher` 分别绑定命令/业务调用；未声明、未接线、未绑定与非法载荷均以 `event refused`
+  记录且不发送。真实 fcitx preedit 在宿主焦点 workaround 下连续 8 次复现（harness 修复前 5、
+  后 3），CJK 由 `DroidSansFallbackFull` 覆盖到子集外字符（`你好世界` 截图）。证据见
+  [`log-20261019-1.md`](../log/log-20261019-1.md) §11。
+- **2026-10-19 schema 层补充：** `--logic-process` 的 `first-schema`/`second-schema` 已接入
+  `migration::plan`/`apply`：字段 kept/added/retyped/dropped 逐项报告，真实丢值时不启动新代、
+  旧代继续服务并以 exit 4 结束；downgrade 与未声明字段同样拒绝。证据见
+  [`log-20261019-1.md`](../log/log-20261019-1.md) §3.5 与 `tests/logic_process.rs` 的三个场景。

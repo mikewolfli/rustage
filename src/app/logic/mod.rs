@@ -11,6 +11,7 @@
 //!
 //! * the shared business core and its static call seam ([`core`]),
 //! * the local typed IPC between the stable UI process and the replaceable one ([`ipc`]),
+//! * the replaceable process itself, which serves that channel over any input/output ([`worker`]),
 //! * action validation and the synchronous/high-frequency events that stay in the UI ([`actions`]),
 //! * the debounced incremental build and the candidate artifact it produces ([`candidate`]),
 //! * the state schema, its snapshot and the migration preview ([`migration`]),
@@ -31,3 +32,4 @@ pub mod ipc;
 pub mod migration;
 pub mod regression;
 pub mod swap;
+pub mod worker;

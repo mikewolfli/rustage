@@ -39,6 +39,32 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [Review of blue1–blue10 and the real two-process hot-update walk](log/log-20261019-1.md): the
+  review found the milestones signed and no unimplemented task in range, fixed a support-matrix
+  document that still claimed every cell was `unverified` while its own table listed build evidence,
+  and closed MS09's two declared gaps — `host::subprocess::DuplexProcess` (a permit-gated, bounded
+  request/response child), `app::logic::worker` (the replaceable side of the typed channel, which
+  checks its own generation), `--logic-worker`/`--logic-process` (two real generations over pipes,
+  with the retired generation refused and a `preserve` snapshot/restore that carries the old state
+  and its fields into the new generation), and `--logic-candidate build:<manifest>` (a real `cargo
+  build` into a separate target directory; `fixtures/logic-candidate` includes the designer's own
+  `core`/`ipc`/`worker` sources rather than copying the protocol). Linux host build/run evidence
+  moved `linux × desktop` to `build-verified` and the Linux designer host to `certified` — 22 new
+  unit tests and 9 real-process integration tests. Schema-level state migration now runs over the
+  process boundary (`first-schema`/`second-schema`): a lossy migration blocks the switch and leaves
+  the old generation serving, and a generation whose own schema refuses the import is not adopted
+  either. A bounded GTK session was checked with `xwininfo`: a real 1280x800 window is mapped and
+  its paint callback fills the client area with the clear colour (the first attempt exposed a host
+  defect where only the widget model, not the OS window, was created). `--smoke` draws a real
+  button and field; `--smoke-worker` forwards each real XTest click through a channel to a real
+  `--logic-worker` process and logs the toggling `running`/`idle` state. `tools/gui-smoke/run.py`
+  checks click, drag-cancel and the worker toggles. Keyboard is no longer blocked in this smoke: the
+  host grants GTK focus and X input focus, `run.py --keys` produces `abc` and a `Field/change`
+  event, and `run.py --ime` reproduces real fcitx preedit and `commit: 你好` on eight
+  runs (five before and three after the harness fix; an activated `pinyin` method is the
+  environment precondition). The upstream pointer-focus
+  and `ValueChanged` gaps remain open in `feedback-20261015.md` §17; design-time event-binding
+  panels and device targets remain unverified.
 - [MS10: multi-target projects — target configuration, the versioned capability snapshot, the local
   desktop matrix, the restricted profiles and the certification report](log/log-20261016-4.md):
   `app::targets` (`configuration` — profile, triple, toolchain, SDK, mode and runner, with a profile

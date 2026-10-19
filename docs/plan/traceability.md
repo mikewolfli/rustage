@@ -116,5 +116,6 @@ T00.08 的最低验收是「无未归属需求，无依赖环，基线可复核�
   需要先在 CI 实测 GUI profile 构建与 git 依赖拉取（记在 §下一步）。
 - **命令叶项到命令测试的映射未定。** 本项只保证命名空间不越界；菜单叶项与命令 id、以及"每个叶项
   有命令测试"由 T05.02/T05.08 落实。
-- **设备与平台认证仍是人工门禁。** 支持矩阵 15 格除 macOS 宿主构建外全部未验证；缺设备时按矩阵
-  标 `blocked`/`unverified`，不用人工门禁掩盖。
+- **设备与平台认证仍是人工门禁。** 支持矩阵 15 格目前为 4 格 `build-verified`（macOS 的
+  desktop/mini/embedded 与 Linux desktop）与 11 格 `unverified`，以 `support-matrix.md` 为准；
+  缺设备时按矩阵标 `blocked`/`unverified`，不用人工门禁掩盖。

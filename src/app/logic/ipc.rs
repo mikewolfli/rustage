@@ -204,6 +204,103 @@ impl Manifest {
         self.capabilities.push(capability.into());
         self
     }
+
+    /// The manifest as the text a manifest frame carries, one field per line.
+    ///
+    /// A value containing a newline or an `=` would make the message ambiguous, so it is refused
+    /// rather than escaped: the words in a manifest (a process name, a version) have no need for
+    /// either, and a refusal a caller can see beats a parse that quietly changes a name.
+    pub fn encode(&self) -> Result<String, Fault> {
+        for (what, value) in [
+            ("name", self.name.as_str()),
+            ("version", self.version.as_str()),
+        ] {
+            if value.is_empty() || value.contains(['\n', '=']) {
+                return Err(Fault::Malformed {
+                    reason: format!(
+                        "the manifest {what} must be non-empty and contain no '=' or newline"
+                    ),
+                });
+            }
+        }
+        for capability in &self.capabilities {
+            if capability.is_empty() || capability.contains(['\n', '=']) {
+                return Err(Fault::Malformed {
+                    reason: "a capability must be non-empty and contain no '=' or newline"
+                        .to_owned(),
+                });
+            }
+        }
+        let mut text = format!(
+            "name={}\nversion={}\ngeneration={}",
+            self.name, self.version, self.generation
+        );
+        for capability in &self.capabilities {
+            text.push_str("\ncapability=");
+            text.push_str(capability);
+        }
+        Ok(text)
+    }
+
+    /// Reads the text [`Manifest::encode`] wrote.
+    pub fn parse(text: &str) -> Result<Self, Fault> {
+        let mut name = None;
+        let mut version = None;
+        let mut generation = None;
+        let mut capabilities = Vec::new();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                return Err(Fault::Malformed {
+                    reason: format!("the manifest line {line:?} is not <key>=<value>"),
+                });
+            };
+            match key {
+                "name" if name.is_none() => name = Some(value.to_owned()),
+                "version" if version.is_none() => version = Some(value.to_owned()),
+                "generation" if generation.is_none() => {
+                    generation = Some(value.parse().map_err(|_| Fault::Malformed {
+                        reason: format!("the manifest generation {value:?} is not a number"),
+                    })?);
+                }
+                "capability" => capabilities.push(value.to_owned()),
+                "name" | "version" | "generation" => {
+                    return Err(Fault::Malformed {
+                        reason: format!("the manifest names {key} more than once"),
+                    });
+                }
+                other => {
+                    return Err(Fault::Malformed {
+                        reason: format!("the manifest has no field {other:?}"),
+                    });
+                }
+            }
+        }
+        let name = name.ok_or_else(|| Fault::Malformed {
+            reason: "the manifest has no name".to_owned(),
+        })?;
+        let version = version.ok_or_else(|| Fault::Malformed {
+            reason: "the manifest has no version".to_owned(),
+        })?;
+        let generation = generation.ok_or_else(|| Fault::Malformed {
+            reason: "the manifest has no generation".to_owned(),
+        })?;
+        if name.is_empty() || version.is_empty() {
+            return Err(Fault::Malformed {
+                reason: "the manifest name and version must be non-empty".to_owned(),
+            });
+        }
+        if capabilities.iter().any(String::is_empty) {
+            return Err(Fault::Malformed {
+                reason: "a manifest capability must be non-empty".to_owned(),
+            });
+        }
+        Ok(Self {
+            name,
+            version,
+            generation,
+            capabilities,
+        })
+    }
 }
 
 /// Why a frame or a handshake was refused.
@@ -308,19 +405,19 @@ impl Session {
 
     /// Checks a frame belongs to this session and encodes it.
     pub fn send(&self, frame: &Frame) -> Result<String, Fault> {
-        self.check(frame)?;
+        self.accept(frame)?;
         frame.encode()
     }
 
     /// Checks a frame and decodes it.
     pub fn receive(&self, text: &str) -> Result<Frame, Fault> {
         let frame = Frame::decode(text)?;
-        self.check(&frame)?;
+        self.accept(&frame)?;
         Ok(frame)
     }
 
-    /// Whether a frame belongs to this session.
-    fn check(&self, frame: &Frame) -> Result<(), Fault> {
+    /// Whether a frame belongs to this session, for a side that decoded it already.
+    pub fn accept(&self, frame: &Frame) -> Result<(), Fault> {
         if frame.protocol != self.protocol {
             return Err(Fault::VersionMismatch {
                 host: self.protocol,
@@ -492,6 +589,21 @@ mod tests {
     fn a_session_id_with_the_separator_is_refused() {
         let frame = Frame::new(Kind::Request, "a|b", 4, Vec::new());
         assert!(matches!(frame.encode(), Err(Fault::Malformed { .. })));
+    }
+
+    #[test]
+    fn a_manifest_round_trips_and_refuses_ambiguous_text() {
+        let manifest = Manifest::new("orders", "0.3.0", 7)
+            .with("reduce")
+            .with("state");
+        let text = manifest.encode().expect("manifest text");
+        assert_eq!(Manifest::parse(&text).expect("a manifest"), manifest);
+        assert!(
+            Manifest::new("a=b", "0.1.0", 1).encode().is_err(),
+            "an '=' in a name must be refused, not escaped"
+        );
+        assert!(Manifest::parse("name=orders\nversion=0.3.0\ngeneration=7\ncapability=").is_err());
+        assert!(Manifest::parse("name=orders\nversion=0.3.0\nunknown=7").is_err());
     }
 
     #[test]

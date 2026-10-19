@@ -1,0 +1,12 @@
+[package]
+name = "logic-candidate"
+version = "0.2.0"
+edition = "2024"
+publish = false
+
+# A candidate business process for the F17 hot-update walk. Its sources are *not* a second copy of
+# the protocol: `src/main.rs` includes the same `core`, `ipc` and `worker` modules the designer uses,
+# so a change to the channel cannot leave the candidate speaking an older one.
+[[bin]]
+name = "logic-candidate"
+path = "src/main.rs"

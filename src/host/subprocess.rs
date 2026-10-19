@@ -52,9 +52,9 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -67,6 +67,19 @@ use crate::contracts::permission::EffectClass;
 
 /// How long a terminated process is given to stop on its own before it is killed.
 pub const DEFAULT_GRACE: Duration = Duration::from_secs(3);
+
+/// How many lines a duplex child may run ahead of its reader before it is made to wait.
+///
+/// A `sync_channel` turns a flood into backpressure on the child's own pipe instead of growth in
+/// this process, so a worker that writes without being asked cannot grow the host's memory.
+pub const DUPLEX_QUEUE_LINES: usize = 256;
+
+/// The longest line a duplex child may send.
+///
+/// One protocol frame for a 64 KiB payload is at most 128 KiB of hex plus its header; 256 KiB leaves
+/// room for that and refuses a line that is not a frame at all rather than allocating without a
+/// bound.
+pub const DUPLEX_LINE_LIMIT: usize = 256 * 1024;
 
 /// How long the readers of a process's streams are given to reach end-of-file after it ends.
 ///
@@ -300,7 +313,8 @@ pub enum Termination {
         /// How it had ended.
         exit: ExitInfo,
     },
-    /// It stopped after the polite signal.
+    /// It stopped after the polite request — a signal to its group, or the end of its input for a
+    /// duplex child.
     Stopped {
         /// How it ended.
         exit: ExitInfo,
@@ -342,7 +356,7 @@ impl Termination {
                 format!("had already ended ({})", exit.message())
             }
             Self::Stopped { exit, after } => format!(
-                "stopped after {after:?}; the polite signal ended it ({})",
+                "stopped after {after:?}; it ended on its own after the polite request ({})",
                 exit.message(),
             ),
             Self::Killed { exit, after } => {
@@ -427,22 +441,7 @@ impl OwnedProcess {
     /// mints one only after a decision, and an untrusted project never gets one, so "an untrusted
     /// project runs no code" is a property of the type rather than of a caller's care.
     pub fn spawn(spec: ProcessSpec, permit: &ExecutionPermit) -> Result<Self, SpawnError> {
-        if permit.effect() != EffectClass::Command {
-            return Err(SpawnError::PermitForAnotherEffect {
-                effect: permit.effect(),
-            });
-        }
-        if spec.program.as_os_str().is_empty() {
-            return Err(SpawnError::NoProgram);
-        }
-        if let Some(directory) = &spec.working_directory
-            && !directory.is_dir()
-        {
-            return Err(SpawnError::WorkingDirectory {
-                directory: directory.clone(),
-                reason: "it is not an existing directory".to_owned(),
-            });
-        }
+        prepare(&spec, permit)?;
 
         let mut command = Command::new(&spec.program);
         command.args(&spec.arguments);
@@ -764,6 +763,361 @@ impl Drop for OwnedProcess {
     }
 }
 
+/// A process this session owns whose standard input and output form a request/response channel.
+///
+/// [`OwnedProcess`] captures both streams and never writes to the child, which is what a build or a
+/// test run needs. A replaceable business-logic process is the other shape: the stable host writes a
+/// request and waits, bounded, for one answer. This type is that shape, and it keeps the same
+/// ownership rule — the child leads the session's process group, carries the session marker, and is
+/// started only with a permit — so an interactive child is no less accountable than a batch one.
+///
+/// The stream handling is deliberately line-oriented: both sides exchange one encoded frame per line
+/// (the frame itself is text, see `app::logic::ipc`), and a line that never arrives is a timeout with
+/// the peer's label rather than a hang. Standard error is collected separately and bounded, so a
+/// crashing worker's explanation is available without being mixed into the protocol.
+pub struct DuplexProcess {
+    label: String,
+    child: Child,
+    pid: u32,
+    group: Option<i32>,
+    stdin: Option<ChildStdin>,
+    lines: Receiver<std::io::Result<String>>,
+    stderr: Arc<Mutex<String>>,
+    finished: bool,
+}
+
+impl DuplexProcess {
+    /// Starts a process with piped standard input, output and error.
+    pub fn spawn(spec: ProcessSpec, permit: &ExecutionPermit) -> Result<Self, SpawnError> {
+        prepare(&spec, permit)?;
+        let mut command = Command::new(&spec.program);
+        command.args(&spec.arguments);
+        if let Some(directory) = &spec.working_directory {
+            command.current_dir(directory);
+        }
+        for (name, value) in &spec.environment {
+            command.env(name, value);
+        }
+        command.env(SESSION_ENVIRONMENT, session_marker());
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        command_group(&mut command);
+
+        let mut child = command.spawn().map_err(|error| SpawnError::Unavailable {
+            program: spec.program.clone(),
+            reason: error.to_string(),
+        })?;
+        let pid = child.id();
+        let stdin = child.stdin.take();
+        let (tx, lines) = mpsc::sync_channel(DUPLEX_QUEUE_LINES);
+        if let Some(stdout) = child.stdout.take() {
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stdout);
+                let mut line = Vec::new();
+                loop {
+                    line.clear();
+                    match reader.read_until(b'\n', &mut line) {
+                        Ok(0) => break,
+                        Ok(_) if line.len() > DUPLEX_LINE_LIMIT => {
+                            let _ = tx.send(Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!(
+                                    "a line of {} bytes exceeds the {DUPLEX_LINE_LIMIT} byte limit",
+                                    line.len()
+                                ),
+                            )));
+                            break;
+                        }
+                        Ok(_) => {
+                            while line
+                                .last()
+                                .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+                            {
+                                line.pop();
+                            }
+                            let text = match String::from_utf8(line.clone()) {
+                                Ok(text) => text,
+                                Err(_) => {
+                                    let _ = tx.send(Err(std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "a line is not UTF-8",
+                                    )));
+                                    break;
+                                }
+                            };
+                            if tx.send(Ok(text)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = tx.send(Err(error));
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let stderr_sink = stderr.clone();
+        let limit = spec.capture_limit;
+        if let Some(stream) = child.stderr.take() {
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let mut kept = match stderr_sink.lock() {
+                                Ok(kept) => kept,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            if kept.len() < limit {
+                                let room = limit - kept.len();
+                                let take = line.len().min(room);
+                                kept.push_str(&line[..take]);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok(Self {
+            label: spec.label,
+            child,
+            pid,
+            group: group_of(pid),
+            stdin,
+            lines,
+            stderr,
+            finished: false,
+        })
+    }
+
+    /// What the caller called it.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// The operating system's process id.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// The process group this session created for it, where the platform has one.
+    pub fn group(&self) -> Option<i32> {
+        self.group
+    }
+
+    /// Writes one line to the child and flushes it.
+    pub fn send(&mut self, line: &str) -> Result<(), String> {
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(format!("{}'s input is already closed", self.label));
+        };
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|()| stdin.write_all(b"\n"))
+            .and_then(|()| stdin.flush())
+            .map_err(|error| format!("{} could not be written to: {error}", self.label))
+    }
+
+    /// Reads one line from the child, waiting at most `limit`.
+    pub fn receive(&mut self, limit: Duration) -> Result<String, String> {
+        match self.lines.recv_timeout(limit) {
+            Ok(Ok(line)) => Ok(line),
+            Ok(Err(error)) => Err(format!(
+                "{}'s output could not be read: {error}",
+                self.label
+            )),
+            Err(RecvTimeoutError::Timeout) => {
+                Err(format!("{} did not answer within {limit:?}", self.label))
+            }
+            Err(RecvTimeoutError::Disconnected) => Err(format!(
+                "{} closed its output without answering",
+                self.label
+            )),
+        }
+    }
+
+    /// Writes one line and reads one line back.
+    pub fn request(&mut self, line: &str, limit: Duration) -> Result<String, String> {
+        self.send(line)?;
+        self.receive(limit)
+    }
+
+    /// What the child wrote to standard error, bounded by the capture limit.
+    pub fn stderr(&self) -> String {
+        match self.stderr.lock() {
+            Ok(text) => text.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    /// Closes the child's input, waits for it to end, and escalates if it does not.
+    pub fn finish(&mut self, grace: Duration) -> Termination {
+        self.finished = true;
+        self.stdin.take();
+        let began = Instant::now();
+        let was_running = matches!(self.child.try_wait(), Ok(None));
+        let deadline = Instant::now() + grace;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    let after = began.elapsed();
+                    let exit = ExitInfo::from_status(&status);
+                    return if was_running {
+                        Termination::Stopped { exit, after }
+                    } else {
+                        Termination::AlreadyExited { exit }
+                    };
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    // The child may still be running, so drop must be allowed to try again.
+                    self.finished = false;
+                    return Termination::SignalFailed {
+                        reason: format!("{}'s status could not be read: {error}", self.label),
+                    };
+                }
+            }
+        }
+        self.signal_and_reap(grace, began)
+    }
+
+    /// Asks the child to stop, then kills it if the grace period runs out.
+    fn signal_and_reap(&mut self, grace: Duration, began: Instant) -> Termination {
+        #[cfg(unix)]
+        {
+            let Some(group) = self.group else {
+                return Termination::DirectOnly {
+                    exit: self.kill_directly(),
+                    reason: "this process has no group of its own".to_owned(),
+                };
+            };
+            if let Err(error) = signal_group(group, libc::SIGTERM)
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                self.finished = false;
+                return Termination::SignalFailed {
+                    reason: error.to_string(),
+                };
+            }
+            let deadline = Instant::now() + grace;
+            loop {
+                match self.child.try_wait() {
+                    Ok(Some(status)) => {
+                        return Termination::Stopped {
+                            exit: ExitInfo::from_status(&status),
+                            after: began.elapsed(),
+                        };
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        self.finished = false;
+                        return Termination::SignalFailed {
+                            reason: format!("{}'s status could not be read: {error}", self.label),
+                        };
+                    }
+                }
+            }
+            let _ = signal_group(group, libc::SIGKILL);
+            let exit = self.reap();
+            Termination::Killed {
+                exit,
+                after: began.elapsed(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = began;
+            let exit = self.kill_directly();
+            Termination::DirectOnly {
+                exit,
+                reason: format!(
+                    "this host knows no way to signal a process group on {}; the direct process was \
+                     killed and its descendants were not",
+                    std::env::consts::OS,
+                ),
+            }
+        }
+    }
+
+    fn reap(&mut self) -> ExitInfo {
+        match self.child.wait() {
+            Ok(status) => ExitInfo::from_status(&status),
+            Err(error) => ExitInfo {
+                code: None,
+                signal: None,
+            }
+            .with_note(error.to_string()),
+        }
+    }
+
+    fn kill_directly(&mut self) -> ExitInfo {
+        let _ = self.child.kill();
+        self.reap()
+    }
+}
+
+impl fmt::Debug for DuplexProcess {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DuplexProcess")
+            .field("label", &self.label)
+            .field("pid", &self.pid)
+            .field("group", &self.group)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for DuplexProcess {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        // Dropping an unfinished interactive child would otherwise leave a process waiting on a pipe
+        // nobody reads. A kill here is the one case where drop is allowed to take an action: the
+        // channel is gone, so the child cannot make progress by design.
+        self.stdin.take();
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            let _ = signal_group(group, libc::SIGKILL);
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The checks every start shares, so the two process shapes cannot drift apart.
+fn prepare(spec: &ProcessSpec, permit: &ExecutionPermit) -> Result<(), SpawnError> {
+    if permit.effect() != EffectClass::Command {
+        return Err(SpawnError::PermitForAnotherEffect {
+            effect: permit.effect(),
+        });
+    }
+    if spec.program.as_os_str().is_empty() {
+        return Err(SpawnError::NoProgram);
+    }
+    if let Some(directory) = &spec.working_directory
+        && !directory.is_dir()
+    {
+        return Err(SpawnError::WorkingDirectory {
+            directory: directory.clone(),
+            reason: "it is not an existing directory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// What a finished process leaves behind.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ProcessOutcome {
@@ -968,8 +1322,8 @@ static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 #[cfg(test)]
 mod tests {
     use super::{
-        ExitInfo, OwnedProcess, ProcessPresence, ProcessSpec, SESSION_ENVIRONMENT, SpawnError,
-        Termination, presence, session_marker,
+        DuplexProcess, ExitInfo, OwnedProcess, ProcessPresence, ProcessSpec, SESSION_ENVIRONMENT,
+        SpawnError, Termination, presence, session_marker,
     };
     use crate::contracts::permission::{EffectClass, Principal};
     use crate::host::permission::{ExecutionPermit, PermissionService, Scope};
@@ -1420,6 +1774,51 @@ mod tests {
             "the process outlived its cancelled task",
         );
         let _ = executor.shutdown();
+    }
+
+    #[test]
+    fn a_duplex_child_answers_line_by_line_and_ends_when_its_input_closes() {
+        let spec = ProcessSpec::new("echo", "sh").args([
+            "-c",
+            "while IFS= read -r line; do printf 'got:%s\\n' \"$line\"; done",
+        ]);
+        let mut child = DuplexProcess::spawn(spec, &command_permit()).expect("a child");
+        let answer = child
+            .request("hello", Duration::from_secs(5))
+            .expect("an answer");
+        assert_eq!(answer, "got:hello");
+
+        let termination = child.finish(Duration::from_secs(5));
+        assert!(
+            matches!(
+                termination,
+                Termination::Stopped { ref exit, .. } | Termination::AlreadyExited { ref exit, .. }
+                    if exit.is_success()
+            ),
+            "{}",
+            termination.message(),
+        );
+    }
+
+    #[test]
+    fn a_duplex_child_that_does_not_answer_is_a_bounded_timeout() {
+        let spec = ProcessSpec::new("silent", "sh").args(["-c", "sleep 30"]);
+        let mut child = DuplexProcess::spawn(spec, &command_permit()).expect("a child");
+        let error = child
+            .request("hello", Duration::from_millis(50))
+            .expect_err("a timeout");
+        assert!(error.contains("did not answer within"), "{error}");
+        let termination = child.finish(Duration::from_millis(100));
+        assert!(
+            matches!(
+                termination,
+                Termination::Stopped { .. }
+                    | Termination::Killed { .. }
+                    | Termination::DirectOnly { .. }
+            ),
+            "{}",
+            termination.message(),
+        );
     }
 
     #[test]

@@ -22,10 +22,17 @@ publish = false
 # strategy as `default-features = false, features = ["desktop"]`, and a host that verified the
 # native path builds it explicitly (`cargo build --features linux-native`). Keeping the revision's
 # own feature name visible is what makes the two builds comparable by name in a record.
-linux-native = ["rust_widgets/gtk-native"]
+linux-native = ["rust_widgets/gtk-native", "dep:gtk"]
 
 [dependencies]
-rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "8178d04865731ad06d11d6d15129d889bf0ae327", default-features = false, features = ["desktop"] }
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "8178d04865731ad06d11d6d15129d889bf0ae327", default-features = false, features = ["desktop", "runtime-fonts"] }
+
+# The host's keyboard smoke needs to give the GTK paint area real keyboard focus until the pinned
+# revision does it itself. Declared only for Linux and only when the native feature is on, so the
+# state backend and non-Linux builds do not link GTK through this crate. The version is the one the
+# widget dependency already resolves to, so this adds no second GTK stack.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true, features = ["v3_24"] }
 
 # The process tree cleanup T01.04 needs: signalling a *process group* and asking whether a pid is
 # alive are `kill(2)`, which the standard library does not expose. Declared for the targets that have

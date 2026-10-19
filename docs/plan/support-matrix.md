@@ -5,10 +5,11 @@
 > 逐行对照该文件校验，改一处而漏另一处会失败。
 > 依据：[项目原则](principle.md) #2/#11/#12/#24/#25、[完整路线图](roadmap.md) T00.03。
 > 需要真机/真设备的项汇总（含已验证标记）：[`docs/platform/verification.md`](../platform/verification.md)。
-> 状态：**矩阵已建立；宿主构建证据有两处——macOS（本机构建）与 Windows
-> （`x86_64-pc-windows-gnu` 交叉构建，见 [log-20261015-2.md](../log/log-20261015-2.md) §2）；
-> MS10 之后 macOS 宿主为 `certified`，且 macos × desktop/mini/embedded 三格取得 profile 的真实构建
-> 证据（见 [log-20261016-4.md](../log/log-20261016-4.md) §28）。表内其余格仍未验证。**
+> 状态：**矩阵已建立；宿主构建/运行证据有三处——macOS（certified）、Linux（certified，
+> 构建与有界 GTK 会话见 [log-20261019-1.md](../log/log-20261019-1.md) §2、§5.7）与 Windows（`x86_64-pc-windows-gnu`
+> 交叉构建，见 [log-20261015-2.md](../log/log-20261015-2.md) §2）。MS10 与 2026-10-19 的复核之后，
+> macos × desktop/mini/embedded 与 linux × desktop 四格取得 profile 的真实构建证据
+> （见 [log-20261016-4.md](../log/log-20261016-4.md) §28）；其余 11 格仍未验证。**
 
 ## 这份矩阵回答什么
 
@@ -35,7 +36,7 @@
 |---|---|---|---|
 | macos | aarch64-apple-darwin | certified | cargo build --bin rustage 与 target/debug/rustage --version；x86_64-apple-darwin 交叉构建后在 Rosetta 下运行通过（MS10，见 docs/log/log-20261016-4.md §28） |
 | windows | x86_64-pc-windows-gnu（本轮构建证据）/ x86_64-pc-windows-msvc（未构建） | build-verified | cargo build --target x86_64-pc-windows-gnu 通过（mingw-w64 GCC 13，产出 rustage.exe）；cargo clippy --target x86_64-pc-windows-gnu --all-targets 亦通过，见 docs/log/log-20261015-2.md §2；运行证据仍缺（Wine 下的运行按规则 6 不计为实机证据） |
-| linux | x86_64-unknown-linux-gnu | unverified | — |
+| linux | x86_64-unknown-linux-gnu | certified | cargo build --bin rustage 与 target/debug/rustage --version 在 Linux x86_64、rustc 1.98.1 上通过；cargo build --features linux-native 亦通过，--launch --exit-after-ms 8000 在 X11 下映射出真实 1280x800 GTK 窗口（xwininfo），绘制回调填充 clear colour；--launch --smoke 画出真实按钮与文本框并经 XTest 指针事件触发回调；--smoke-worker 把点击经管道送进真实 --logic-worker 并观察到 running/idle；见 docs/log/log-20261019-1.md §2、§5.7 |
 
 设计器宿主始终是桌面（原则 #2）；上表的"设计器宿主"指**设计器自身**能否在该 OS 上构建与运行，
 与输出目标无关。
@@ -53,8 +54,9 @@
 - 模式 1（JSON + CSS 运行时加载）仅适用于 desktop/tablet/mobile；mini 与 embedded 必须使用
   模式 2（原则 #11）。这一格是**架构排除**，只会被明确决策改变，不会因为出现证据而变成可用。
 - 模式 2 在全部 profile 上适用；`mini`/`embedded` 已在 macOS 宿主上取得真实的 profile 构建
-  （rlib），`desktop`/`tablet`/`mobile` 仍未验证。构建通过**不**证明产物能在该 profile 运行
-  （见 `docs/log/log-20261016-4.md` §28）。
+  （rlib），`desktop` 已在 macOS 与 Linux 宿主上取得构建证据，`tablet`/`mobile` 仍未验证。
+  构建通过**不**证明产物能在该 profile 运行（见 `docs/log/log-20261016-4.md` §28 与
+  `docs/log/log-20261019-1.md` §2）。
 
 ## 矩阵（宿主 × profile，模式 2 产物）
 
@@ -62,9 +64,10 @@
 |---|---|---|---|---|---|
 | macos | build-verified | unverified | unverified | build-verified | build-verified |
 | windows | unverified | unverified | unverified | unverified | unverified |
-| linux | unverified | unverified | unverified | unverified | unverified |
+| linux | build-verified | unverified | unverified | unverified | unverified |
 
-MS10 的证据范围（见 [log-20261016-4.md §28](../log/log-20261016-4.md)）：
+矩阵的证据范围（MS10 见 [log-20261016-4.md §28](../log/log-20261016-4.md)，Linux 补充见
+[log-20261019-1.md](../log/log-20261019-1.md)）：
 
 - `macos × desktop`：`cargo build --bin rustage` 与 `target/debug/rustage --version` 通过；
   同一次 `--generate target:default` 产出模板源码。**生成物本身尚未链接**，所以是构建级证据，
@@ -72,12 +75,16 @@ MS10 的证据范围（见 [log-20261016-4.md §28](../log/log-20261016-4.md)）
 - `macos × mini`：`cargo build --manifest-path <rust-widgets>/Cargo.toml --no-default-features
   --features mini --lib` 通过（rlib 84,282,248 字节）；`--generate target:stripped` 产出 441 字节源码。
 - `macos × embedded`：同一命令换成 `--features embedded` 通过（rlib 69,528,992 字节）。
-- `tablet`/`mobile` 与 `linux`/`windows` 仍为 `unverified`：缺 iOS/Android SDK、Linux 宿主与
-  Windows 运行环境；没有用宿主预览或模拟器冒充。
+- `linux × desktop`（2026-10-19）：`cargo build --bin rustage` 与 `target/debug/rustage
+  --version` 在 Linux x86_64、rustc 1.98.1 上通过；`--logic-process` 的真实双进程走查也在同一
+  宿主上通过（见 [log-20261019-1.md §2](../log/log-20261019-1.md)）。生成物本身尚未链接，
+  因此这一格是构建级证据。
+- `tablet`/`mobile` 与 `windows` 仍为 `unverified`：缺 iOS/Android SDK 与 Windows 运行环境；
+  没有用宿主预览或模拟器冒充。
 
-这 15 格目前全为 `unverified`，是**事实而非保守**：本仓库没有任何一次面向输出 profile 的交叉
-构建或设备运行。矩阵的价值在于它是逐格可核对的声明点——补上证据时只改一格，而不是重写一段
-"基本支持"的描述。
+15 格中现有 4 格为 `build-verified`（macOS 的 desktop/mini/embedded 与 Linux 的 desktop），
+其余 11 格仍为 `unverified`。这是**事实而非保守**：没有证据的格没有被写成支持。矩阵的价值在于
+它是逐格可核对的声明点——补上证据时只改一格，而不是重写一段"基本支持"的描述。
 
 ## 规则
 

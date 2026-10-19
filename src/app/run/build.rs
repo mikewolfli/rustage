@@ -10,6 +10,8 @@
 
 use super::*;
 use std::process::Command as ProcessCommand;
+#[cfg(any(unix, windows))]
+use std::time::Duration;
 
 /// Reads a file, or reports why it could not be.
 fn read(path: &str) -> Result<String, String> {
@@ -533,6 +535,11 @@ pub(super) fn terminal(options: &crate::cli::TerminalOptions) -> bool {
 
     let mut session = Session::new("terminal");
     let mut platform = Platform::Macos;
+    #[cfg(any(unix, windows))]
+    let mut real: Option<crate::host::pty::PtySession> = None;
+    #[cfg(any(unix, windows))]
+    let mut program: Option<String> = None;
+    let mut arguments: Vec<String> = Vec::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -556,13 +563,124 @@ pub(super) fn terminal(options: &crate::cli::TerminalOptions) -> bool {
             "size" | "resize" => match argument.split_once('x') {
                 Some((columns, rows)) => match (columns.parse::<u16>(), rows.parse::<u16>()) {
                     (Ok(columns), Ok(rows)) => match session.resize(columns, rows) {
-                        Ok(()) => Ok(vec![format!("size {columns}x{rows}")]),
+                        Ok(()) => {
+                            #[cfg(any(unix, windows))]
+                            if let Some(real) = real.as_mut()
+                                && let Err(reason) = real.resize(columns, rows)
+                            {
+                                return report(reason);
+                            }
+                            Ok(vec![format!("size {columns}x{rows}")])
+                        }
                         Err(reason) => Err(reason),
                     },
                     _ => Err(format!("{argument:?} is not <columns>x<rows>")),
                 },
                 None => Err(format!("size needs <columns>x<rows>, got {argument:?}")),
             },
+            "arg" => {
+                arguments.push(argument.to_owned());
+                Ok(Vec::new())
+            }
+            "exec" => {
+                // `exec` only names the program; `start` is what runs it, after any `arg:` ops.
+                // Spawning here would make `exec:/bin/sh arg:-c arg:...` impossible, because the
+                // shell word order is exactly the program-then-arguments order users type.
+                #[cfg(any(unix, windows))]
+                {
+                    if real.is_some() {
+                        return report("a real terminal is already running".to_owned());
+                    }
+                    if argument.is_empty() {
+                        return report("exec needs <program>".to_owned());
+                    }
+                    program = Some(argument.to_owned());
+                    Ok(vec![format!("exec {argument}")])
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    Err("a real terminal is provided by the POSIX host; this host has no byte pump yet"
+                        .to_owned())
+                }
+            }
+            "input" => {
+                #[cfg(any(unix, windows))]
+                {
+                    let Some(real) = real.as_mut() else {
+                        return report("input needs a running exec: terminal".to_owned());
+                    };
+                    let text = unescape(argument);
+                    match real.write(&text) {
+                        Ok(()) => Ok(vec![format!("input: {} byte(s)", text.len())]),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    let _ = argument;
+                    Err("no real terminal on this host".to_owned())
+                }
+            }
+            "read" => {
+                #[cfg(any(unix, windows))]
+                {
+                    let Some(real) = real.as_ref() else {
+                        return report("read needs a running exec: terminal".to_owned());
+                    };
+                    Ok(vec![
+                        format!("output {:?}", real.output()),
+                        format!("dropped {}", real.dropped()),
+                    ])
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    Err("no real terminal on this host".to_owned())
+                }
+            }
+            "wait" => {
+                #[cfg(any(unix, windows))]
+                {
+                    let Some(real) = real.as_mut() else {
+                        return report("wait needs a running exec: terminal".to_owned());
+                    };
+                    let limit = match argument.parse::<u64>() {
+                        Ok(limit) => Duration::from_millis(limit),
+                        Err(_) => {
+                            return report(format!("{argument:?} is not a wait in milliseconds"));
+                        }
+                    };
+                    match real.wait(limit) {
+                        Ok(Some(status)) => Ok(vec![format!(
+                            "exit {}",
+                            status.code.map_or_else(
+                                || format!("signal {}", status.signal.unwrap_or_default()),
+                                |code| code.to_string()
+                            )
+                        )]),
+                        Ok(None) => Ok(vec!["still running".to_owned()]),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    Err("no real terminal on this host".to_owned())
+                }
+            }
+            "terminate" => {
+                #[cfg(any(unix, windows))]
+                {
+                    let Some(real) = real.as_mut() else {
+                        return report("terminate needs a running exec: terminal".to_owned());
+                    };
+                    real.terminate();
+                    session.running = false;
+                    Ok(vec!["terminated".to_owned()])
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    Err("no real terminal on this host".to_owned())
+                }
+            }
             "platform" => match argument {
                 "macos" => {
                     platform = Platform::Macos;
@@ -582,10 +700,48 @@ pub(super) fn terminal(options: &crate::cli::TerminalOptions) -> bool {
                 session.authorize();
                 Ok(vec!["authorized".to_owned()])
             }
-            "start" => match session.start() {
-                Ok(()) => Ok(vec!["started".to_owned()]),
-                Err(reason) => Err(reason),
-            },
+            "start" => {
+                #[cfg(any(unix, windows))]
+                {
+                    if let Some(program) = program.take() {
+                        if !session.authorized {
+                            return report(format!(
+                                "session {:?} has not been authorized to run processes",
+                                session.name
+                            ));
+                        }
+                        match crate::host::pty::PtySession::spawn(
+                            &program,
+                            &arguments,
+                            session.directory.as_deref(),
+                            &session.environment,
+                            session.columns,
+                            session.rows,
+                        ) {
+                            Ok(started) => {
+                                let pid = started.pid();
+                                session.running = true;
+                                real = Some(started);
+                                arguments.clear();
+                                Ok(vec![format!("started {program} pid {pid}")])
+                            }
+                            Err(reason) => Err(reason),
+                        }
+                    } else {
+                        match session.start() {
+                            Ok(()) => Ok(vec!["started".to_owned()]),
+                            Err(reason) => Err(reason),
+                        }
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    match session.start() {
+                        Ok(()) => Ok(vec!["started".to_owned()]),
+                        Err(reason) => Err(reason),
+                    }
+                }
+            }
             "write" => {
                 session.write(argument.as_bytes());
                 Ok(Vec::new())
@@ -972,11 +1128,7 @@ pub(super) fn headless(options: &crate::cli::HeadlessOptions) -> bool {
     if workflow {
         print!(
             "{}",
-            github_workflow(
-                &profile,
-                "1.98.1",
-                "8178d04865731ad06d11d6d15129d889bf0ae327"
-            )
+            github_workflow(&profile, "1.98.1", crate::probe::DEPENDENCY_REVISION)
         );
     }
     exit_code(&outcomes) == 0

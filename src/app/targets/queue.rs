@@ -23,6 +23,7 @@
 
 use std::path::Path;
 
+use super::configuration::Os;
 use super::matrix::Proof;
 
 /// What a queued job does.
@@ -142,6 +143,56 @@ impl CredentialRef {
     pub fn render(&self) -> String {
         format!("{} from {} (reference only)", self.name, self.source.name())
     }
+
+    /// Whether the referent exists, without reading its value.
+    ///
+    /// An environment variable is checked for presence, a file for existence, and a keychain item
+    /// through `security find-generic-password -s <name>`, which reports metadata and does not ask
+    /// for the secret. The value itself is never read, so this cannot put one into a report.
+    pub fn check(&self, host: Os) -> Result<(), Refusal> {
+        match self.source {
+            CredentialSource::Environment => match std::env::var_os(&self.name) {
+                Some(_) => Ok(()),
+                None => Err(Refusal::CredentialMissing {
+                    name: self.name.clone(),
+                    source: self.source,
+                }),
+            },
+            CredentialSource::File => {
+                if Path::new(&self.name).is_file() {
+                    Ok(())
+                } else {
+                    Err(Refusal::CredentialMissing {
+                        name: self.name.clone(),
+                        source: self.source,
+                    })
+                }
+            }
+            CredentialSource::Keychain => {
+                if host != Os::Macos {
+                    return Err(Refusal::CredentialUnverifiable {
+                        name: self.name.clone(),
+                        reason: "a keychain is a macOS service; this host has no such store"
+                            .to_owned(),
+                    });
+                }
+                let answer = std::process::Command::new("security")
+                    .args(["find-generic-password", "-s", &self.name])
+                    .output();
+                match answer {
+                    Ok(output) if output.status.success() => Ok(()),
+                    Ok(_) => Err(Refusal::CredentialMissing {
+                        name: self.name.clone(),
+                        source: self.source,
+                    }),
+                    Err(error) => Err(Refusal::CredentialUnverifiable {
+                        name: self.name.clone(),
+                        reason: format!("security could not be started: {error}"),
+                    }),
+                }
+            }
+        }
+    }
 }
 
 /// How a job is signed.
@@ -151,6 +202,127 @@ pub struct Signing {
     pub identity: String,
     /// The credential the signature uses, by reference.
     pub credential: CredentialRef,
+}
+
+/// What one signing attempt achieved.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SignatureState {
+    /// The tool signed the artifact and then verified the signature.
+    Signed,
+    /// The host has no signing tool this build drives.
+    Unavailable {
+        /// Why.
+        reason: String,
+    },
+    /// The tool ran and refused.
+    Failed {
+        /// What it said.
+        reason: String,
+    },
+}
+
+/// The outcome of one signing attempt, with no secret in it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Signature {
+    /// The identity that was asked for.
+    pub identity: String,
+    /// The program that was used.
+    pub program: String,
+    /// What it achieved.
+    pub state: SignatureState,
+}
+
+impl Signature {
+    /// The signature in one line.
+    pub fn render(&self) -> String {
+        match &self.state {
+            SignatureState::Signed => {
+                format!("signed with {} by {}", self.identity, self.program)
+            }
+            SignatureState::Unavailable { reason } => {
+                format!("signing unavailable: {reason}")
+            }
+            SignatureState::Failed { reason } => {
+                format!("signing failed with {}: {reason}", self.program)
+            }
+        }
+    }
+}
+
+/// Signs an artifact with the host's own tool, then verifies the signature.
+///
+/// This is the real seam T18.07's record points at: on macOS `codesign --force --sign <identity>`
+/// runs against the file and `codesign --verify` has to agree before the result is
+/// [`SignatureState::Signed`]. The other hosts answer `Unavailable` naming the adapter they do not
+/// have, rather than pretending `signtool` or `gpg` was driven.
+pub fn sign(identity: &str, artifact: &Path, host: Os) -> Result<Signature, Refusal> {
+    if !artifact.is_file() {
+        return Err(Refusal::ArtifactMissing {
+            path: artifact.display().to_string(),
+        });
+    }
+    if host != Os::Macos {
+        return Ok(Signature {
+            identity: identity.to_owned(),
+            program: match host {
+                Os::Linux => "gpg",
+                Os::Windows => "signtool",
+                Os::Macos => unreachable!(),
+            }
+            .to_owned(),
+            state: SignatureState::Unavailable {
+                reason: format!(
+                    "this build has no {} adapter; only the macOS codesign path is driven",
+                    host.name()
+                ),
+            },
+        });
+    }
+    let artifact = artifact.display().to_string();
+    let sign = std::process::Command::new("codesign")
+        .args(["--force", "--sign", identity, &artifact])
+        .output();
+    let answer = match sign {
+        Ok(answer) => answer,
+        Err(error) => {
+            return Ok(Signature {
+                identity: identity.to_owned(),
+                program: "codesign".to_owned(),
+                state: SignatureState::Failed {
+                    reason: format!("codesign could not be started: {error}"),
+                },
+            });
+        }
+    };
+    if !answer.status.success() {
+        return Ok(Signature {
+            identity: identity.to_owned(),
+            program: "codesign".to_owned(),
+            state: SignatureState::Failed {
+                reason: String::from_utf8_lossy(&answer.stderr).trim().to_owned(),
+            },
+        });
+    }
+    let verify = std::process::Command::new("codesign")
+        .args(["--verify", "--verbose", &artifact])
+        .output();
+    let state = match verify {
+        Ok(answer) if answer.status.success() => SignatureState::Signed,
+        Ok(answer) => SignatureState::Failed {
+            reason: format!(
+                "codesign signed the file but verification failed: {}",
+                String::from_utf8_lossy(&answer.stderr).trim()
+            ),
+        },
+        Err(error) => SignatureState::Failed {
+            reason: format!("codesign verification could not be started: {error}"),
+        },
+    };
+    Ok(Signature {
+        identity: identity.to_owned(),
+        program: "codesign".to_owned(),
+        state,
+    })
 }
 
 impl Signing {
@@ -225,6 +397,8 @@ pub struct Job {
     pub state: State,
     /// How it is signed, for a signing job.
     pub signing: Option<Signing>,
+    /// What signing it achieved, when the host tool was driven.
+    pub signature: Option<Signature>,
     /// The artifact it produced, for a build or deploy job that finished.
     pub artifact: Option<Artifact>,
 }
@@ -237,6 +411,7 @@ impl Job {
             action,
             state: State::Queued,
             signing: None,
+            signature: None,
             artifact: None,
         }
     }
@@ -255,6 +430,11 @@ impl Job {
             self.target,
             self.state.render()
         )
+    }
+
+    /// The signature in one line, when one was attempted.
+    pub fn signature_line(&self) -> Option<String> {
+        self.signature.as_ref().map(Signature::render)
     }
 }
 
@@ -318,6 +498,27 @@ pub enum Refusal {
         /// The id.
         id: String,
     },
+    /// The credential reference does not resolve on this machine.
+    CredentialMissing {
+        /// The name it refers to.
+        name: String,
+        /// Where it was looked for.
+        source: CredentialSource,
+    },
+    /// The credential source cannot be checked on this host.
+    CredentialUnverifiable {
+        /// The name it refers to.
+        name: String,
+        /// Why.
+        reason: String,
+    },
+    /// An artifact exists but could not be read for its record.
+    ArtifactUnreadable {
+        /// The path.
+        path: String,
+        /// Why.
+        reason: String,
+    },
 }
 
 impl Refusal {
@@ -333,6 +534,15 @@ impl Refusal {
             Self::ArtifactMissing { path } => format!("there is no artifact at {path}"),
             Self::ArtifactAlreadyRecorded { id } => {
                 format!("job {id} already recorded an artifact")
+            }
+            Self::CredentialMissing { name, source } => {
+                format!("credential {name} is not in the {} store", source.name())
+            }
+            Self::CredentialUnverifiable { name, reason } => {
+                format!("credential {name} cannot be checked: {reason}")
+            }
+            Self::ArtifactUnreadable { path, reason } => {
+                format!("{path} could not be read: {reason}")
             }
         }
     }
@@ -397,6 +607,42 @@ impl Queue {
         let job = self.job_mut(id)?;
         job.state = State::Running;
         Ok(())
+    }
+
+    /// Signs a signing job's artifact with the host tool, recording what it achieved.
+    ///
+    /// The credential reference is checked *before* the tool runs, so a signature that needs a
+    /// secret the machine does not have fails without leaving a half-signed file. A failed or
+    /// unavailable signature becomes the job's state; it is never recorded as done.
+    pub fn sign(&mut self, id: &str, artifact_path: &Path, host: Os) -> Result<Signature, Refusal> {
+        let job = self.job_mut(id)?;
+        if job.action != Action::Sign {
+            return Err(Refusal::NotSigning { id: id.to_owned() });
+        }
+        let Some(signing) = job.signing.clone() else {
+            return Err(Refusal::SignatureMissing { id: id.to_owned() });
+        };
+        signing.credential.check(host)?;
+        let signature = sign(&signing.identity, artifact_path, host)?;
+        match &signature.state {
+            SignatureState::Signed => {
+                job.artifact = Some(Artifact::of_file(id, artifact_path).map_err(|reason| {
+                    Refusal::ArtifactUnreadable {
+                        path: artifact_path.display().to_string(),
+                        reason,
+                    }
+                })?);
+                job.state = State::Done(Proof::Built);
+            }
+            SignatureState::Unavailable { reason } => {
+                job.state = State::Failed(format!("signing unavailable: {reason}"));
+            }
+            SignatureState::Failed { reason } => {
+                job.state = State::Failed(format!("signing failed: {reason}"));
+            }
+        }
+        job.signature = Some(signature.clone());
+        Ok(signature)
     }
 
     /// Finishes a job, recording the artifact it produced when there is one.
@@ -504,9 +750,10 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, Artifact, CredentialRef, CredentialSource, Proof, Queue, Refusal, Signing, Summary,
-        redact,
+        Action, Artifact, CredentialRef, CredentialSource, Proof, Queue, Refusal, SignatureState,
+        Signing, Summary, redact, sign,
     };
+    use crate::app::targets::configuration::Os;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -667,6 +914,76 @@ mod tests {
             queue.attach_signing("build", signing),
             Err(Refusal::NotSigning { .. })
         ));
+    }
+
+    #[test]
+    fn a_credential_reference_checks_presence_without_reading_a_value() {
+        let missing = CredentialRef::new(
+            "RUSTAGE_TEST_CREDENTIAL_THAT_IS_NOT_SET",
+            CredentialSource::Environment,
+        );
+        assert!(matches!(
+            missing.check(Os::Macos),
+            Err(Refusal::CredentialMissing { .. })
+        ));
+        let directory = std::env::temp_dir();
+        let file = CredentialRef::new(directory.display().to_string(), CredentialSource::File);
+        assert!(matches!(
+            file.check(Os::Macos),
+            Err(Refusal::CredentialMissing { .. })
+        ));
+        let keychain = CredentialRef::new("item", CredentialSource::Keychain);
+        assert!(matches!(
+            keychain.check(Os::Linux),
+            Err(Refusal::CredentialUnverifiable { .. })
+        ));
+    }
+
+    #[test]
+    fn a_signing_job_with_an_unresolved_credential_does_not_run_the_tool() {
+        let path = PathBuf::from("/tmp/rustage-never-signed");
+        let mut queue = Queue::new();
+        queue.enqueue("sign", "macos", Action::Sign).expect("a job");
+        let refusal = queue
+            .sign("sign", &path, Os::Macos)
+            .expect_err("no credential");
+        assert!(matches!(refusal, Refusal::SignatureMissing { .. }));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn codesign_signs_and_verifies_a_real_mach_o_copy() {
+        let id = SERIAL.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "rustage-codesign-{}-{id}-binary",
+            std::process::id()
+        ));
+        std::fs::copy(std::env::current_exe().expect("the test binary"), &path)
+            .expect("a copy of the test binary");
+        let signature = sign("-", &path, Os::Macos).expect("a signature attempt");
+        assert_eq!(signature.program, "codesign");
+        assert_eq!(
+            signature.state,
+            SignatureState::Signed,
+            "{}",
+            signature.render()
+        );
+        assert!(signature.render().contains("signed with -"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_non_macos_host_reports_the_missing_adapter_instead_of_signing() {
+        let directory = std::env::temp_dir();
+        let path = directory.join(format!("rustage-sign-unavailable-{}", std::process::id()));
+        std::fs::write(&path, b"artifact").expect("a temporary artifact");
+        let signature = sign("identity", &path, Os::Linux).expect("an answer");
+        assert!(matches!(
+            signature.state,
+            SignatureState::Unavailable { .. }
+        ));
+        assert!(signature.render().contains("no linux adapter"));
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

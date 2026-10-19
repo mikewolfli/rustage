@@ -135,6 +135,8 @@ pub struct Worker {
     state: State,
     session: Option<Session>,
     finished: bool,
+    /// A swap paused this worker: business events are refused instead of applied.
+    paused: bool,
 }
 
 impl Worker {
@@ -146,6 +148,7 @@ impl Worker {
             state,
             session: None,
             finished: false,
+            paused: false,
         }
     }
 
@@ -200,7 +203,10 @@ impl Worker {
             frame.generation,
         )
         .with("reduce")
-        .with("state");
+        .with("state")
+        .with("pause")
+        .with("drain")
+        .with("resume");
         let session = Session::open(
             frame.session.clone(),
             frame.protocol,
@@ -244,6 +250,35 @@ impl Worker {
         } else if first == "quit" {
             self.finished = true;
             "bye".to_owned()
+        } else if first == "pause" {
+            // Pausing is idempotent: a driver that retries after a lost reply must not turn the
+            // request into a second state change.
+            self.paused = true;
+            "paused".to_owned()
+        } else if first == "drain" {
+            if self.paused {
+                // Frames arrive over a synchronous duplex pipe, so a received `pause` means every
+                // earlier request was already answered. `drain` is therefore the state check, not
+                // a queue walk that could silently discard frames.
+                "drained".to_owned()
+            } else {
+                format!("error={}", escape("the worker is running, not paused"))
+            }
+        } else if first == "resume" {
+            if self.paused {
+                self.paused = false;
+                "running".to_owned()
+            } else {
+                format!("error={}", escape("the worker is already running"))
+            }
+        } else if self.paused && parse_event(first).is_some() {
+            // A paused worker refuses rather than queues: the driver is taking a snapshot, and
+            // applying or buffering an event would make the snapshot describe a state the user
+            // has already left.
+            format!(
+                "error={}",
+                escape("the worker is paused; the event was not applied")
+            )
         } else if let Some(event) = parse_event(first) {
             match self.program.core.reduce(&self.state, &event) {
                 Ok(step) => {
@@ -521,7 +556,46 @@ mod tests {
         assert_eq!(manifest.name, "orders");
         assert_eq!(manifest.version, "0.3.0");
         assert_eq!(manifest.generation, 7);
-        assert_eq!(manifest.capabilities, vec!["reduce", "state"]);
+        assert_eq!(
+            manifest.capabilities,
+            vec!["reduce", "state", "pause", "drain", "resume"]
+        );
+    }
+
+    #[test]
+    fn a_paused_worker_refuses_events_until_it_resumes() {
+        let mut worker = Worker::new(program());
+        worker.handle(&handshake(7)).expect("the handshake");
+
+        let reply = answer(worker.handle(&request(7, "pause")).expect("a response"));
+        assert_eq!(payload(&reply), "paused");
+        let reply = answer(worker.handle(&request(7, "drain")).expect("a response"));
+        assert_eq!(payload(&reply), "drained");
+
+        // A paused worker refuses rather than queues, so the snapshot the driver takes describes
+        // exactly the state that was paused.
+        let reply = answer(worker.handle(&request(7, "event go")).expect("a response"));
+        assert!(payload(&reply).contains("paused"), "{reply}");
+        assert_eq!(worker.state(), &State::new("idle"));
+
+        // Snapshot and state still answer while paused: the driver needs both to hand off.
+        let reply = answer(worker.handle(&request(7, "snapshot")).expect("a response"));
+        assert!(payload(&reply).starts_with("state=idle"));
+
+        let reply = answer(worker.handle(&request(7, "resume")).expect("a response"));
+        assert_eq!(payload(&reply), "running");
+        let reply = answer(worker.handle(&request(7, "event go")).expect("a response"));
+        assert!(payload(&reply).starts_with("state=running"));
+    }
+
+    #[test]
+    fn drain_and_resume_out_of_order_are_refusals_not_state_changes() {
+        let mut worker = Worker::new(program());
+        worker.handle(&handshake(7)).expect("the handshake");
+        let reply = answer(worker.handle(&request(7, "drain")).expect("a response"));
+        assert!(payload(&reply).starts_with("error="), "{reply}");
+        let reply = answer(worker.handle(&request(7, "resume")).expect("a response"));
+        assert!(payload(&reply).starts_with("error="), "{reply}");
     }
 
     #[test]

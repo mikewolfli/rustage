@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "8178d04865731ad06d11d6d15129d889bf0ae327",
+    "revision": "504698fec4028b2ddb96609e517d145ea30a25e2",
     "profile": "desktop"
   },
   "command": "cargo run -- --probe-host target/host",

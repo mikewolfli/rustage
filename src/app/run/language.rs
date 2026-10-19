@@ -17,6 +17,17 @@ pub(super) fn language(options: &crate::cli::LanguageOptions) -> bool {
         Capabilities, Capability, Launcher, Services, StartupFailure,
     };
 
+    // A real server is a different execution path, not another scripted capability set: it owns a
+    // process and disappears when the command ends. Keeping the two paths separate is what stops
+    // the scripted model from growing a `cfg` for "really running" inside every operation.
+    if options
+        .ops
+        .iter()
+        .any(|operation| operation == "exec" || operation.starts_with("exec:"))
+    {
+        return language_real(options);
+    }
+
     /// What the command line has told the launcher to do.
     #[derive(Default)]
     struct Script {
@@ -110,6 +121,260 @@ pub(super) fn language(options: &crate::cli::LanguageOptions) -> bool {
         println!("{line}");
     }
     true
+}
+
+/// Drives a real language server's lifecycle (task T07.01).
+///
+/// The operations are the same `view`/`restart`/`close`/`show` vocabulary as the scripted path, with
+/// `exec:<program>`, `arg:<value>` and `root:<path>` selecting the process. Capability negotiation is
+/// the server's own `initialize` result; nothing here fills a capability set in by hand.
+fn language_real(options: &crate::cli::LanguageOptions) -> bool {
+    use crate::app::language::features::completions_from_lsp;
+    use crate::app::language::protocol::to_units;
+    use crate::app::language::session::{
+        Capabilities, Launcher, Services, StartupFailure, capabilities_from_lsp,
+    };
+    use crate::host::lsp::{Client, Clients, file_uri};
+    use crate::project::record::json::{Json, JsonObject};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    let mut program: Option<String> = None;
+    let mut arguments: Vec<String> = Vec::new();
+    let mut root = PathBuf::from(".");
+    for operation in &options.ops {
+        let (verb, rest) = operation
+            .split_once(':')
+            .unwrap_or((operation.as_str(), ""));
+        match verb {
+            "exec" => program = Some(rest.to_owned()),
+            "arg" => arguments.push(rest.to_owned()),
+            "root" | "directory" => root = PathBuf::from(rest),
+            _ => {}
+        }
+    }
+    let Some(program) = program else {
+        return report("a real language service needs exec:<program> first".to_owned());
+    };
+
+    /// A launcher that starts the named server for each project and keeps it until stopped.
+    struct Real {
+        program: String,
+        arguments: Vec<String>,
+        root: PathBuf,
+        clients: Clients,
+        pids: Arc<Mutex<BTreeMap<String, u32>>>,
+    }
+
+    impl Launcher for Real {
+        fn launch(&mut self, project: &str) -> Result<Capabilities, StartupFailure> {
+            let root = if Path::new(project).is_dir() {
+                PathBuf::from(project)
+            } else {
+                self.root.clone()
+            };
+            let mut client = Client::start(&self.program, &self.arguments)
+                .map_err(StartupFailure::SpawnFailed)?;
+            let pid = client.pid();
+            let result = client
+                .initialize(&root, Duration::from_secs(10))
+                .map_err(StartupFailure::HandshakeFailed)?;
+            let capabilities = match result.as_object() {
+                Some(object) => object
+                    .get("capabilities")
+                    .map(capabilities_from_lsp)
+                    .unwrap_or_else(Capabilities::none),
+                None => {
+                    return Err(StartupFailure::HandshakeFailed(
+                        "initialize returned a non-object result".to_owned(),
+                    ));
+                }
+            };
+            self.pids
+                .lock()
+                .expect("the language-server pid lock")
+                .insert(project.to_owned(), pid);
+            self.clients.insert(project, client);
+            Ok(capabilities)
+        }
+
+        fn stop(&mut self, project: &str) {
+            self.clients.stop(project);
+            self.pids
+                .lock()
+                .expect("the language-server pid lock")
+                .remove(project);
+        }
+    }
+
+    let pids = Arc::new(Mutex::new(BTreeMap::new()));
+    let mut services = Services::new(Real {
+        program,
+        arguments,
+        root,
+        clients: Clients::new(),
+        pids: Arc::clone(&pids),
+    });
+
+    let mut opened: BTreeSet<String> = BTreeSet::new();
+    let mut current_project = String::from(".");
+    for operation in &options.ops {
+        let (verb, argument) = operation
+            .split_once(':')
+            .unwrap_or((operation.as_str(), ""));
+        let project = if argument.is_empty() { "." } else { argument };
+        let step: Result<Vec<String>, String> = match verb {
+            "exec" | "arg" | "root" | "directory" => Ok(Vec::new()),
+            "view" => {
+                let session = services.open_view(project);
+                if !session.state().is_running() {
+                    let reason = session
+                        .diagnosis()
+                        .map(|failure| failure.message())
+                        .unwrap_or_else(|| "the server did not reach running".to_owned());
+                    return report(format!("{}: {reason}", session.project()));
+                }
+                let line = session.render();
+                let pid = pids
+                    .lock()
+                    .expect("the language-server pid lock")
+                    .get(project)
+                    .copied();
+                current_project = project.to_owned();
+                Ok(vec![match pid {
+                    Some(pid) => format!("view: {line} (pid {pid})"),
+                    None => format!("view: {line}"),
+                }])
+            }
+            "restart" => {
+                let session = services.restart(project);
+                if !session.state().is_running() {
+                    let reason = session
+                        .diagnosis()
+                        .map(|failure| failure.message())
+                        .unwrap_or_else(|| "the server did not reach running".to_owned());
+                    return report(format!("{}: {reason}", session.project()));
+                }
+                let line = session.render();
+                let restarts = session.restarts();
+                Ok(vec![format!("restart: {line} (restarts {restarts})")])
+            }
+            "close" => {
+                let released = services.close(project);
+                Ok(vec![format!("close {project}: released={released}")])
+            }
+            "complete" => {
+                let Some((path, offset)) = argument.rsplit_once(':') else {
+                    return report(
+                        "complete needs <file>:<byte-offset> after a running view".to_owned(),
+                    );
+                };
+                let offset = match offset.parse::<usize>() {
+                    Ok(offset) => offset,
+                    Err(_) => return report(format!("{offset:?} is not a byte offset")),
+                };
+                let text = match std::fs::read_to_string(path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return report(format!("{path} could not be read: {error}"));
+                    }
+                };
+                let position = to_units(&text, offset);
+                let uri = file_uri(Path::new(path));
+                let Some(client) = services.launcher_mut().clients.client_mut(&current_project)
+                else {
+                    return report(format!(
+                        "complete needs a running view; no server is running for {current_project:?}"
+                    ));
+                };
+                if opened.insert(uri.clone()) {
+                    let mut document = JsonObject::new();
+                    document.insert("uri", Json::string(uri.clone()));
+                    document.insert("languageId", Json::string(language_id(path)));
+                    document.insert("version", Json::number(1));
+                    document.insert("text", Json::string(text.clone()));
+                    let mut params = JsonObject::new();
+                    params.insert("textDocument", Json::Object(document));
+                    if let Err(reason) = client.notify("textDocument/didOpen", Json::Object(params))
+                    {
+                        return report(reason);
+                    }
+                }
+                let mut document = JsonObject::new();
+                document.insert("uri", Json::string(uri));
+                let mut at = JsonObject::new();
+                at.insert("line", Json::number(u64::from(position.line)));
+                at.insert("character", Json::number(u64::from(position.character)));
+                let mut params = JsonObject::new();
+                params.insert("textDocument", Json::Object(document));
+                params.insert("position", Json::Object(at));
+                let mut context = JsonObject::new();
+                context.insert("triggerKind", Json::number(1));
+                params.insert("context", Json::Object(context));
+                match client.request(
+                    "textDocument/completion",
+                    Json::Object(params),
+                    Duration::from_secs(10),
+                ) {
+                    Ok(result) => {
+                        let items = completions_from_lsp(&result);
+                        if items.is_empty() {
+                            Ok(vec![format!("completion at {}: none", position.render())])
+                        } else {
+                            Ok(items
+                                .iter()
+                                .map(|item| format!("completion: {}", item.render()))
+                                .collect())
+                        }
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "show" => Ok(Vec::new()),
+            "wait" => {
+                // A server may answer `initialize` before it has indexed the workspace. Waiting is
+                // an explicit operation rather than a silent retry inside every request, so a
+                // caller that does not need it pays nothing.
+                let millis = match argument.parse::<u64>() {
+                    Ok(millis) => millis,
+                    Err(_) => return report(format!("{argument:?} is not a wait in milliseconds")),
+                };
+                std::thread::sleep(Duration::from_millis(millis));
+                Ok(vec![format!("waited {millis} ms")])
+            }
+            other => Err(format!("{other:?} is not a language operation")),
+        };
+        match step {
+            Ok(notes) => {
+                for note in notes {
+                    println!("{note}");
+                }
+            }
+            Err(reason) => return report(reason),
+        }
+    }
+
+    for line in services.render() {
+        println!("{line}");
+    }
+    true
+}
+
+/// The language id an editor would send for a path's extension.
+fn language_id(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or_default() {
+        "rs" => "rust",
+        "json" => "json",
+        "css" => "css",
+        "html" => "html",
+        "md" => "markdown",
+        "toml" => "toml",
+        "js" => "javascript",
+        "ts" => "typescript",
+        _ => "plaintext",
+    }
 }
 
 /// Synchronises documents and converts positions (task T07.02).

@@ -73,23 +73,23 @@
 
 ## 2. 输出 profile 与设备（T00.03 的 15 格 + F18 多目标与部署）
 
-[支持矩阵](../plan/support-matrix.md) 的 15 格中，MS10 之后有 4 格为 `build-verified`
-（macos × desktop/mini/embedded、linux × desktop），其余 11 格仍为 `unverified`。逐格补法是"在某一宿主上为某一
+[支持矩阵](../plan/support-matrix.md) 的 15 格中，2026-10-19 之后有 11 格为 `build-verified`
+（macOS 与 Windows 各 5 格、Linux 的 desktop），其余 4 格仍为 `unverified`。逐格补法是"在某一宿主上为某一
 profile 建立构建或运行证据"：
 
 | # | 格 | 需要什么 | 状态 |
 |---|---|---|---|
 | B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ✅ `build-verified`：本机 `cargo build --bin rustage` 与 `--features linux-native` 原生会话（[log-20261019-1 §5.7、§11](../log/log-20261019-1.md)）；生成物本身未链接，故不写 `certified` |
-| B2 | linux × tablet / mobile | Android SDK/NDK；iOS 需 macOS | ⛔ 阻塞（缺 SDK） |
-| B3 | linux × mini / embedded | `no_std`/嵌入式目标（如 `thumbv7em-none-eabihf`）与板卡 | ⛔ 阻塞（缺工具链与设备） |
-| B4 | macos × desktop | macOS 机器 | ⏳ 部分：desktop feature 构建与 default 模板生成已通过；生成物未链接 |
-| B5 | macos × tablet / mobile | 同 B2，另需在本机 macOS 上装 Xcode | ⛔ 阻塞 |
-| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ⏳ 部分：两个 profile 的 rlib 真实构建通过；生成物未链接、无板卡 |
-| B7–B11 | windows × 五个 profile | Windows 机器（构建可用交叉编译起步，运行仍需机器） | ⏳ 待真机；mini/embedded 另需板卡（⛔） |
+| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接（glibc sysroot/交叉链接器） | ⛔ 未取得：缺 Linux 交叉链接器 |
+| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建；mini 需要上游修复 Linux 后端 | ⛔ 未取得：上游 mini 在 Linux target 编译失败；embedded 缺链接器 |
+| B4 | macos × desktop | macOS 机器 | ✅ `build-verified`：desktop 构建通过；default 生成源码已由独立消费者 crate 链接运行 |
+| B5 | macos × tablet / mobile | macOS 上的 profile 构建（运行仍需目标 SDK/设备） | ✅ `build-verified`：tablet/mobile rlib 在 aarch64-apple-darwin 构建通过；无设备运行 |
+| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ✅ `build-verified`：两个 profile 的 rlib 真实构建通过；无板卡 |
+| B7–B11 | windows × 五个 profile | Windows 机器（构建用交叉编译，运行仍需机器） | ✅ `build-verified` ×5：msvc 交叉构建 + tablet/mobile/mini/embedded rlib；运行待真机 |
 | B12 | tablet/mobile 的**真设备**运行 | Android/iOS 真机 | ⏳ 待真机：路线图 T18.04 要求**模拟器与真设备分别记录**，不得互相顶替 |
 | B13 | mini/embedded 的容量与链接审计 | 目标设备 + 容量门禁 | ⏳ 部分：实际 profile build 通过，链接审计基于真实 `cargo tree`；无目标设备 |
-| B14 | 本地设备发现/选择/认证、打包导出与安装 | 每类设备 | ⏳ 待真机（T18.06）：本轮只到真实 package 导出与安装计划 |
-| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；12 个格未验证（[§28](../log/log-20261016-4.md)） |
+| B14 | 本地设备发现/选择/认证、打包导出与安装 | 每类设备 | ⏳ 部分：iOS/Android SDK 自动探测与真实设备发现已验证（xcrun simctl 11 台、adb 0 台）；`codesign` 真实签名并验证；安装仍只到计划（[§5.8](../log/log-20261019-2.md)） |
+| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；15 格中 4 格未验证，11 格为构建级（[§5.7](../log/log-20261019-2.md)） |
 
 ## 3. 鸿蒙 2in1（不在"三宿主"内，单独跟踪）
 

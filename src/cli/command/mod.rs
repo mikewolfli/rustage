@@ -37,6 +37,7 @@ pub mod collection;
 pub mod commands;
 pub mod component;
 pub mod data;
+pub mod debug;
 pub mod document;
 pub mod editor;
 pub mod form;
@@ -59,6 +60,7 @@ pub use collection::*;
 pub use commands::*;
 pub use component::*;
 pub use data::*;
+pub use debug::*;
 pub use document::*;
 pub use editor::*;
 pub use form::*;
@@ -299,6 +301,8 @@ pub enum Command {
     Focus(FocusOptions),
     /// Starts the baseline desktop session and leaves it again.
     Launch(LaunchOptions),
+    /// Opens the real design workbench window (task F04/F21).
+    WorkbenchGui(WorkbenchGuiOptions),
     /// Plans a project's generated files and their commit policy (task T15.01).
     Artifact(ArtifactOptions),
     /// Runs the generation pipeline with its target, style and layout prechecks (task T15.02).
@@ -425,6 +429,8 @@ pub enum Command {
     TargetQueue(TargetQueueOptions),
     /// Fills the five-profile certification report (task T18.08).
     TargetCertification(TargetCertificationOptions),
+    /// Drives a debug adapter session (tasks T19.01–T19.08).
+    Debug(DebugOptions),
 }
 
 /// One display on the command line, written `<id>:<x>,<y>,<w>,<h>,<scale>`.
@@ -578,6 +584,7 @@ pub fn help_text() -> &'static str {
         "rustage - Rust desktop UI designer\n",
         "\n",
         "     Usage: rustage [--help | --version | --launch [--exit-after-ms <ms>] [--smoke] [--smoke-worker] [--ime] [--smoke-text <text>]]\n",
+        "            rustage --workbench-gui [--layout <file>] [--exit-after-ms <ms>]\n",
         "            rustage [--render-icons <directory> | --probe-apis <directory>]\n",
         "            rustage [--probe-host <directory> | --project-check <file>]\n",
         "            rustage [--locale-report <directory>]\n",
@@ -585,6 +592,7 @@ pub fn help_text() -> &'static str {
         "            rustage [--target-build-matrix <op>... | --target-mobile <op>...]\n",
         "            rustage [--target-restricted <op>... | --target-local <op>...]\n",
         "            rustage [--target-queue <op>... | --target-certification <op>...]\n",
+        "            rustage [--debug <op>...]\n",
         "            rustage --new-project <directory> [--template <name>] [--name <name>]\n",
         "            rustage [--open-project <file> [--trust] [--diagnose] | --recent]\n",
         "            rustage [--project-tree <file>]\n",
@@ -621,10 +629,14 @@ pub fn help_text() -> &'static str {
         "       -h, --help                    Print this help message\n",
         "       -V, --version                 Print the application version\n",
         "       --launch                      Start the baseline desktop session, then leave it again\n",
+        "       --workbench-gui               Open the real design workbench window: docked panels,\n",
+        "                                     toolbar, menu, editor groups and a status bar\n",
+        "       --layout <file>               With --workbench-gui, load/save the window layout\n",
+        "                                     (also accepts --exit-after-ms for a bounded session)\n",
         "       --exit-after-ms <ms>          With --launch, leave the event loop after <ms>\n",
         "       --smoke                       With --launch, mount a button and field; require one real click\n",
         "       --smoke-worker                With --smoke, forward each click to a real --logic-worker process\n",
-        "       --ime                         With --smoke, wire a real GTK input-method context (Linux X11)\n",
+        "       --ime                         With --smoke, exercise the library-owned toolkit input method (Linux X11)\n",
         "       --smoke-text <text>           With --smoke, seed the field with this text (visual evidence)\n",
         "       --render-icons <directory>    Render the icon strip, light and dark, into <directory>\n",
         "       --probe-apis <directory>      Run the dependency contract probes and write api-probes.json\n",
@@ -890,7 +902,11 @@ pub fn help_text() -> &'static str {
         "       --language <op>...            Drive the language-service lifecycle: caps:<c1>,<c2>,\n",
         "                                     fail:<toolchain|spawn|handshake>, view:<project>,\n",
         "                                     restart:<project>, close:<project>, show; one\n",
-        "                                     session per project, not per view\n",
+        "                                     session per project, not per view. A real server:\n",
+        "                                     exec:<program>, arg:<value>, root:<path>, then the\n",
+        "                                     same view/restart/close/show, plus wait:<ms> and\n",
+        "                                     complete:<file>:<byte-offset>; capabilities and\n",
+        "                                     completions come from the server's own answers\n",
         "       --protocol <op>...            Synchronise documents and convert positions:\n",
         "                                     open:<uri>=<t>, replace:<uri>=<t>,\n",
         "                                     edit:<uri>:<v>:<sl>,<sc>:<el>,<ec>=<t>, save:<uri>,\n",
@@ -1218,8 +1234,9 @@ pub fn help_text() -> &'static str {
         "       --generate <op>...             Run the generation pipeline: document:<file>,\n",
         "                                     node:<kind>:<children>, target:<default|stripped>,\n",
         "                                     size:<w>x<h>, fn:<name>, style:<node>:<reason>,\n",
-        "                                     layout:<node>:<reason>, check, run, twice, show; a blocked\n",
-        "                                     precheck emits nothing and the same input is byte-stable\n",
+        "                                     layout:<node>:<reason>, write:<path>, check, run, twice,\n",
+        "                                     show; a blocked precheck emits nothing and the same\n",
+        "                                     input is byte-stable\n",
         "       --mapping <op>...              Build a node-to-source map: source:<file>, file:<path>,\n",
         "                                     key:<node>:<key>, model:<n>, generator:<a>.<b>.<c>,\n",
         "                                     locate:<node>, at:<byte>, staleness:<n>, show\n",
@@ -1256,7 +1273,11 @@ pub fn help_text() -> &'static str {
         "       --terminal <op>...            Drive a terminal session: session:<name>,\n",
         "                                     directory:<path>, env:<name>=<value>, size:<c>x<r>,\n",
         "                                     platform:<macos|linux|windows>, authorize, start,\n",
-        "                                     write:<text>, copy:<start>:<end>, resize:<c>x<r>, show\n",
+        "                                     write:<text>, copy:<start>:<end>, resize:<c>x<r>,\n",
+        "                                     exec:<program>, arg:<value>, input:<text>, read,\n",
+        "                                     wait:<ms>, terminate, show; exec/input/read/wait/\n",
+        "                                     terminate drive a real pseudo-terminal (POSIX pty or\n",
+        "                                     Windows ConPTY)\n",
         "       --external <op>...             Configure and invoke an external tool: tool:<name>,\n",
         "                                     program:<path>, arg:<value>, input:<path>, output:<path>,\n",
         "                                     confirm:<yes|no>, placeholder:<name>=<value>, invoke,\n",
@@ -1421,22 +1442,37 @@ pub fn help_text() -> &'static str {
         "                                     cancel:<triple>, check, show\n",
         "       --target-mobile <op>...        Check a tablet/mobile target: profile:<tablet|mobile>,\n",
         "                                     size:<w>x<h>, input:<touch|pointer>:<w>x<h>,\n",
-        "                                     asset:<name>:<kind>:<bytes>, sdk:<platform>:<yes|no>[:<version>],\n",
+        "                                     asset:<name>:<kind>:<bytes>, sdk:<platform>:<yes|no>[:<version>]\n",
+        "                                     or sdk:<platform>:auto, host:<system>,\n",
         "                                     evidence:<simulator|device>:<name>:<proof>:<note>, check, show\n",
         "       --target-restricted <op>...    Check a restricted target: profile:<mini|embedded>,\n",
         "                                     children:<n>, mode:<one|two>, feature:<name>, tree:<path>,\n",
         "                                     dev:<crate>, build:<yes|no>, check, show\n",
         "       --target-local <op>...         Local delivery: profile:<name>, host:<system>,\n",
         "                                     platform:<ios|android>, program:<name>, device:<id>:<model>:<yes|no>,\n",
-        "                                     select:<id>, authorize:<id>, package:<id>:<version>:<artifact>,\n",
+        "                                     select:<id>, authorize:<id>, discover[:<ios|android>],\n",
+        "                                     package:<id>:<version>:<artifact>,\n",
         "                                     export:<directory>, install, remote:<host>,\n",
         "                                     fail:<step>:<reason>, previous:<version>, check, show\n",
         "       --target-queue <op>...         Queue and track: job:<id>:<target>:<build|deploy|sign>,\n",
         "                                     signing:<identity>:<credential>:<source>, start:<id>,\n",
+        "                                     sign:<id>:<identity>:<artifact>:<credential>:<source>,\n",
         "                                     pass:<id>:<proof>:<artifact>, fail:<id>:<reason>, cancel:<id>,\n",
         "                                     secret:<value>, log:<text>, check, show\n",
         "       --target-certification <op>... Fill the report: profile:<name>,\n",
         "                                     stage:<stage>:<proof>:<command>:<note>, consistency, check, show\n",
+        "       --debug <op>...                Drive a debug adapter: probe, adapter:<name|auto|path:program>,\n",
+        "                                     authorize, host:<system>, timeout:<ms>, launch:<program>,\n",
+        "                                     arg:<value>, directory:<path>, stop-on-entry:<yes|no>,\n",
+        "                                     source-version:<n>, attach:<pid>, start,\n",
+        "                                     break:<file>:<line>[:<condition>], logpoint:<file>:<line>:<message>,\n",
+        "                                     hit:<file>:<line>:<condition>, breakpoints, enable-all,\n",
+        "                                     disable-all, remove-breakpoint:<id>, continue, pause,\n",
+        "                                     step-over, step-in, step-out, run-to:<file>:<line>, wait[:<ms>],\n",
+        "                                     threads, stack[:<thread>], scopes:<frame>,\n",
+        "                                     variables:<reference>[:<count>], evaluate:<expression>,\n",
+        "                                     watch:<expression>, watches, policy:<allow|ask|deny>,\n",
+        "                                     status, disconnect, stop, hot-swap[:confirm], recover:<case>, check\n",
         "     Global options:\n",
         "       --log-level <level>           error | warn | info | debug | trace (default: info)\n",
         "       --ui-language <tag>           Interface language; only `en` is bundled so far (default: follow\n",
@@ -1501,7 +1537,7 @@ where
 
     // Each family knows its own flags and answers `None` for anything else, so a flag belongs to
     // exactly one family and the order below is a reading order rather than a precedence rule.
-    let families: [Family; 21] = [
+    let families: [Family; 22] = [
         host::parse_host,
         project::parse_project,
         document::parse_document,
@@ -1523,6 +1559,7 @@ where
         form::parse_form,
         logic::parse_logic,
         target::parse_target,
+        debug::parse_debug,
     ];
     for family in families {
         if let Some(command) = family(text, argument.clone(), &mut arguments) {

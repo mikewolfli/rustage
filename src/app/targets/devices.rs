@@ -27,6 +27,7 @@
 use crate::app::component::targets::{ResourceKind, capacity};
 use crate::app::preview::viewport_matrix::Orientation;
 
+use super::configuration::Os;
 use super::matrix::Proof;
 
 /// The mobile profiles this module covers.
@@ -231,6 +232,78 @@ impl Sdk {
         self.version = Some(version.into());
         self
     }
+
+    /// What this machine actually has for a mobile platform.
+    ///
+    /// `ios` is asked of `xcrun`, and `android` is looked for where the Android SDK's own installer
+    /// puts it (`ANDROID_HOME`, `ANDROID_SDK_ROOT`, or the per-host default). A platform this build
+    /// does not package for is reported as not installed without running anything, and a missing
+    /// SDK is `installed: false` rather than an invented version.
+    pub fn detect(platform: &str, host: Os) -> Self {
+        match platform {
+            "android" => super::local::android_sdk_roots(host)
+                .into_iter()
+                .find(|root| root.is_dir())
+                .map(|root| android_at(&root))
+                .unwrap_or_else(|| Self::new("android", false)),
+            "ios" => Self::detect_ios(),
+            other => Self::new(other, false),
+        }
+    }
+
+    fn detect_ios() -> Self {
+        let answer = std::process::Command::new("xcrun")
+            .args(["--sdk", "iphonesimulator", "--show-sdk-version"])
+            .output();
+        match answer {
+            Ok(output) if output.status.success() => {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if version.is_empty() {
+                    Self::new("ios", false)
+                } else {
+                    Self::new("ios", true).with_version(version)
+                }
+            }
+            _ => Self::new("ios", false),
+        }
+    }
+}
+
+/// An Android SDK rooted at `root`, with the newest platform it carries as its version.
+///
+/// The version is read from `platforms/android-<n>` and, when that directory is absent, from
+/// `build-tools/<version>`; neither is invented. A root that exists but has neither is installed
+/// without a version, which is more honest than naming one it does not have.
+pub fn android_at(root: &std::path::Path) -> Sdk {
+    if !root.is_dir() {
+        return Sdk::new("android", false);
+    }
+    let mut sdk = Sdk::new("android", true);
+    let newest = newest_child(&root.join("platforms"), "android-")
+        .or_else(|| newest_child(&root.join("build-tools"), ""));
+    if let Some(version) = newest {
+        sdk = sdk.with_version(version);
+    }
+    sdk
+}
+
+/// The greatest numeric suffix among a directory's children, if any.
+fn newest_child(directory: &std::path::Path, prefix: &str) -> Option<String> {
+    let entries = std::fs::read_dir(directory).ok()?;
+    let mut best: Option<(u64, String)> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(number) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let Ok(number) = number.split('.').next().unwrap_or(number).parse::<u64>() else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(known, _)| number > *known) {
+            best = Some((number, name));
+        }
+    }
+    best.map(|(_, name)| name)
 }
 
 /// Why a mobile target cannot be built as asked.
@@ -598,5 +671,32 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn an_android_sdk_root_reports_the_newest_platform_it_holds() {
+        let id = std::process::id();
+        let root = std::env::temp_dir().join(format!("rustage-android-sdk-{id}"));
+        std::fs::create_dir_all(root.join("platforms/android-35")).expect("a platform");
+        std::fs::create_dir_all(root.join("platforms/android-36")).expect("a platform");
+        std::fs::create_dir_all(root.join("build-tools/35.0.0")).expect("a build-tools");
+        let sdk = super::android_at(&root);
+        assert_eq!(sdk.platform, "android");
+        assert!(sdk.installed);
+        assert_eq!(sdk.version.as_deref(), Some("android-36"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_missing_android_root_is_not_installed() {
+        let sdk = super::android_at(std::path::Path::new("/definitely/not/an/android/sdk"));
+        assert!(!sdk.installed);
+        assert_eq!(sdk.version, None);
+    }
+
+    #[test]
+    fn a_platform_with_no_package_path_is_never_detected_as_installed() {
+        let sdk = Sdk::detect("harmonyos", super::Os::Macos);
+        assert!(!sdk.installed);
     }
 }

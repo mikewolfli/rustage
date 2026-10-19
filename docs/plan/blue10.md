@@ -227,3 +227,12 @@
   `migration::plan`/`apply`：字段 kept/added/retyped/dropped 逐项报告，真实丢值时不启动新代、
   旧代继续服务并以 exit 4 结束；downgrade 与未声明字段同样拒绝。证据见
   [`log-20261019-1.md`](../log/log-20261019-1.md) §3.5 与 `tests/logic_process.rs` 的三个场景。
+- **2026-10-19 夹具及阶段补充：** `--logic-process` 新增 `pause-limit:<ms>`，worker 新增 `pause`/
+  `drain`/`resume`；`swap::Swap` 的 `pausing → paused → drained → snapshotted → imported →
+  confirmed → resumed → retired` 已在两个真实进程上逐步观察，零上限的暂停会阻止新代启动并
+  再次观测到旧代仍在服务（`tests/logic_process.rs` 的两项测试）。`swap` 不再只有单元级证据。
+  证据见 [`log-20261019-2.md`](../log/log-20261019-2.md) §4。
+- **2026-10-19 上游修复补充：** 依赖已 re-pin 到 `504698fe`（2.8.9）；上游已实现指针/键盘
+  焦点、`ValueChanged` 与 IME context 接管，宿主的 `grab_focus`/`XSetInputFocus`/自建 IM
+  context 绕行已删除。Linux 真实窗口复跑仍待做，见
+  [`feedback-20261019.md`](../rw-feedback/feedback-20261019.md)。

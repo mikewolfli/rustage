@@ -65,12 +65,18 @@ pub mod dialog;
 pub mod error;
 pub mod locale;
 pub mod log;
+pub mod lsp;
 pub mod network;
 pub mod notify;
 pub mod open_url;
 pub mod paths;
 pub mod permission;
 pub mod platform;
+#[cfg(unix)]
+pub mod pty;
+#[cfg(windows)]
+#[path = "pty_windows.rs"]
+pub mod pty;
 pub mod readiness;
 pub mod registry;
 pub mod smoke;

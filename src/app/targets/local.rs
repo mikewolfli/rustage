@@ -29,6 +29,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::configuration::Os;
 
@@ -157,9 +158,15 @@ impl Tool {
 }
 
 /// The programs this machine has, as a probe reports them.
+///
+/// A probe keeps the directories it looked in as well as the names it found, so a tool that is not
+/// on `PATH` but is installed where its SDK puts it (Android's `platform-tools`, for one) is still
+/// found and can still be started by its real path. Reading the directories rather than only the
+/// names is what makes [`Probe::locate`] an answer instead of a guess.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Probe {
     programs: BTreeSet<String>,
+    directories: Vec<PathBuf>,
 }
 
 impl Probe {
@@ -167,27 +174,58 @@ impl Probe {
     pub fn of(programs: impl IntoIterator<Item = String>) -> Self {
         Self {
             programs: programs.into_iter().collect(),
+            directories: Vec::new(),
         }
     }
 
-    /// A probe that reads this process's `PATH`.
+    /// A probe that reads this process's `PATH` and the SDK directories a mobile tool lives in.
     pub fn from_path() -> Self {
-        let mut programs = BTreeSet::new();
+        let mut directories = Vec::new();
         if let Some(path) = std::env::var_os("PATH") {
-            for directory in std::env::split_paths(&path) {
-                if let Ok(entries) = std::fs::read_dir(directory) {
-                    for entry in entries.flatten() {
-                        programs.insert(entry.file_name().to_string_lossy().into_owned());
-                    }
+            directories.extend(std::env::split_paths(&path));
+        }
+        directories.extend(sdk_tool_directories());
+        let mut programs = BTreeSet::new();
+        for directory in &directories {
+            if let Ok(entries) = std::fs::read_dir(directory) {
+                for entry in entries.flatten() {
+                    programs.insert(entry.file_name().to_string_lossy().into_owned());
                 }
             }
         }
-        Self { programs }
+        Self {
+            programs,
+            directories,
+        }
+    }
+
+    /// Adds one directory to the places this probe looks in.
+    pub fn with_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        let directory = directory.into();
+        if let Ok(entries) = std::fs::read_dir(&directory) {
+            for entry in entries.flatten() {
+                self.programs
+                    .insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        self.directories.push(directory);
+        self
     }
 
     /// Whether a program is there.
     pub fn has(&self, program: &str) -> bool {
         self.programs.contains(program)
+    }
+
+    /// The program's real path, when this machine has it.
+    pub fn locate(&self, program: &str) -> Option<PathBuf> {
+        if !self.has(program) {
+            return None;
+        }
+        self.directories
+            .iter()
+            .map(|directory| directory.join(program))
+            .find(|candidate| candidate.is_file())
     }
 
     fn state(&self, program: &str, remedy: &str) -> ToolState {
@@ -199,6 +237,229 @@ impl Probe {
             }
         }
     }
+}
+
+/// The SDK directories a mobile tool is normally installed in.
+///
+/// These are the locations the platforms' own installers use, not a guess at where a person may
+/// have put things: a tool somewhere else is found through `PATH`, and a tool in none of these is
+/// reported as missing rather than searched for across the disk.
+fn sdk_tool_directories() -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    for root in android_sdk_roots(Os::host()) {
+        directories.push(root.join("platform-tools"));
+        // `apksigner` lives in a build-tools version directory rather than at the SDK's root, so
+        // every installed version is added. The newest one wins in `locate` because it is added
+        // last and its versions sort lexically after older ones in practice; the tool's own
+        // install order is the one the SDK uses.
+        if let Ok(entries) = std::fs::read_dir(root.join("build-tools")) {
+            let mut versions: Vec<PathBuf> = entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.path())
+                .collect();
+            versions.sort();
+            directories.extend(versions);
+        }
+    }
+    directories
+}
+
+/// Where an Android SDK is installed on a host, most authoritative first.
+///
+/// `ANDROID_HOME` and `ANDROID_SDK_ROOT` are the variables the SDK itself documents; the per-host
+/// fallback is where Android Studio's installer puts it without either being set.
+pub fn android_sdk_roots(host: Os) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for variable in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(root) = std::env::var_os(variable) {
+            roots.push(PathBuf::from(root));
+        }
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match host {
+        Os::Macos => {
+            if let Some(home) = &home {
+                roots.push(home.join("Library/Android/sdk"));
+            }
+        }
+        Os::Linux => {
+            if let Some(home) = &home {
+                roots.push(home.join("Android/Sdk"));
+            }
+        }
+        Os::Windows => {
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                roots.push(PathBuf::from(local).join("Android/Sdk"));
+            }
+        }
+    }
+    roots
+}
+
+/// What one local tool run answered.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CommandRun {
+    /// The exit status, or `None` when a signal ended it.
+    pub code: Option<i32>,
+    /// Standard output.
+    pub stdout: String,
+    /// Standard error.
+    pub stderr: String,
+}
+
+impl CommandRun {
+    /// Whether the program exited zero.
+    pub fn succeeded(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// Runs a local tool that is already installed.
+///
+/// The program is started by its real path, never through a shell, so an argument cannot become a
+/// second command. A start failure is the caller's refusal to report; this function only says what
+/// the process answered.
+pub fn run(program: &Path, arguments: &[&str]) -> Result<CommandRun, String> {
+    let output = Command::new(program)
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("{} could not be started: {error}", program.display()))?;
+    Ok(CommandRun {
+        code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// Discovers the devices a mobile platform's own tool reports.
+///
+/// This is the real seam T18.06 asks for: the tool is started, its answer is parsed, and a tool that
+/// is absent or fails is a refusal rather than an empty list that looks like "no devices".
+pub fn discover(platform: MobilePlatform, probe: &Probe) -> Result<Discovery, Refusal> {
+    let (program, arguments, remedy) = match platform {
+        MobilePlatform::Ios => (
+            "xcrun",
+            vec!["simctl", "list", "devices", "available", "--json"],
+            "install Xcode and its command line tools",
+        ),
+        MobilePlatform::Android => (
+            "adb",
+            vec!["devices", "-l"],
+            "install the Android SDK and put its platform-tools on the path",
+        ),
+    };
+    let Some(path) = probe.locate(program) else {
+        return Err(Refusal::ToolMissing {
+            kind: ToolKind::Devices,
+            remedy: remedy.to_owned(),
+        });
+    };
+    let run = run(&path, &arguments).map_err(|reason| Refusal::DiscoveryFailed {
+        program: program.to_owned(),
+        reason,
+    })?;
+    if !run.succeeded() {
+        return Err(Refusal::DiscoveryFailed {
+            program: program.to_owned(),
+            reason: if run.stderr.trim().is_empty() {
+                format!("exited with {:?}", run.code)
+            } else {
+                run.stderr.trim().to_owned()
+            },
+        });
+    }
+    let devices = match platform {
+        MobilePlatform::Ios => parse_simctl(&run.stdout),
+        MobilePlatform::Android => parse_adb(&run.stdout),
+    }
+    .map_err(|reason| Refusal::DiscoveryFailed {
+        program: program.to_owned(),
+        reason,
+    })?;
+    let mut discovery = Discovery::new();
+    for device in devices {
+        discovery
+            .add(device)
+            .map_err(|refusal| Refusal::DiscoveryFailed {
+                program: program.to_owned(),
+                reason: refusal.render(),
+            })?;
+    }
+    Ok(discovery)
+}
+
+/// Parses `xcrun simctl list devices available --json`.
+///
+/// Only available devices are kept. A simulator that is shut down is reported as such rather than
+/// dropped, because installing onto it would fail and the plan should say so before it runs.
+pub fn parse_simctl(text: &str) -> Result<Vec<Device>, String> {
+    use crate::project::record::json::{Json, parse};
+
+    let root = parse(text).map_err(|error| error.to_string())?;
+    let devices = root
+        .as_object()
+        .and_then(|object| object.get("devices"))
+        .and_then(Json::as_object)
+        .ok_or_else(|| "the answer has no devices object".to_owned())?;
+    let mut found = Vec::new();
+    for (_, runtime) in devices.iter() {
+        let Some(entries) = runtime.as_array() else {
+            continue;
+        };
+        for entry in entries {
+            let Some(object) = entry.as_object() else {
+                continue;
+            };
+            let available = object
+                .get("isAvailable")
+                .map(|value| !matches!(value, Json::Bool(false)))
+                .unwrap_or(true);
+            if !available {
+                continue;
+            }
+            let (Some(udid), Some(name)) = (
+                object.get("udid").and_then(Json::as_str),
+                object.get("name").and_then(Json::as_str),
+            ) else {
+                continue;
+            };
+            let state = object
+                .get("state")
+                .and_then(Json::as_str)
+                .unwrap_or("unknown");
+            found.push(Device::new(udid, name, true).with_state(state));
+        }
+    }
+    Ok(found)
+}
+
+/// Parses `adb devices -l`.
+///
+/// The tool's header line and its blank lines are not devices; a device line is a serial, a state
+/// and optional `key:value` fields. `device` is the only state that may be acted on, so
+/// `unauthorized` and `offline` are reported as not authorized instead of being dropped.
+pub fn parse_adb(text: &str) -> Result<Vec<Device>, String> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("List of devices") || line.starts_with('*') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(serial) = fields.next() else {
+            continue;
+        };
+        let Some(state) = fields.next() else {
+            continue;
+        };
+        let model = fields
+            .find_map(|field| field.strip_prefix("model:"))
+            .map(|model| model.replace('_', " "))
+            .unwrap_or_else(|| serial.to_owned());
+        found.push(Device::new(serial, model, state == "device").with_state(state));
+    }
+    Ok(found)
 }
 
 /// The mobile platform a package is for.
@@ -364,28 +625,51 @@ pub struct Device {
     pub model: String,
     /// Whether the local tool may act on it.
     pub authorized: bool,
+    /// The state the local tool reported (`Booted`, `device`, `offline`, ...).
+    pub state: String,
 }
 
 impl Device {
-    /// A device with its authorization state.
+    /// A device with its authorization state and an unknown reported state.
     pub fn new(id: impl Into<String>, model: impl Into<String>, authorized: bool) -> Self {
         Self {
             id: id.into(),
             model: model.into(),
             authorized,
+            state: "unknown".to_owned(),
         }
+    }
+
+    /// The same device with the state its local tool reported.
+    pub fn with_state(mut self, state: impl Into<String>) -> Self {
+        self.state = state.into();
+        self
+    }
+
+    /// Whether the device is ready to receive a package now.
+    ///
+    /// An iOS simulator has to be booted and an Android device has to be in the `device` state;
+    /// `unknown` is accepted only for a device a caller declared itself, because that path has no
+    /// tool to ask.
+    pub fn ready(&self) -> bool {
+        self.authorized && matches!(self.state.as_str(), "Booted" | "device" | "unknown")
     }
 
     /// The device in one line.
     pub fn render(&self) -> String {
         format!(
-            "{} {} ({})",
+            "{} {} ({}{})",
             self.id,
             self.model,
             if self.authorized {
                 "authorized"
             } else {
                 "not authorized"
+            },
+            if self.state == "unknown" {
+                String::new()
+            } else {
+                format!(", {}", self.state)
             }
         )
     }
@@ -520,7 +804,13 @@ pub fn plan_install(
         return Err(Refusal::RemoteUnsupported { host: host.clone() });
     }
     let tool = toolbox.require(ToolKind::Install)?;
-    discovery.select(device)?;
+    let selected = discovery.select(device)?;
+    if !selected.ready() {
+        return Err(Refusal::DeviceNotReady {
+            device: device.to_owned(),
+            state: selected.state.clone(),
+        });
+    }
     if !package.path.exists() {
         return Err(Refusal::NoArtifact {
             path: package.path.display().to_string(),
@@ -710,6 +1000,20 @@ pub enum Refusal {
         /// Why.
         reason: String,
     },
+    /// The device's local tool reported a state it cannot act on.
+    DeviceNotReady {
+        /// The device.
+        device: String,
+        /// The state it reported.
+        state: String,
+    },
+    /// A local tool was found but did not answer with a device list this build can read.
+    DiscoveryFailed {
+        /// The program.
+        program: String,
+        /// What went wrong.
+        reason: String,
+    },
 }
 
 impl Refusal {
@@ -737,6 +1041,12 @@ impl Refusal {
             Self::ExportFailed { path, reason } => {
                 format!("{path} could not be written and read back: {reason}")
             }
+            Self::DeviceNotReady { device, state } => {
+                format!("{device} is {state}; boot it or wake it before installing")
+            }
+            Self::DiscoveryFailed { program, reason } => {
+                format!("{program} could not list devices: {reason}")
+            }
         }
     }
 }
@@ -745,7 +1055,7 @@ impl Refusal {
 mod tests {
     use super::{
         Device, Discovery, Journal, MobilePlatform, Package, Probe, Recovery, Refusal, ToolKind,
-        ToolState, Toolbox, Transport, export, plan_install,
+        ToolState, Toolbox, Transport, export, parse_adb, parse_simctl, plan_install,
     };
     use crate::app::targets::configuration::Os;
     use std::path::PathBuf;
@@ -943,6 +1253,70 @@ mod tests {
             journal,
         };
         assert!(recovery.rollback().is_err());
+    }
+
+    #[test]
+    fn simctl_output_becomes_devices_with_their_states() {
+        let text = r#"{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-2":[
+            {"lastBootedAt":"2026-10-20T00:00:00Z","state":"Booted","isAvailable":true,
+             "name":"iPhone 17 Pro","udid":"C72B2D95-D577-434A-9C35-8FCBC5EBCBDB"},
+            {"state":"Shutdown","isAvailable":true,"name":"iPad Pro 13-inch (M5)",
+             "udid":"BC7BBF51-0853-478B-ACA1-AC6291F49EAD"},
+            {"state":"Shutdown","isAvailable":false,"name":"Old Phone",
+             "udid":"00000000-0000-0000-0000-000000000000"}
+        ]}}"#;
+        let devices = parse_simctl(text).expect("a simctl answer");
+        assert_eq!(devices.len(), 2, "unavailable runtimes are not offered");
+        assert_eq!(devices[0].id, "C72B2D95-D577-434A-9C35-8FCBC5EBCBDB");
+        assert_eq!(devices[0].model, "iPhone 17 Pro");
+        assert!(devices[0].ready());
+        assert!(!devices[1].ready(), "a shut-down simulator is not ready");
+        assert!(devices[1].authorized, "it is permitted, just not running");
+    }
+
+    #[test]
+    fn adb_output_keeps_unauthorized_and_offline_devices_visible() {
+        let text = "List of devices attached\n\
+                    emulator-5554\tdevice product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:1\n\
+                    R5CT1234\tunauthorized usb:1-1 transport_id:2\n\
+                    0123456789\toffline transport_id:3\n\n";
+        let devices = parse_adb(text).expect("an adb answer");
+        assert_eq!(devices.len(), 3);
+        assert_eq!(devices[0].id, "emulator-5554");
+        assert_eq!(devices[0].model, "sdk gphone64 arm64");
+        assert!(devices[0].ready());
+        assert!(!devices[1].authorized);
+        assert!(!devices[1].ready());
+        assert!(!devices[2].ready());
+    }
+
+    #[test]
+    fn a_device_that_is_discovered_but_not_ready_is_refused_with_its_state() {
+        let toolbox = android(&["adb"]);
+        let mut discovery = Discovery::new();
+        discovery
+            .add(Device::new("d", "D", true).with_state("offline"))
+            .expect("a device");
+        let directory = sandbox("not-ready");
+        let artifact = directory.join("app.apk");
+        std::fs::write(&artifact, b"apk").expect("a temporary artifact");
+        let package = Package::new("com.example.app", "1.0.0", "mobile", &artifact);
+        let refusal = plan_install(&toolbox, &discovery, "d", &package, &Transport::Local)
+            .expect_err("an offline device");
+        assert!(matches!(refusal, Refusal::DeviceNotReady { .. }));
+        assert!(refusal.render().contains("offline"));
+    }
+
+    #[test]
+    fn a_discovery_refusal_names_the_tool_and_the_reason() {
+        let refusal = Refusal::DiscoveryFailed {
+            program: "adb".to_owned(),
+            reason: "no permissions".to_owned(),
+        };
+        assert_eq!(
+            refusal.render(),
+            "adb could not list devices: no permissions"
+        );
     }
 
     #[test]

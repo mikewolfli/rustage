@@ -408,6 +408,7 @@ pub(super) fn target_mobile(options: &crate::cli::TargetMobileOptions) -> bool {
     let mut assets: Vec<Asset> = Vec::new();
     let mut sdk: Option<Sdk> = None;
     let mut support = Support::new();
+    let mut host = Os::host();
     let mut check = false;
 
     for op in &options.ops {
@@ -436,18 +437,30 @@ pub(super) fn target_mobile(options: &crate::cli::TargetMobileOptions) -> bool {
                     assets.push(Asset::new(fields[0], kind, u64::from(bytes)));
                     Ok(())
                 }),
-            "sdk" => split_fields(rest, 3)
-                .ok_or_else(|| format!("sdk needs <platform>:<yes|no>[:<version>], got {rest:?}"))
-                .and_then(|fields| {
-                    let installed = flag(fields[1])
-                        .ok_or_else(|| format!("{:?} is not yes or no", fields[1]))?;
-                    let mut parsed = Sdk::new(fields[0], installed);
-                    if !fields[2].is_empty() {
-                        parsed = parsed.with_version(fields[2]);
-                    }
-                    sdk = Some(parsed);
+            "sdk" => {
+                if let Some((platform, "auto")) = rest.split_once(':') {
+                    sdk = Some(Sdk::detect(platform, host));
                     Ok(())
-                }),
+                } else {
+                    split_fields(rest, 3)
+                        .ok_or_else(|| {
+                            format!("sdk needs <platform>:<yes|no>[:<version>], got {rest:?}")
+                        })
+                        .and_then(|fields| {
+                            let installed = flag(fields[1])
+                                .ok_or_else(|| format!("{:?} is not yes or no", fields[1]))?;
+                            let mut parsed = Sdk::new(fields[0], installed);
+                            if !fields[2].is_empty() {
+                                parsed = parsed.with_version(fields[2]);
+                            }
+                            sdk = Some(parsed);
+                            Ok(())
+                        })
+                }
+            }
+            "host" => Os::parse(rest)
+                .map(|parsed| host = parsed)
+                .ok_or_else(|| format!("{rest:?} is not macos, linux or windows")),
             "evidence" => split_fields(rest, 4)
                 .ok_or_else(|| {
                     format!("evidence needs <place>:<name>:<proof>:<note>, got {rest:?}")
@@ -485,6 +498,21 @@ pub(super) fn target_mobile(options: &crate::cli::TargetMobileOptions) -> bool {
         plan = plan.with_size(size);
     }
     println!("{}", plan.render());
+    if let Some(sdk) = &sdk {
+        println!(
+            "sdk {}: {}{}",
+            sdk.platform,
+            if sdk.installed {
+                "installed"
+            } else {
+                "missing"
+            },
+            sdk.version
+                .as_ref()
+                .map(|version| format!(" {version}"))
+                .unwrap_or_default()
+        );
+    }
     let findings = plan.check(&inputs, &assets, sdk.as_ref());
     for finding in &findings {
         println!("{}", finding.render());
@@ -625,6 +653,7 @@ pub(super) fn target_local(options: &crate::cli::TargetLocalOptions) -> bool {
     let mut remote: Option<String> = None;
     let mut failed_step: Option<(String, String)> = None;
     let mut previous: Option<String> = None;
+    let mut discover: Option<MobilePlatform> = None;
     let mut check = false;
     let mut failed = false;
 
@@ -662,6 +691,19 @@ pub(super) fn target_local(options: &crate::cli::TargetLocalOptions) -> bool {
                     selected = Some(rest.to_owned());
                 })
                 .map_err(|refusal| refusal.render()),
+            "discover" => match rest {
+                "" => {
+                    discover = Some(platform);
+                    Ok(())
+                }
+                "ios" | "android" => {
+                    discover = MobilePlatform::parse(rest);
+                    Ok(())
+                }
+                other => Err(format!(
+                    "{other:?} is not ios, android or empty; discovery asks a real local tool"
+                )),
+            },
             "authorize" => discovery
                 .authorize(rest)
                 .map(|()| println!("authorized {rest}"))
@@ -726,6 +768,25 @@ pub(super) fn target_local(options: &crate::cli::TargetLocalOptions) -> bool {
     let toolbox = Toolbox::for_target(&profile, host, platform, &probe);
     for line in toolbox.render() {
         println!("{line}");
+    }
+
+    if let Some(platform) = discover {
+        match local::discover(platform, &probe) {
+            Ok(found) => {
+                println!(
+                    "discovered {} {} device(s) from the platform's own tool",
+                    found.devices().len(),
+                    platform.name()
+                );
+                for device in found.devices() {
+                    println!("  {}", device.render());
+                    if let Err(refusal) = discovery.add(device.clone()) {
+                        return report(refusal.render());
+                    }
+                }
+            }
+            Err(refusal) => return report(refusal.render()),
+        }
     }
 
     if let Some(directory) = export_directory {
@@ -808,6 +869,7 @@ pub(super) fn target_queue(options: &crate::cli::TargetQueueOptions) -> bool {
     let mut queue = Queue::new();
     let mut secrets: Vec<String> = Vec::new();
     let mut last: Option<String> = None;
+    let mut host = Os::host();
     let mut check = false;
 
     for op in &options.ops {
@@ -843,6 +905,31 @@ pub(super) fn target_queue(options: &crate::cli::TargetQueueOptions) -> bool {
                         .map_err(|refusal| refusal.render())
                 }),
             "start" => queue.start(rest).map_err(|refusal| refusal.render()),
+            "host" => Os::parse(rest)
+                .map(|parsed| host = parsed)
+                .ok_or_else(|| format!("{rest:?} is not macos, linux or windows")),
+            "sign" => split_fields(rest, 5)
+                .ok_or_else(|| {
+                    format!(
+                        "sign needs <id>:<identity>:<artifact>:<credential>:<source>, got {rest:?}"
+                    )
+                })
+                .and_then(|fields| {
+                    let source = CredentialSource::parse(fields[4]).ok_or_else(|| {
+                        format!("{:?} is not environment, keychain or file", fields[4])
+                    })?;
+                    queue
+                        .attach_signing(
+                            fields[0],
+                            Signing::new(fields[1], CredentialRef::new(fields[3], source)),
+                        )
+                        .map_err(|refusal| refusal.render())?;
+                    let signature = queue
+                        .sign(fields[0], std::path::Path::new(fields[2]), host)
+                        .map_err(|refusal| refusal.render())?;
+                    println!("signature {}", signature.render());
+                    Ok(())
+                }),
             "pass" => {
                 let Some((id, rest)) = rest.split_once(':') else {
                     return report(format!(
@@ -896,6 +983,11 @@ pub(super) fn target_queue(options: &crate::cli::TargetQueueOptions) -> bool {
 
     for line in queue.render() {
         println!("{line}");
+    }
+    for job in queue.jobs() {
+        if let Some(line) = job.signature_line() {
+            println!("signature {}: {line}", job.id);
+        }
     }
     println!("{}", queue.summary().render());
     for artifact in queue.artifacts() {

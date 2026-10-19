@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "8178d04865731ad06d11d6d15129d889bf0ae327",
+    "revision": "504698fec4028b2ddb96609e517d145ea30a25e2",
     "profile": "desktop"
   },
   "levels": {
@@ -16,13 +16,13 @@
       "id": "macos",
       "triple": "aarch64-apple-darwin",
       "designerHost": "certified",
-      "reason": "cargo build --bin rustage 与 target/debug/rustage --version；x86_64-apple-darwin 交叉构建后在 Rosetta 下运行通过（MS10，见 docs/log/log-20261016-4.md §28）"
+      "reason": "cargo build --bin rustage 与 target/debug/rustage --version；x86_64-apple-darwin 交叉构建后在 Rosetta 下运行通过（MS10，见 docs/log/log-20261016-4.md §28）；--launch --exit-after-ms 1500 在 cocoa/NativeInteractive 下真实创建 1280x800 窗口并有界结束（--smoke 也创建了三个真实控件），见 docs/log/log-20261019-2.md §6.1"
     },
     {
       "id": "windows",
-      "triple": "x86_64-pc-windows-gnu（本轮构建证据）/ x86_64-pc-windows-msvc（未构建）",
+      "triple": "x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据）",
       "designerHost": "build-verified",
-      "reason": "cargo build --target x86_64-pc-windows-gnu 通过（mingw-w64 GCC 13，产出 rustage.exe）；cargo clippy --target x86_64-pc-windows-gnu --all-targets 亦通过，见 docs/log/log-20261015-2.md §2；运行证据仍缺（Wine 下的运行按规则 6 不计为实机证据）"
+      "reason": "cargo build --target x86_64-pc-windows-msvc --bin rustage 通过（macOS 宿主 + rust-lld + xwin MSVC SDK/CRT，产出 48M PE32+ rustage.exe）；x86_64-pc-windows-gnu 的构建与 clippy 见 docs/log/log-20261015-2.md §2；运行证据仍缺（无 Windows 实机，Wine 不计为实机证据）"
     },
     {
       "id": "linux",
@@ -37,24 +37,24 @@
       "feature": "desktop",
       "mode1": "unverified",
       "mode1Reason": null,
-      "mode2": "unverified",
-      "mode2Reason": null
+      "mode2": "build-verified",
+      "mode2Reason": "固定依赖 rust_widgets 的 desktop profile 已在 macos、linux 与 windows(msvc) 上真实构建；default 生成源码也已由独立消费者 crate 链接运行"
     },
     {
       "id": "tablet",
       "feature": "tablet",
       "mode1": "unverified",
       "mode1Reason": null,
-      "mode2": "unverified",
-      "mode2Reason": null
+      "mode2": "build-verified",
+      "mode2Reason": "固定依赖 rust_widgets 的 tablet profile 已在 macos(aarch64) 与 windows(msvc) 上真实构建通过；未运行"
     },
     {
       "id": "mobile",
       "feature": "mobile",
       "mode1": "unverified",
       "mode1Reason": null,
-      "mode2": "unverified",
-      "mode2Reason": null
+      "mode2": "build-verified",
+      "mode2Reason": "固定依赖 rust_widgets 的 mobile profile 已在 macos(aarch64) 与 windows(msvc) 上真实构建通过；未运行"
     },
     {
       "id": "mini",
@@ -83,14 +83,14 @@
     {
       "host": "macos",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features tablet --lib 在 aarch64-apple-darwin 上真实构建通过（profile rlib）；未运行，故不写成 certified"
     },
     {
       "host": "macos",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mobile --lib 在 aarch64-apple-darwin 上真实构建通过（profile rlib）；未运行，故不写成 certified"
     },
     {
       "host": "macos",
@@ -107,32 +107,32 @@
     {
       "host": "windows",
       "profile": "desktop",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "cargo build --target x86_64-pc-windows-msvc --bin rustage 交叉构建通过；产物是 PE32+ rustage.exe，未在 Windows 实机运行，故不写成 certified"
     },
     {
       "host": "windows",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features tablet --lib 在 x86_64-pc-windows-msvc 上真实构建通过（rust-lld + xwin MSVC SDK/CRT）；未运行"
     },
     {
       "host": "windows",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mobile --lib 在 x86_64-pc-windows-msvc 上真实构建通过（rust-lld + xwin MSVC SDK/CRT）；未运行"
     },
     {
       "host": "windows",
       "profile": "mini",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mini --lib 在 x86_64-pc-windows-msvc 上真实构建通过；未运行"
     },
     {
       "host": "windows",
       "profile": "embedded",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 以 --no-default-features --features embedded --lib 在 x86_64-pc-windows-msvc 上真实构建通过；未运行"
     },
     {
       "host": "linux",

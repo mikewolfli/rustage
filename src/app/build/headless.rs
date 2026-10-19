@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn the_exported_workflow_pins_the_toolchain_and_the_profile() {
-        let workflow = github_workflow("desktop", "1.98.1", "8178d048");
+        let workflow = github_workflow("desktop", "1.98.1", "504698f");
         assert!(workflow.contains("rustup toolchain install 1.98.1"));
         assert!(workflow.contains("--features desktop"));
         assert!(workflow.contains("rustage --headless generate"));

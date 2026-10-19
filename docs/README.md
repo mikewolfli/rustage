@@ -39,6 +39,41 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [MS10's remaining seams and the MS11 debug client](log/log-20261020-1.md): local device discovery
+  now starts the platform's own tools (`xcrun simctl`, `adb`), SDK detection reads the real
+  installations (iOS 26.2, Android android-36), signing runs `codesign --force --sign` and verifies
+  it, and the generated source for the restricted profiles builds and runs in independent consumer
+  crates (`generated-mini-ok`/`generated-embedded-ok`). The generated mobile source also cross-builds
+  for `aarch64-linux-android` with NDK 29. MS11's F19 is implemented as a real DAP client
+  (`--debug`) with breakpoints, paged inspection, source mapping, hot-update exclusion and recovery;
+  its transport is exercised against a separate DAP process, and a real `lldb-dap` session on macOS
+  stops on a breakpoint, reports `n = 41`, steps out, continues to `value 42` and exits 0. A real
+  attach to an external `sleep` process disconnects without terminating it.
+
+- [Upstream re-pin and the MS09/MS10 remaining closures](log/log-20261019-2.md): the dependency
+  moved to `504698fec4028b2ddb96609e517d145ea30a25e2` (2.8.9), and the host workarounds the old
+  revision needed were removed — the library now moves router focus on a pointer press, grabs GTK
+  focus on `map`, injects `ValueChanged`, and owns the toolkit input-method context. MS09's
+  pause/drain swap is now driven against two real processes (`pause`/`drain`/`resume` on the worker,
+  every `Swap` phase observed, and a zero-limit pause leaves the old generation serving). MS10's
+  Windows desktop combination was built for real with `x86_64-pc-windows-msvc` on the macOS host
+  using `rust-lld` and the xwin-extracted MSVC SDK/CRT (PE32+ `rustage.exe`); the matrix now records
+  11 build-verified cells and 4 unverified. The generation pipeline also got its one explicit write
+  point (`--generate write:<path>`), `tools/generated-project/run.py` builds and runs an
+  independent consumer crate from that source (`generated-ui-ok`), and the terminal's byte pump is a
+  real POSIX pseudo-terminal (`host::pty`, `--terminal exec/…/input/read/wait`), with a Windows
+  ConPTY path compiled via `portable-pty` (not run on Windows here). The macOS host also
+  ran a real cocoa `NativeInteractive` 1280x800 bounded session. Local delivery now detects iOS 26.2
+  and Android android-36 SDKs, discovers 11 iOS simulators through `xcrun simctl` (Android `adb`
+  reported 0 running devices), and signs a real Mach-O with `codesign` (`codesign -v` exit 0);
+  installation itself is still a plan. The language service also has a real stdio LSP transport: it
+  starts `rust-analyzer`, completes `initialize`, reads the server's own capability set, turns a real
+  `textDocument/completion` result into typed items, and shuts it down bounded. The design
+  workbench also has a real window now: `--workbench-gui` opens docked panels, a toolbar, two
+  editor groups with tabs, a status bar, and saves/loads the layout through the shell models;
+  drag-docking and floating panels remain. Recorded in `docs/rw-feedback/feedback-20261019.md`
+  that the §17 requests are closed upstream.
+
 - [Review of blue1–blue10 and the real two-process hot-update walk](log/log-20261019-1.md): the
   review found the milestones signed and no unimplemented task in range, fixed a support-matrix
   document that still claimed every cell was `unverified` while its own table listed build evidence,
@@ -58,13 +93,11 @@ order they are being closed in. It is a work list, not a statement of implemente
   defect where only the widget model, not the OS window, was created). `--smoke` draws a real
   button and field; `--smoke-worker` forwards each real XTest click through a channel to a real
   `--logic-worker` process and logs the toggling `running`/`idle` state. `tools/gui-smoke/run.py`
-  checks click, drag-cancel and the worker toggles. Keyboard is no longer blocked in this smoke: the
-  host grants GTK focus and X input focus, `run.py --keys` produces `abc` and a `Field/change`
-  event, and `run.py --ime` reproduces real fcitx preedit and `commit: 你好` on eight
-  runs (five before and three after the harness fix; an activated `pinyin` method is the
-  environment precondition). The upstream pointer-focus
-  and `ValueChanged` gaps remain open in `feedback-20261015.md` §17; design-time event-binding
-  panels and device targets remain unverified.
+  checks click, drag-cancel and the worker toggles. The keyboard/IME workarounds described here
+  were removed after the upstream re-pin: the library now owns pointer focus, GTK focus and the
+  toolkit IM context, so `run.py --keys`/`--ime` exercise the library path directly (see
+  [log-20261019-2.md](log/log-20261019-2.md)). Old feedback §17 was closed upstream; design-time
+  event-binding panels and device targets remain unverified.
 - [MS10: multi-target projects — target configuration, the versioned capability snapshot, the local
   desktop matrix, the restricted profiles and the certification report](log/log-20261016-4.md):
   `app::targets` (`configuration` — profile, triple, toolchain, SDK, mode and runner, with a profile

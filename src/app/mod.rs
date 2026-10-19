@@ -8,7 +8,7 @@
 //!
 //! * The designer is grouped into one module per feature family — `shell`, `commands`, `editor`,
 //!   `language`, `search`, `canvas`, `layout`, `style`, `data`, `preview`, `generate`, `build`,
-//!   `component`, `application`, `collection`, `logic`, `targets` and `locale` — because a flat
+//!   `component`, `application`, `collection`, `logic`, `targets`, `debug` and `locale` — because a flat
 //!   directory of eighty modules cannot be navigated. The group names are the domains, and the task
 //!   numbers in each module (`T04.01`, `T05.01`, …) are the same families the roadmap uses, so a
 //!   reader can get from a roadmap entry to a file without a second index.
@@ -19,6 +19,9 @@
 //! * `targets` is the output side of the product (F18): the five profiles, their triples, the local
 //!   device tools and the certification evidence. It is kept apart from `build`, which runs the
 //!   toolchain, and from `generate`, which writes one profile's source.
+//! * `debug` is the debug client (F19): it drives a platform adapter over DAP and keeps the source
+//!   mapping, breakpoints and the logic-swap boundary in one place. It is kept apart from `build`
+//!   and `logic`, whose processes it observes but does not own.
 //! * [`run`] stays at the top rather than inside a group: it is the dispatcher every command passes
 //!   through, and its own submodules already follow this same domain split.
 pub mod application;
@@ -28,6 +31,7 @@ pub mod collection;
 pub mod commands;
 pub mod component;
 pub mod data;
+pub mod debug;
 pub mod editor;
 pub mod generate;
 pub mod language;

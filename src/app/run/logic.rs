@@ -1138,8 +1138,10 @@ fn apply_sets(
 /// the new process, because a generation check only one side performs is not a boundary.
 pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
     use crate::app::logic::ipc::{Frame, Kind};
+    use crate::app::logic::migration::Snapshot;
+    use crate::app::logic::swap::Swap;
     use crate::app::logic::worker::Program;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     let mut session_id = String::from("logic-1");
     let mut name = String::from("orders");
@@ -1162,6 +1164,7 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
     let mut from_version = 1u32;
     let mut to_version = None;
     let mut schema_declared = false;
+    let mut pause_limit: Option<u32> = None;
 
     for op in &options.ops {
         let (verb, rest) = op.split_once(':').unwrap_or((op.as_str(), ""));
@@ -1222,6 +1225,15 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                 Err(_) => return report(format!("{rest:?} is not a schema version")),
             },
             "preserve" | "handoff" => handoff = true,
+            "pause-limit" => match rest.parse() {
+                Ok(limit) => {
+                    pause_limit = Some(limit);
+                    // A bounded pause only has a subject when a snapshot is handed off; declaring
+                    // one without `preserve` would describe a switch that never happens.
+                    handoff = true;
+                }
+                Err(_) => return report(format!("{rest:?} is not a pause limit in milliseconds")),
+            },
             "expect" => expected.push(rest.to_owned()),
             "transition" | "first-transition" | "second-transition" | "first-set"
             | "second-set" | "check" | "show" => {}
@@ -1299,7 +1311,7 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
             Err(refusal) => return report(refusal.render()),
         }
     }
-    let mut new_program = Program::new(name, version, second_initial);
+    let mut new_program = Program::new(name, version.clone(), second_initial);
     for transition in second {
         match new_program.with(transition) {
             Ok(next) => new_program = next,
@@ -1337,6 +1349,55 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
             return report(format!("{reason}\n{}", stderr.trim()));
         }
     };
+
+    // T17.06's pause -> drain steps, on the real process. The model (`swap::Swap`) decides
+    // whether the walk is in order and whether the pause missed its limit; the process is what
+    // actually stops applying business events. `pause-limit` is opt-in so the existing
+    // snapshot/restore walk keeps its shape.
+    let mut swap = pause_limit.map(|limit| Swap::begin(version.clone(), version.clone(), limit));
+    if let Some(active) = swap.as_mut() {
+        println!("swap phase: {}", active.phase().name());
+        let paused_at = Instant::now();
+        match ask(&mut old, "pause", timeout) {
+            Ok(reply) if reply == "paused" => {
+                let elapsed = u32::try_from(paused_at.elapsed().as_millis()).unwrap_or(u32::MAX);
+                if let Err(outcome) = active.pause_ticked(elapsed) {
+                    // The deadline passed while the old process was answering. It is still
+                    // serving (the pause reply proves the process is alive), so report the
+                    // bound instead of taking a snapshot of a half-paused generation.
+                    note_old_still_serving(&mut old, first_generation, timeout);
+                    let _ = old.process.finish(Duration::from_secs(2));
+                    return report(outcome.render());
+                }
+                match active.paused() {
+                    Ok(phase) => println!("swap phase: {}", phase.name()),
+                    Err(refusal) => return report(refusal.render()),
+                }
+                match ask(&mut old, "drain", timeout) {
+                    Ok(reply) if reply == "drained" => match active.drain() {
+                        Ok(phase) => println!("swap phase: {}", phase.name()),
+                        Err(refusal) => return report(refusal.render()),
+                    },
+                    Ok(reply) => {
+                        let _ = old.process.finish(Duration::from_secs(2));
+                        return report(format!("the old generation did not drain: {reply:?}"));
+                    }
+                    Err(reason) => {
+                        let _ = old.process.finish(Duration::from_secs(2));
+                        return report(reason);
+                    }
+                }
+            }
+            Ok(reply) => {
+                let _ = old.process.finish(Duration::from_secs(2));
+                return report(format!("the old generation did not pause: {reply:?}"));
+            }
+            Err(reason) => {
+                let _ = old.process.finish(Duration::from_secs(2));
+                return report(reason);
+            }
+        }
+    }
     let snapshot = if handoff {
         match ask(&mut old, "snapshot", timeout) {
             Ok(text) if text.starts_with("state=") => {
@@ -1381,6 +1442,15 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
         },
         None => None,
     };
+    if let Some(active) = swap.as_mut() {
+        // The model records the migrated snapshot's schema version; the raw text is what the new
+        // process receives. Keeping both means a failed migration (above) never reaches here and
+        // an import that succeeds is recorded as the same step the user confirmed.
+        match active.snapshot(Snapshot::new(target_version)) {
+            Ok(phase) => println!("swap phase: {}", phase.name()),
+            Err(refusal) => return report(refusal.render()),
+        }
+    }
 
     let mut new = match start_logic_process(
         &session_id,
@@ -1415,11 +1485,28 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                     unescape_text(state.strip_prefix("state=").unwrap_or(state)),
                     restored.lines().count().saturating_sub(1)
                 );
+                if let Some(active) = swap.as_mut() {
+                    match active.import(true) {
+                        Ok(phase) => println!("swap phase: {}", phase.name()),
+                        Err(outcome) => return report(outcome.render()),
+                    }
+                    match active.confirm() {
+                        Ok(phase) => println!("swap phase: {}", phase.name()),
+                        Err(refusal) => return report(refusal.render()),
+                    }
+                    match active.resume() {
+                        Ok(phase) => println!("swap phase: {}", phase.name()),
+                        Err(refusal) => return report(refusal.render()),
+                    }
+                }
             }
             Ok(restored) if restored.starts_with("error=") => {
                 // The new generation refused the import: its own schema is the receiving side's
                 // check, not a copy of the sender's preview. The switch has not happened, so the
                 // old process is asked for its state before both ends are closed.
+                if let Some(active) = swap.as_mut() {
+                    let _ = active.import(false);
+                }
                 let reason =
                     unescape_text(restored.strip_prefix("error=").unwrap_or(restored.as_str()));
                 note_old_still_serving(&mut old, first_generation, timeout);
@@ -1489,6 +1576,18 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
         match exit {
             Ok(message) => println!("{label} process: {message}"),
             Err(reason) => return report(reason),
+        }
+    }
+    if let Some(active) = swap.as_mut() {
+        // Retirement is last on purpose: the old process has actually exited before the model
+        // says it is gone, so "old version retired" cannot be printed over a live process.
+        if active.retire_old() {
+            println!("swap phase: {}", active.phase().name());
+        } else {
+            return report(format!(
+                "the old version cannot be retired while the swap is {}",
+                active.phase().name()
+            ));
         }
     }
 

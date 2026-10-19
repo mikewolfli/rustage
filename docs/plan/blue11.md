@@ -199,3 +199,21 @@
   macos × desktop/mini/embedded `build-verified`）；命令注册表/菜单/面板仍属尚未实现的窗口层（F04/F21），
   本里程碑只交付可复现的 CLI 接缝与数据，不把“没有窗口”写成“已更新”。
 - **验收人 / 日期 / 工程修订：** 待验收人填写；实现与证据见 [`docs/log/log-20261016-4.md`](../log/log-20261016-4.md) §28。
+- **2026-10-19/20 本地设备与签名补充：** `Sdk::detect` 在真实安装位置识别出 iOS 26.2 与
+  Android android-36；`--target-local discover:ios` 通过 `xcrun simctl` 发现 11 台模拟器（含 1 台
+  `Booted`），`discover:android` 通过 `adb` 返回 0 台（无运行中设备）；`--target-queue ...
+  sign:<id>:<identity>:<artifact>:<credential>:<environment> host:macos` 调用真实 `codesign`，
+  `codesign --verify` 通过。`adb install`/`simctl install` 仍未调用，安装仍到计划。
+  证据见 [`log-20261020-1.md`](../log/log-20261020-1.md) §2。
+- **2026-10-20 受限目标与移动目标补充：** `tools/generated-project/run.py --profile mini|embedded`
+  把 stripped 生成源码写进独立消费者 crate，以对应 profile feature 真实链接并运行
+  （`generated-mini-ok` / `generated-embedded-ok`）；Android 的 `mobile,android` 生成源码在
+  `aarch64-linux-android` + NDK 29 上交叉构建为 ELF aarch64 共享库。两者都仍不是设备运行证据，
+  也不把 Linux 的受限格或真机安装写成已验证。证据见 [`log-20261020-1.md`](../log/log-20261020-1.md) §2。
+- **2026-10-19 Windows 组合补充：** `x86_64-pc-windows-msvc` 在 macOS 宿主上用 `rust-lld` 与
+  xwin 的 MSVC SDK/CRT 真实构建通过（PE32+ `rustage.exe`），支持矩阵 `windows × desktop` 从
+  `unverified` 升为 `build-verified`（15 格中 11 格有构建证据）。macOS 与 Windows 的 tablet/mobile/
+  mini/embedded 也用固定依赖的 profile rlib 真实构建通过；Linux 的四个非 desktop 格仍为
+  `unverified`（上游 mini 在 Linux target 的编译缺陷 + 缺 Linux 交叉链接器）。没有 Windows 实机运行，故不写
+  `certified`；tablet/mobile 的真机运行仍未验证。证据见
+  [`log-20261019-2.md`](../log/log-20261019-2.md) §5、§5.7。

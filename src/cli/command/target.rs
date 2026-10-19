@@ -63,7 +63,7 @@ impl TargetMatrixOptions {
 pub struct TargetMobileOptions {
     /// The operations: `profile:<tablet|mobile>`, `size:<width>x<height>`,
     /// `input:<touch|pointer>:<width>x<height>` (repeatable), `asset:<name>:<kind>:<bytes>`,
-    /// `sdk:<ios|android>:<yes|no>[:<version>]`,
+    /// `sdk:<ios|android>:<yes|no>[:<version>]` or `sdk:<ios|android>:auto`, `host:<system>`,
     /// `evidence:<simulator|device>:<name>:<proof>:<note>`, `check`, `show`.
     pub ops: Vec<String>,
 }
@@ -96,8 +96,9 @@ impl TargetRestrictedOptions {
 pub struct TargetLocalOptions {
     /// The operations: `profile:<name>`, `host:<system>`, `platform:<ios|android>`,
     /// `program:<name>` (repeatable), `device:<id>:<model>:<yes|no>`, `select:<id>`,
-    /// `authorize:<id>`, `package:<identifier>:<version>:<artifact>`, `export:<directory>`,
-    /// `install`, `remote:<host>`, `fail:<step>:<reason>`, `previous:<version>`, `check`, `show`.
+    /// `authorize:<id>`, `discover[:<ios|android>]`, `package:<identifier>:<version>:<artifact>`,
+    /// `export:<directory>`, `install`, `remote:<host>`, `fail:<step>:<reason>`,
+    /// `previous:<version>`, `check`, `show`.
     pub ops: Vec<String>,
 }
 
@@ -113,6 +114,7 @@ impl TargetLocalOptions {
 pub struct TargetQueueOptions {
     /// The operations: `job:<id>:<target>:<build|deploy|sign>`,
     /// `signing:<identity>:<credential>:<environment|keychain|file>`, `start:<id>`,
+    /// `sign:<id>:<identity>:<artifact>:<credential>:<source>`, `host:<system>`,
     /// `pass:<id>:<proof>[:<artifact>]`, `fail:<id>:<reason>`, `cancel:<id>`, `secret:<value>`,
     /// `log:<text>`, `check`, `show`.
     pub ops: Vec<String>,

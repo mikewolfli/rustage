@@ -12,6 +12,28 @@
 
 use super::*;
 
+/// The real workbench window's options (task F04/F21).
+#[derive(Debug, PartialEq, Eq)]
+pub struct WorkbenchGuiOptions {
+    /// Where the layout is loaded from and saved to, when given.
+    pub layout: Option<PathBuf>,
+    /// How long the window may live before it closes itself; zero runs until the window closes.
+    pub exit_after: Duration,
+    /// Drive a short action sequence (toggle panels, save the layout, split) before quitting.
+    pub smoke: bool,
+}
+
+impl Default for WorkbenchGuiOptions {
+    fn default() -> Self {
+        Self {
+            layout: None,
+            // A person opens the window to use it; a bounded default would close it under them.
+            exit_after: Duration::ZERO,
+            smoke: false,
+        }
+    }
+}
+
 /// How long the baseline session should live.
 ///
 /// A start that cannot end is not evidence and not usable by a person, so the duration is part of
@@ -51,6 +73,36 @@ pub(super) fn parse_host(
     arguments: &mut std::vec::IntoIter<OsString>,
 ) -> Option<Result<Command, ParseError>> {
     match text {
+        "--workbench-gui" => {
+            let mut options = WorkbenchGuiOptions::default();
+            while let Some(argument) = arguments.next() {
+                if argument == OsStr::new("--layout") {
+                    let Some(value) = arguments.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    options.layout = Some(PathBuf::from(value));
+                    continue;
+                }
+                if argument == OsStr::new("--exit-after-ms") {
+                    let Some(value) = arguments.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    let Some(milliseconds) =
+                        value.to_str().and_then(|value| value.parse::<u64>().ok())
+                    else {
+                        return Some(Err(ParseError { argument: value }));
+                    };
+                    options.exit_after = Duration::from_millis(milliseconds);
+                    continue;
+                }
+                if argument == OsStr::new("--smoke") {
+                    options.smoke = true;
+                    continue;
+                }
+                return Some(Err(ParseError { argument }));
+            }
+            return Some(Ok(Command::WorkbenchGui(options)));
+        }
         "--launch" => {
             let mut options = LaunchOptions::default();
             let rest = arguments;

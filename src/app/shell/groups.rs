@@ -342,6 +342,14 @@ impl Groups {
         self.groups.get(&group).map(|group| &group.tabs)
     }
 
+    /// A group's tabs for an operation that changes the active tab.
+    ///
+    /// Reading a group is enough for rendering; switching tabs is an edit, and an editor area
+    /// without this accessor would force the window layer to keep a second active-tab mirror.
+    pub fn tabs_mut(&mut self, group: GroupId) -> Option<&mut Tabs> {
+        self.groups.get_mut(&group).map(|group| &mut group.tabs)
+    }
+
     /// The group that has the keyboard, its strip.
     fn focus_tabs(&self) -> &Tabs {
         &self.groups[&self.focus].tabs

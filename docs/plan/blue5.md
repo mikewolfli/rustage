@@ -635,6 +635,14 @@
 - [x] 对应用户旅程/命令/菜单/面板/支持矩阵已更新，后续依赖已确认；无未经批准的 FUTURE 依赖。
 - **验收结论：** 完成（待验收）——F06/F07/F08 共 28 项（T06.01–T06.10、T07.01–T07.10、T08.01–T08.08）均已实现，
   逐任务交付物、结构决定、命令符、用例、当场缺陷与原始 CLI 证据见
-  [`log-20261016-1.md`](../log/log-20261016-1.md) §14–§41 与阶段签收 §42。边界（macOS/Windows 阻塞、GUI 绘制/真实
-  LSP 传输/真实 FS 遍历未接）已如实登记；“实现完成不等于验收完成”，等证据审查后定为验收通过。
+  [`log-20261016-1.md`](../log/log-20261016-1.md) §14–§41 与阶段签收 §42。边界（macOS/Windows 阻塞、GUI 绘制、真实
+  LSP 传输已于 2026-10-19 接上、真实 FS 遍历未接）已如实登记；“实现完成不等于验收完成”，等证据审查后定为验收通过。
 - **验收人 / 日期 / 工程修订：** 待填写（起点 `8cba00c`；本轮改动未提交）。
+- **2026-10-19 真实 LSP 传输与补全补充：** `host::lsp::Client` 已实现真实子进程 + `Content-Length`
+  帧 + `initialize`/`initialized` 握手 + `shutdown`/`exit`；`--language exec:<program> root:<path>
+  view:<project>` 在真实 `rust-analyzer 1.98.1` 上取得能力集（completion、hover、definition、
+  references、symbols、diagnostics、code-action、formatting、rename、inlay-hint、code-lens、
+  call-hierarchy、semantic-selection）。`wait:<ms> complete:<file>:<offset>` 已把真实补全结果转成
+  类型化 `CompletionItem`（`beta [variable] (i32)`）；进程在 `close`/drop 时被停止。三项
+  `tests/language_service.rs` 通过。hover/definition/diagnostics 结果、真实 FS 遍历仍未接，见
+  [`log-20261019-2.md`](../log/log-20261019-2.md) §5.9。

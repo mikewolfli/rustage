@@ -11,7 +11,9 @@
 //!   directory, the environment, the size and the buffer's bounds; the pseudo-terminal itself is a
 //!   platform mechanism, so which one is used is asked of the host ([`mechanism`]) rather than
 //!   assumed here — a `cfg(target_os)` in this file would be the platform branch principle 42 keeps
-//!   out of the layers above the backend.
+//!   out of the layers above the backend. The byte pump lives in `host::pty`: `posix_openpt` on
+//!   Unix and a ConPTY via `portable-pty` on Windows. The Windows path is compiled but has not been
+//!   run on a Windows machine here; the Unix path has runtime evidence.
 //! * **Starting a session is authorized.** [`Session::authorize`] must be answered before a session
 //!   can run, so "the terminal opened by itself" is not a reachable state (principle 19's permission
 //!   rule applied to a process a person drives).

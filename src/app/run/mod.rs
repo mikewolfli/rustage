@@ -42,6 +42,7 @@ mod build;
 mod collection;
 mod component;
 mod data_events;
+mod debug;
 mod design;
 mod document;
 mod editor;
@@ -58,6 +59,7 @@ mod search;
 mod style;
 mod target;
 mod workbench;
+mod workbench_gui;
 use application::*;
 use build::*;
 use collection::*;
@@ -285,6 +287,16 @@ pub fn run(command: Command) {
         }
         Command::Palette(options) => {
             if !palette(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::WorkbenchGui(options) => {
+            if !workbench_gui::workbench_gui(
+                options.layout.clone(),
+                options.exit_after,
+                options.smoke,
+            ) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }
@@ -1119,6 +1131,12 @@ pub fn run(command: Command) {
         }
         Command::TargetCertification(options) => {
             if !target_certification(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Debug(options) => {
+            if !debug::debug(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }

@@ -455,6 +455,99 @@ fn two_real_generations_are_driven_and_the_stale_one_is_refused() {
 }
 
 #[test]
+fn a_paused_swap_walks_every_phase_against_two_real_processes() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rustage"))
+        .args([
+            "--logic-process",
+            "session:pause-1",
+            "name:orders",
+            "version:0.3.0",
+            "generation:3",
+            "new-generation:4",
+            "first:idle",
+            "transition:idle:go:running",
+            "first-set:idle:go:count=number:3",
+            "second:idle",
+            "second-transition:idle:go:running",
+            "second-transition:running:approve:done",
+            "first-event:go",
+            "second-event:approve",
+            "preserve",
+            "pause-limit:5000",
+            "expect:running",
+            "expect:done",
+            "check",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the driver starts");
+    let status = wait(&mut child);
+    let output = child.wait_with_output().expect("the output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    for phase in [
+        "pausing",
+        "paused",
+        "drained",
+        "snapshotted",
+        "imported",
+        "confirmed",
+        "resumed",
+        "retired",
+    ] {
+        assert!(
+            stdout.contains(&format!("swap phase: {phase}")),
+            "missing phase {phase} in:\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("restored generation 4: running (1 field(s))"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("old process: stopped"), "{stdout}");
+}
+
+#[test]
+fn a_pause_past_its_limit_leaves_the_old_generation_serving() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rustage"))
+        .args([
+            "--logic-process",
+            "session:pause-2",
+            "name:orders",
+            "version:0.3.0",
+            "generation:5",
+            "new-generation:6",
+            "first:idle",
+            "transition:idle:go:running",
+            "first-event:go",
+            "preserve",
+            // Zero milliseconds is the deterministic timeout: the reply proves the old process
+            // answered, and the bound is already spent when it did.
+            "pause-limit:0",
+            "check",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the driver starts");
+    let status = wait(&mut child);
+    let output = child.wait_with_output().expect("the output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains("the pause reached") && stdout.contains("limit is 0"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("generation 5 still serving: running"),
+        "the old generation must still be observed serving:\n{stdout}"
+    );
+}
+
+#[test]
 fn a_generation_that_refuses_the_import_does_not_replace_the_old_one() {
     let artifact = candidate_binary();
     let mut driver = Command::new(env!("CARGO_BIN_EXE_rustage"));

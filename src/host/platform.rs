@@ -18,10 +18,8 @@
 //! it behaves under a real display server or a remote session are host-platform facts that need a
 //! person and a screen; this module only drives the documented API and reports what it got.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -43,7 +41,7 @@ pub struct NativePlatform {
     /// The line edit, so the report can read the text the key path actually produced.
     smoke_field: Option<u64>,
     /// The last text the field held, so a real change is reported exactly once.
-    smoke_field_text: Rc<RefCell<String>>,
+    smoke_field_text: Arc<Mutex<String>>,
 }
 
 impl NativePlatform {
@@ -52,7 +50,7 @@ impl NativePlatform {
         Self {
             smoke_clicks: Arc::new(AtomicUsize::new(0)),
             smoke_field: None,
-            smoke_field_text: Rc::new(RefCell::new(String::new())),
+            smoke_field_text: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -93,16 +91,15 @@ impl NativePlatform {
                 reason: "the widget runtime refused the smoke line edit".to_owned(),
             });
         }
-        let last_text = Rc::clone(&self.smoke_field_text);
+        let last_text = Arc::clone(&self.smoke_field_text);
         field.on_value_changed(move |text| {
-            // The pinned revision does not raise this for every key path (feedback §17), so the
-            // polling watcher below is the authoritative producer; this only makes the callback
-            // path observable when it does fire.
+            // The library injects `ValueChanged` after a real edit; the watcher installed below is
+            // the second, de-duplicated observer. Either path may be the first to see a change.
             note_field_change(&last_text, text.to_owned());
         });
         self.smoke_field = Some(field_id);
         if let Some(text) = seed {
-            *self.smoke_field_text.borrow_mut() = text.to_owned();
+            *self.smoke_field_text.lock().expect("smoke text lock") = text.to_owned();
             rust_widgets::set_widget_text(field_id, text);
             emit(
                 Level::Info,
@@ -110,16 +107,14 @@ impl NativePlatform {
                 &format!("smoke field seeded: {text:?}"),
             );
         }
-        // The pinned revision's pointer router does not move keyboard focus on a press (see
-        // docs/rw-feedback/feedback-20261015.md §17), so focusing the field explicitly is the
-        // host-side workaround. The text the key path actually produced is logged after the loop.
-        rust_widgets::widget::runtime::focus_widget(field_id);
+        // The pinned revision now moves router focus on a pointer press itself
+        // (`widget::runtime::dispatch_pointer_event` calls `focus_on_pointer_press`), so the smoke
+        // does not focus the field programmatically. Leaving it to the click is what makes
+        // `--keys` an actual test of the upstream path instead of a host-side workaround.
         emit(
             Level::Info,
             "host::platform",
-            &format!(
-                "smoke field {field_id} focused programmatically; click-to-focus needs upstream"
-            ),
+            &format!("smoke field {field_id} created; clicking it moves focus"),
         );
 
         let submit = handle.new_button("Submit", 220, 40, 160, 40);
@@ -175,200 +170,30 @@ impl NativePlatform {
 impl NativePlatform {
     /// Watches the smoke field and reports each text change once.
     ///
-    /// The pinned revision raises `ValueChanged` for some typing paths but not all (feedback §17),
-    /// and an IME commit can change the text without a key event the host sees. A short poll is the
-    /// smallest host-side answer that covers both: it is not a model of editing, only a change
-    /// detector at the one control the smoke uses. [`note_field_change`] de-duplicates, so a real
-    /// `ValueChanged` callback and this watcher cannot report the same edit twice.
+    /// The library raises `ValueChanged` for typing now, and this watcher is kept as a second
+    /// observer for paths that change text without a key event the host sees (an IME commit is
+    /// delivered by the library, not by the host). [`note_field_change`] de-duplicates, so the
+    /// callback and this watcher cannot report the same edit twice.
     fn install_smoke_text_watcher(&self) {
         let Some(field) = self.smoke_field else {
             return;
         };
-        let last = Rc::clone(&self.smoke_field_text);
-        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
-            let text = rust_widgets::get_widget_text(field);
-            note_field_change(&last, text);
-            gtk::glib::ControlFlow::Continue
-        });
+        let last = Arc::clone(&self.smoke_field_text);
+        // `schedule_on_main` is the library's own cross-platform timer: a host that polls on the
+        // loop thread must not create a toolkit timer from another thread. The callback re-arms
+        // itself, which is the documented way to express repeating work.
+        fn watch(field: u64, last: Arc<Mutex<String>>) {
+            let _ = rust_widgets::schedule_on_main(Duration::from_millis(100), move || {
+                let text = rust_widgets::get_widget_text(field);
+                note_field_change(&last, text);
+                watch(field, last.clone());
+            });
+        }
+        watch(field, last);
         emit(
             Level::Info,
             "host::platform",
             "smoke field text watcher installed (100 ms, de-duplicated)",
-        );
-    }
-
-    /// Wires a real GTK input-method context to the smoke field.
-    ///
-    /// The pinned library records composition state but never connects a toolkit IM context, and
-    /// its window key path never asks one to filter keys. This installs the context the host
-    /// owns, blocks the library's key handlers so composition keys are not also inserted as raw
-    /// text, and forwards preedit/commit through the library's public IME delivery functions.
-    ///
-    /// The context id and the toolkit's `gtk-im-module` setting are logged because they are the
-    /// difference between "a composition-capable context was selected" and "the fallback context
-    /// committed every keystroke". Whether the selected input method is actually composing (fcitx
-    /// can be inactive, or on its `keyboard-us` method) is an environment fact the harness reports
-    /// rather than one this host can claim.
-    ///
-    /// This is a host workaround for the smoke; the upstream fix is feedback §17.
-    fn install_ime(&self, title: &str) -> HostResult<()> {
-        use gtk::prelude::*;
-
-        let Some(field) = self.smoke_field else {
-            return Err(HostError::WindowCreation {
-                reason: "--ime needs --smoke: the smoke field is the IME target".to_owned(),
-            });
-        };
-        let Some(area) = find_paint_area(title) else {
-            return Err(HostError::WindowCreation {
-                reason: "the paint area was not found for the IME context".to_owned(),
-            });
-        };
-
-        let im = gtk::IMMulticontext::new();
-        if !area.is_realized() {
-            area.realize();
-        }
-        area.add_events(
-            gtk::gdk::EventMask::KEY_PRESS_MASK
-                | gtk::gdk::EventMask::KEY_RELEASE_MASK
-                | gtk::gdk::EventMask::FOCUS_CHANGE_MASK,
-        );
-        im.set_client_window(area.window().as_ref());
-        im.set_use_preedit(true);
-        im.set_cursor_location(&gtk::gdk::Rectangle::new(40, 100, 300, 32));
-        let im_module = gtk::Settings::default().and_then(|settings| settings.gtk_im_module());
-        emit(
-            Level::Info,
-            "host::platform",
-            &format!(
-                "smoke IME client window: realized={}, gdk={}, context={:?}, gtk-im-module={:?}",
-                area.is_realized(),
-                area.window().is_some(),
-                im.context_id(),
-                im_module,
-            ),
-        );
-
-        let preedit = im.clone();
-        im.connect_preedit_changed(move |_| {
-            let (text, _attrs, cursor) = preedit.preedit_string();
-            let composition = rust_widgets::platform::ime::ImeComposition {
-                text: text.to_string(),
-                cursor_position: if cursor < 0 {
-                    text.len()
-                } else {
-                    cursor as usize
-                },
-                selection_length: 0,
-            };
-            if !composition.text.is_empty() {
-                emit(
-                    Level::Info,
-                    "host::platform",
-                    &format!("smoke IME preedit: {}", composition.text),
-                );
-            }
-            let _ = rust_widgets::platform::ime::deliver_composition(field, &composition);
-        });
-        let commit_last = Rc::clone(&self.smoke_field_text);
-        im.connect_commit(move |_im, text| {
-            emit(
-                Level::Info,
-                "host::platform",
-                &format!("smoke IME commit: {text}"),
-            );
-            let _ = rust_widgets::platform::ime::deliver_commit(field, text);
-            // The watcher also sees this, but reporting here keeps the commit and the change in
-            // one causal line; the de-duplication makes the second observation a no-op.
-            note_field_change(&commit_last, rust_widgets::get_widget_text(field));
-        });
-
-        self.install_key_bridge(&area, field, Some(im.clone()));
-
-        let focus_in = im.clone();
-        area.connect_focus_in_event(move |_, _| {
-            // The IM context must be told after the GTK widget actually receives focus; calling
-            // `focus_in` at construction time alone raced the window manager's focus handoff, so
-            // fcitx sometimes committed raw letters instead of composing. `reset` drops a stale
-            // composition from the previous focus before the new one starts.
-            focus_in.reset();
-            focus_in.focus_in();
-            emit(
-                Level::Info,
-                "host::platform",
-                "smoke IME focus in (context reset and focused)",
-            );
-            gtk::glib::Propagation::Proceed
-        });
-        let focus_out = im.clone();
-        area.connect_focus_out_event(move |_, _| {
-            focus_out.focus_out();
-            gtk::glib::Propagation::Proceed
-        });
-        im.focus_in();
-        emit(
-            Level::Info,
-            "host::platform",
-            "smoke IME context installed (gtk window im-multicontext)",
-        );
-        Ok(())
-    }
-
-    /// Installs the key path, optionally filtered by an IM context.
-    ///
-    /// With `filter = None` this is not used: the library's own key handlers stay in place so an
-    /// ASCII smoke exercises the real host path. With an IM context the library's handlers are
-    /// blocked first, composition keys go to `filter_keypress`, and the rest is dispatched as the
-    /// same `KeyPress`/`KeyRelease` events the library would have produced.
-    fn install_key_bridge(
-        &self,
-        area: &gtk::DrawingArea,
-        field: u64,
-        filter: Option<gtk::IMMulticontext>,
-    ) {
-        use gtk::prelude::*;
-
-        block_key_handlers(area);
-        let press_filter = filter.clone();
-        area.connect_key_press_event(move |widget, event| {
-            if let Some(im) = &press_filter
-                && im.filter_keypress(event)
-            {
-                return gtk::glib::Propagation::Stop;
-            }
-            let key = *event.keyval();
-            let target = rust_widgets::widget::runtime::focused_widget().unwrap_or(field);
-            let _ = rust_widgets::widget::runtime::dispatch_event(
-                target,
-                &rust_widgets::event::Event::KeyPress {
-                    key,
-                    modifiers: modifier_bits(event.state()),
-                },
-            );
-            widget.queue_draw();
-            gtk::glib::Propagation::Proceed
-        });
-        area.connect_key_release_event(move |widget, event| {
-            let key = *event.keyval();
-            let target = rust_widgets::widget::runtime::focused_widget().unwrap_or(field);
-            let _ = rust_widgets::widget::runtime::dispatch_event(
-                target,
-                &rust_widgets::event::Event::KeyRelease {
-                    key,
-                    modifiers: modifier_bits(event.state()),
-                },
-            );
-            widget.queue_draw();
-            gtk::glib::Propagation::Proceed
-        });
-        emit(
-            Level::Info,
-            "host::platform",
-            &format!(
-                "smoke key bridge installed (IM filter: {})",
-                if filter.is_some() { "yes" } else { "no" }
-            ),
         );
     }
 }
@@ -378,9 +203,9 @@ impl NativePlatform {
 /// Two observers can see the same edit — the library's `ValueChanged` callback and the host's
 /// watcher (or an IME commit) — so the last value is the arbiter. A seed is written into it before
 /// the field is seeded, which keeps a seed from being reported as a user edit.
-fn note_field_change(last: &Rc<RefCell<String>>, text: String) {
+fn note_field_change(last: &Mutex<String>, text: String) {
     let changed = {
-        let mut known = last.borrow_mut();
+        let mut known = last.lock().expect("smoke text lock");
         if *known == text {
             false
         } else {
@@ -461,13 +286,19 @@ impl StartupPlatform for NativePlatform {
         }
         rust_widgets::show_widget(id);
         #[cfg(all(target_os = "linux", feature = "linux-native"))]
-        {
-            grab_paint_area_focus(&request.title);
-            if request.smoke {
-                self.install_smoke_text_watcher();
-                if request.ime {
-                    self.install_ime(&request.title)?;
-                }
+        if request.smoke {
+            self.install_smoke_text_watcher();
+            if request.ime {
+                // The pinned revision owns the toolkit IM context now: the window creates and
+                // focuses an `IMMulticontext`, filters composition keys before the widget layer,
+                // and delivers preedit/commit through `platform::ime`. Installing a second context
+                // here would compose twice, so `--ime` only records that the library path is the
+                // one under test.
+                emit(
+                    Level::Info,
+                    "host::platform",
+                    "smoke IME: the pinned library owns the toolkit input context",
+                );
             }
         }
         Ok(id)
@@ -578,127 +409,6 @@ fn register_system_cjk_face() {
 
 /// A short session used by `--launch` when the caller does not name a duration.
 pub const BASELINE_SESSION: Duration = Duration::from_millis(750);
-
-/// Grants GTK keyboard focus to the window's paint area, without changing the pinned library.
-///
-/// The pinned revision marks the paint area `can_focus` but never grabs focus, so the connected
-/// key handlers never run. This walks the GTK toplevel the host just created, finds its first
-/// `DrawingArea` (the paint area is packed before the surface overlay), and focuses it.
-///
-/// This is a **host workaround for the smoke**, not the general fix: the library still does not
-/// move router focus on a pointer press, so the smoke also focuses its field explicitly. The
-/// upstream request is in `docs/rw-feedback/feedback-20261015.md` §17.
-#[cfg(all(target_os = "linux", feature = "linux-native"))]
-fn grab_paint_area_focus(title: &str) {
-    use gtk::prelude::*;
-
-    let Some(area) = find_paint_area(title) else {
-        emit(
-            Level::Warn,
-            "host::platform",
-            "the paint area was not found, so keyboard focus could not be granted",
-        );
-        return;
-    };
-    area.grab_focus();
-    emit(
-        Level::Info,
-        "host::platform",
-        "paint area grabbed GTK focus (host workaround for upstream §17)",
-    );
-}
-
-/// The first `DrawingArea` under the toplevel whose title is `title`.
-#[cfg(all(target_os = "linux", feature = "linux-native"))]
-fn find_paint_area(title: &str) -> Option<gtk::DrawingArea> {
-    use gtk::prelude::*;
-
-    let window = find_window(title)?;
-    find_drawing_area(window.upcast_ref::<gtk::Widget>())
-}
-
-/// The toplevel whose title is `title`.
-#[cfg(all(target_os = "linux", feature = "linux-native"))]
-fn find_window(title: &str) -> Option<gtk::Window> {
-    use gtk::prelude::*;
-
-    for widget in gtk::Window::list_toplevels() {
-        let Ok(window) = widget.clone().downcast::<gtk::Window>() else {
-            continue;
-        };
-        if window.title().as_deref() == Some(title) {
-            return Some(window);
-        }
-    }
-    None
-}
-
-/// The first `DrawingArea` under `widget`, depth-first.
-#[cfg(all(target_os = "linux", feature = "linux-native"))]
-fn find_drawing_area(widget: &gtk::Widget) -> Option<gtk::DrawingArea> {
-    use gtk::prelude::*;
-
-    if let Ok(area) = widget.clone().downcast::<gtk::DrawingArea>() {
-        return Some(area);
-    }
-    if let Ok(container) = widget.clone().downcast::<gtk::Container>() {
-        for child in container.children() {
-            if let Some(found) = find_drawing_area(&child) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
-/// Blocks the library's own key handlers on `area` so the host IME context can filter keys first.
-#[cfg(all(target_os = "linux", feature = "linux-native"))]
-fn block_key_handlers(area: &gtk::DrawingArea) {
-    use gtk::glib::translate::IntoGlib;
-    use gtk::prelude::*;
-
-    unsafe {
-        let instance: *mut gtk::glib::gobject_ffi::GObject = area.as_ptr().cast();
-        let type_ = gtk::DrawingArea::static_type().into_glib();
-        for signal in ["key-press-event", "key-release-event"] {
-            let name = std::ffi::CString::new(signal).expect("a signal name has no NUL");
-            let id = gtk::glib::gobject_ffi::g_signal_lookup(name.as_ptr(), type_);
-            if id == 0 {
-                continue;
-            }
-            let blocked = gtk::glib::gobject_ffi::g_signal_handlers_block_matched(
-                instance,
-                gtk::glib::gobject_ffi::G_SIGNAL_MATCH_ID,
-                id,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
-            emit(
-                Level::Info,
-                "host::platform",
-                &format!("smoke IME blocked {blocked} {signal} handler(s)"),
-            );
-        }
-    }
-}
-
-/// The widget-layer modifier bits for a GTK key state.
-#[cfg(all(target_os = "linux", feature = "linux-native"))]
-fn modifier_bits(state: gtk::gdk::ModifierType) -> u32 {
-    let mut bits = 0;
-    if state.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
-        bits |= 1;
-    }
-    if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
-        bits |= 2;
-    }
-    if state.contains(gtk::gdk::ModifierType::MOD1_MASK) {
-        bits |= 4;
-    }
-    bits
-}
 
 #[cfg(test)]
 mod tests {

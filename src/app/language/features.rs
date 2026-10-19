@@ -366,6 +366,62 @@ pub fn position_of(text: &str, offset: usize) -> Position {
     crate::app::language::protocol::to_units(text, offset)
 }
 
+/// Reads a `textDocument/completion` result into the model's completion items.
+///
+/// The result is either a `CompletionList` (`{items: […]}`) or a bare array; both are accepted
+/// because servers use both. `insertTextFormat: 2` means the insert text is in the snippet grammar
+/// the editor already has, so the item keeps that fact instead of being shown as plain text.
+pub fn completions_from_lsp(result: &crate::project::record::json::Json) -> Vec<CompletionItem> {
+    use crate::project::record::json::Json;
+
+    let items = match result {
+        Json::Array(items) => items.as_slice(),
+        Json::Object(object) => object.get("items").and_then(Json::as_array).unwrap_or(&[]),
+        _ => return Vec::new(),
+    };
+    items.iter().filter_map(item_from_lsp).collect()
+}
+
+fn item_from_lsp(value: &crate::project::record::json::Json) -> Option<CompletionItem> {
+    use crate::project::record::json::Json;
+
+    let object = value.as_object()?;
+    let label = object.get("label").and_then(Json::as_str)?;
+    let kind = match object.get("kind").and_then(Json::as_u64) {
+        Some(2) | Some(3) | Some(4) => ItemKind::Function,
+        Some(5) | Some(6) | Some(10) | Some(12) | Some(20) | Some(21) => ItemKind::Variable,
+        Some(14) => ItemKind::Keyword,
+        Some(15) => ItemKind::Snippet,
+        _ => ItemKind::Text,
+    };
+    let insert_text = object
+        .get("textEdit")
+        .and_then(Json::as_object)
+        .and_then(|edit| edit.get("newText"))
+        .and_then(Json::as_str)
+        .or_else(|| object.get("insertText").and_then(Json::as_str))
+        .unwrap_or(label);
+    let snippet = object.get("insertTextFormat").and_then(Json::as_u64) == Some(2);
+    let mut item = CompletionItem::new(
+        label,
+        insert_text,
+        if snippet { ItemKind::Snippet } else { kind },
+    );
+    item.detail = object
+        .get("detail")
+        .and_then(Json::as_str)
+        .map(str::to_owned);
+    item.documentation = match object.get("documentation") {
+        Some(Json::String(text)) => Some(text.clone()),
+        Some(Json::Object(object)) => object
+            .get("value")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        _ => None,
+    };
+    Some(item)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -495,5 +551,38 @@ mod tests {
             assert_eq!(ItemKind::from_name(kind.name()), Some(kind));
         }
         assert_eq!(ItemKind::from_name("nowhere"), None);
+    }
+
+    #[test]
+    fn an_lsp_completion_list_becomes_typed_items() {
+        let json = crate::project::record::json::parse(
+            r#"{
+                "isIncomplete": false,
+                "items": [
+                    {"label": "alpha", "kind": 6, "detail": "u32"},
+                    {"label": "println!", "kind": 3, "insertText": "println!($0)",
+                     "insertTextFormat": 2, "documentation": {"kind": "markdown", "value": "print"}},
+                    {"label": "bar", "kind": 5, "textEdit": {"newText": "bar()"}}
+                ]
+            }"#,
+        )
+        .expect("json");
+        let items = super::completions_from_lsp(&json);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].label, "alpha");
+        assert_eq!(items[0].kind, ItemKind::Variable);
+        assert_eq!(items[0].detail.as_deref(), Some("u32"));
+        assert_eq!(items[1].kind, ItemKind::Snippet);
+        assert_eq!(items[1].insert_text, "println!($0)");
+        assert_eq!(items[1].documentation.as_deref(), Some("print"));
+        assert_eq!(items[2].insert_text, "bar()");
+    }
+
+    #[test]
+    fn an_empty_or_wrong_completion_result_is_empty() {
+        let empty = crate::project::record::json::parse("[]").expect("json");
+        assert!(super::completions_from_lsp(&empty).is_empty());
+        let wrong = crate::project::record::json::parse("null").expect("json");
+        assert!(super::completions_from_lsp(&wrong).is_empty());
     }
 }

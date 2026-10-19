@@ -71,6 +71,7 @@ pub(super) fn generate(options: &crate::cli::GenerateOptions) -> bool {
         layout: Vec::new(),
     };
     let mut once = true;
+    let mut write: Option<std::path::PathBuf> = None;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<(), String> = match verb {
@@ -141,6 +142,17 @@ pub(super) fn generate(options: &crate::cli::GenerateOptions) -> bool {
                 once = false;
                 Ok(())
             }
+            "write" => {
+                // Generation is in memory until a caller asks for a file. T15.07's export step
+                // reads generated files, and an independent project needs one to build, so the
+                // pipeline gets one explicit write point rather than making export guess a path.
+                if argument.is_empty() {
+                    Err("write needs <path>".to_owned())
+                } else {
+                    write = Some(std::path::PathBuf::from(argument));
+                    Ok(())
+                }
+            }
             "show" => Ok(()),
             other => Err(format!("{other:?} is not a generate operation")),
         };
@@ -161,6 +173,23 @@ pub(super) fn generate(options: &crate::cli::GenerateOptions) -> bool {
             }
             if !outcome.is_clean() {
                 print!("{}", outcome.source);
+            }
+            if let Some(path) = write {
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                    && let Err(error) = std::fs::create_dir_all(parent)
+                {
+                    return report(format!(
+                        "{} could not be created: {error}",
+                        parent.display()
+                    ));
+                }
+                match std::fs::write(&path, &outcome.source) {
+                    Ok(()) => println!("wrote {} ({} bytes)", path.display(), outcome.source.len()),
+                    Err(error) => {
+                        return report(format!("{} could not be written: {error}", path.display()));
+                    }
+                }
             }
             true
         }

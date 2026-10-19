@@ -1038,6 +1038,9 @@ impl DuplexProcess {
         }
         #[cfg(not(unix))]
         {
+            // A non-unix host has no process group to signal, so the grace period has nothing to
+            // wait for; killing directly is the whole operation.
+            let _ = grace;
             let _ = began;
             let exit = self.kill_directly();
             Termination::DirectOnly {

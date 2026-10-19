@@ -17,13 +17,15 @@ It asserts, in order:
 6. the submit button routes `Submit/submit` to its own binding and reports `state=submitted`,
    and a second submit returns to `idle` (multi-control routing, F13);
 7. with `--keys`, typing `abc` produces field `change` events and `state=editing`;
-8. with `--ime`, an fcitx composition produces real preedit lines and a commit of `你好`.
+8. with `--ime`, an fcitx composition commits `你好` through the library-owned input context.
 
-The keyboard-mode rationale: the pinned rust-widgets revision never gives the GTK paint area
-keyboard focus on a pointer press (feedback §17). The host works around that with
-`grab_focus`, and the smoke's key path is therefore a real delivered key event. `--ime` is
+The keyboard-mode rationale: the pinned rust-widgets revision moves router focus on a pointer
+press (`focus_on_pointer_press`) and its GTK window grabs keyboard focus on `map`, so a real
+click followed by real keys exercises the library path with no host workaround. `--ime` is
 opt-in because it depends on a running input method: the script activates fcitx and selects
-pinyin, then restores what it found.
+pinyin, then restores what it found. The library now owns the toolkit IM context too, so the
+host does not log preedit lines; the committed `你好` is the observable proof that composition
+happened rather than five separate letter commits.
 
 `--ime` is not a claim that every environment composes. If fcitx is inactive or on its
 `keyboard-us` method, GTK correctly receives one commit per letter; the script reports that
@@ -216,7 +218,7 @@ def main() -> int:
     parser.add_argument(
         "--ime",
         action="store_true",
-        help="also compose nihao with fcitx and assert real preedit/commit 你好",
+        help="also compose nihao with fcitx and assert the committed text 你好",
     )
     args = parser.parse_args()
     if args.ime:
@@ -451,9 +453,7 @@ def main() -> int:
     if args.ime:
         expected.extend(
             [
-                "smoke IME preedit: n",
-                "smoke IME preedit: ni hao",
-                "smoke IME commit: 你好",
+                "smoke IME: the pinned library owns the toolkit input context",
                 'event accepted: Field/change (text="你好") -> node 2: call edit (call)',
                 "worker after change: state=editing",
             ]
@@ -487,7 +487,7 @@ def main() -> int:
     if args.keys:
         print("gui-smoke: keyboard change events verified")
     if args.ime:
-        print("gui-smoke: real fcitx preedit and commit verified")
+        print("gui-smoke: real fcitx composition committed 你好")
     print(f"gui-smoke: button region draws {colours} distinct pixel values")
     print(text)
     return 0

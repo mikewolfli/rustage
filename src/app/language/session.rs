@@ -206,7 +206,8 @@ impl State {
     }
 }
 
-/// How a service is started and stopped. A real LSP client fills this in T07.02.
+/// How a service is started and stopped. `host::lsp::Client` is the real implementation used by
+/// `--language exec:<program>`; the scripted launchers in tests exercise the failure paths.
 pub trait Launcher {
     /// Starts a server for a project, reporting the negotiated capabilities or why it failed.
     fn launch(&mut self, project: &str) -> Result<Capabilities, StartupFailure>;
@@ -289,6 +290,15 @@ impl<L: Launcher> Services<L> {
             sessions: BTreeMap::new(),
             launches: 0,
         }
+    }
+
+    /// The launcher, for an operation that has to talk to the real service (a request whose result is
+    /// not part of the session model, such as completion).
+    ///
+    /// The model still owns the session state; this only exposes the transport beneath it, and only
+    /// for the duration of the call.
+    pub fn launcher_mut(&mut self) -> &mut L {
+        &mut self.launcher
     }
 
     /// Opens a view of a project, returning its session and creating (and starting) it only once.
@@ -377,6 +387,69 @@ impl<L: Launcher> Services<L> {
             lines.push(format!("  {}", session.render()));
         }
         lines
+    }
+}
+
+/// Reads the capability set out of an LSP `initialize` result's `capabilities` object.
+///
+/// Provider fields come in two shapes: a boolean (`hoverProvider: true`) and an options object
+/// (`codeActionProvider: {…}`). Both mean the same thing here — the server offers the feature — so
+/// the check is "present and not false/null", not "equals true".
+///
+/// Symbols are one capability in this model but two keys in LSP; either one is enough. Diagnostics
+/// are the pull-model key (`diagnosticProvider`); a push-only server declares no capability for
+/// them and is not given one here.
+pub fn capabilities_from_lsp(capabilities: &crate::project::record::json::Json) -> Capabilities {
+    let Some(object) = capabilities.as_object() else {
+        return Capabilities::none();
+    };
+    let mut found = Vec::new();
+    for (capability, keys) in [
+        (Capability::Completion, &["completionProvider"][..]),
+        (Capability::Hover, &["hoverProvider"][..]),
+        (Capability::Definition, &["definitionProvider"][..]),
+        (Capability::References, &["referencesProvider"][..]),
+        (
+            Capability::Symbols,
+            &["documentSymbolProvider", "workspaceSymbolProvider"][..],
+        ),
+        (Capability::Diagnostics, &["diagnosticProvider"][..]),
+        (Capability::CodeAction, &["codeActionProvider"][..]),
+        (Capability::Formatting, &["documentFormattingProvider"][..]),
+        (Capability::Rename, &["renameProvider"][..]),
+        (Capability::InlayHint, &["inlayHintProvider"][..]),
+        (Capability::CodeLens, &["codeLensProvider"][..]),
+        (Capability::CallHierarchy, &["callHierarchyProvider"][..]),
+        (Capability::TypeHierarchy, &["typeHierarchyProvider"][..]),
+        (
+            Capability::SemanticSelection,
+            &["selectionRangeProvider"][..],
+        ),
+    ] {
+        if keys.iter().any(|key| {
+            matches!(
+                object.get(key),
+                Some(crate::project::record::json::Json::Bool(true))
+                    | Some(crate::project::record::json::Json::Object(_))
+                    | Some(crate::project::record::json::Json::Array(_))
+                    | Some(crate::project::record::json::Json::String(_))
+            )
+        }) {
+            found.push(capability);
+        }
+    }
+    Capabilities::of(found)
+}
+
+impl<L: Launcher> Drop for Services<L> {
+    fn drop(&mut self) {
+        // A session that is still open owns a process. Dropping the registry without telling the
+        // launcher would leave that process to the OS; the scripted launcher treats this as a
+        // no-op, and the real one sends shutdown/exit before its client is dropped.
+        let projects: Vec<String> = self.sessions.keys().cloned().collect();
+        for project in projects {
+            self.launcher.stop(&project);
+        }
     }
 }
 
@@ -504,5 +577,35 @@ mod tests {
         }
         assert_eq!(Capability::from_name("nowhere"), None);
         assert_eq!(Capabilities::none().render(), "none");
+    }
+
+    #[test]
+    fn lsp_capabilities_are_read_from_both_provider_shapes() {
+        let json = crate::project::record::json::parse(
+            r#"{
+                "completionProvider": {"triggerCharacters": ["."]},
+                "hoverProvider": true,
+                "definitionProvider": false,
+                "workspaceSymbolProvider": true,
+                "renameProvider": {"prepareProvider": true},
+                "diagnosticProvider": {"interFileDependencies": true},
+                "unknownProvider": true
+            }"#,
+        )
+        .expect("json");
+        let capabilities = super::capabilities_from_lsp(&json);
+        assert!(capabilities.supports(Capability::Completion));
+        assert!(capabilities.supports(Capability::Hover));
+        assert!(!capabilities.supports(Capability::Definition));
+        assert!(capabilities.supports(Capability::Symbols));
+        assert!(capabilities.supports(Capability::Rename));
+        assert!(capabilities.supports(Capability::Diagnostics));
+        assert!(!capabilities.supports(Capability::Formatting));
+    }
+
+    #[test]
+    fn a_missing_or_non_object_capability_answer_is_empty() {
+        let json = crate::project::record::json::parse("null").expect("json");
+        assert_eq!(super::capabilities_from_lsp(&json), Capabilities::none());
     }
 }

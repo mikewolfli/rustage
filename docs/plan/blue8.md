@@ -449,3 +449,9 @@ check、build、生成、运行有不同命令与结果。终端接真实 PTY，
   `rust-widgets` 依赖构建、窗口化 GUI、真实 PTY 字节流泵、真实交叉工具链下载）已如实登记；
   “实现完成不等于验收完成”，等证据审查后定为验收通过。
 - **验收人 / 日期 / 工程修订：** 待填写（本次会话起点 `f9176f4`；本轮改动未提交）。
+- **2026-10-19 独立生成工程与真实 PTY 补充：** `--generate` 新增 `write:<path>`，把流水线的确定输出真正落到
+  文件；`tools/generated-project/run.py` 用真实二进制生成源码、写一个只依赖固定 `rust_widgets`
+  的消费者 crate、`cargo build` 并运行，得到 `generated-ui-ok`（退出 0）。T16.06 的字节泵也
+  已接到真实 POSIX 主从伪终端（`host::pty`，`--terminal exec/arg/start/input/read/wait/terminate`），
+  `/bin/sh` 与 `/bin/cat` 的三项集成测试通过。这补上了 §22.4 第 1 条“独立生成工程真实构建运行”
+  的完整形态；Windows ConPTY 由 `portable-pty` 接上并通过 msvc 交叉构建，但未在 Windows 实机运行。证据见 [`log-20261019-2.md`](../log/log-20261019-2.md) §5.5–§5.6。

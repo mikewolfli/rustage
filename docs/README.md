@@ -35,24 +35,39 @@ the icon seam and the control-level strip are `src/resources/` and `src/app/shel
 with baselines under `tests/baselines/icons/`.
 
 [Issue record](issues/issue-20261013.md) tracks the icon, resource and packaging gaps and the
-order they are being closed in. It is a work list, not a statement of implemented capability.
+order they are being closed in. [MS12 GUI entry work](issues/issue-20261020.md) tracks the
+designer's canvas, property editor, command palette and debug panel as existing roadmap tasks that
+still need their window entry; both are work lists, not statements of implemented capability.
 
 ## Records
 
-- [2.8.10 re-pin, Linux profiles and the responsive workbench](log/log-20261020-2.md): the dependency
-  moved to `5e3a6f35df4e357fc9e18996b779e2d371e14041` (2.8.10). The upstream release closes
-  `feedback-20261019.md` §4 (Linux × mini now compiles) and adds `WidgetHandle::on_ime_preedit`,
-  which the `--ime` smoke uses to log real fcitx5 pre-edit frames before the committed `你好`.
-  All five profiles now build on Linux as well, so the support matrix records 15/15
-  build-verified cells (none certified). The workbench chrome moved from fixed rectangles to a
-  `rust_widgets::layout::Layout` implementation plus per-panel `BoxLayout`s, and resizing the
-  window to 1600×900 and 1000×700 reflows it (a split changes the editor from one group to two).
-  The state reflows on resize; the GTK backend's missing window repaint until the next input event
-  is recorded as an upstream gap in `docs/rw-feedback/feedback-20261020.md` §3.3.
-  A real `gdb --interpreter=dap` session on Linux now stops on a breakpoint, reports
-  `n: i32 = 41`, evaluates `i32 41`, continues to `value 42` and exits 0; attach to an external
-  `sleep` disconnects without terminating it. GDB's launch/evaluate/variables differences are
-  handled per adapter, and the first-run flaky lifecycle test is recorded rather than hidden.
+- [2.8.11 re-pin, the MS12 journey walk and a page-to-generator seam](log/log-20261020-3.md): the
+  dependency moved to `cee6b22367244527aa407bb9ae67305751f61c26` (2.8.11), which adds
+  `BorderLayout`, panel child factories and the GTK resize repaint fix. The workbench now creates
+  panel children through the panel (no implicit parent contract) and allocates its regions with
+  `BorderLayout`; a `wmctrl` resize repaints without any input event. The MS12 harness
+  (`tools/ms12-journeys/run.py`) drives 74 steps across J01–J09 and J17–J19 and separates real,
+  model and blocked evidence. Two integration defects were found and fixed: page documents could
+  not reach `--generate`, and a new project's root kind was not the generator's `window`. 2.8.11
+  regresses the `embedded` profile (`E0599` on four gated `WidgetKind` variants), so the support
+  matrix backs four Linux cells with 2.8.11 builds, marks the other cells `unverified` (not
+  re-run on this host) and marks `embedded` `unsupported` until upstream fixes it. The same
+  round started the MS12 GUI work: the workbench command palette is now a real panel with a
+  line edit, fuzzy registry search, disabled reasons, row selection and Run/Close, with focus
+  restored on close. The Inspector now edits a schema-checked title through a real line edit and
+  Apply/Clear: a refused value keeps its text and leaves the revision unchanged, while a valid
+  value advances it once. The workbench also has an object tree and a real canvas: one
+  `CanvasState` supplies the Outline rows, hit testing and the selection, so a tree row and a
+  canvas click select the same node; hidden and locked nodes are refused with the reason that
+  applies, and a drag marquee selects every selectable intersection. The selection drives the
+  Inspector, and an accepted title renames the tree node. Enter/Escape and double-click
+  activation are blocked by the pinned GTK key/pointer path and are recorded in
+  `feedback-20261020.md` §0.2/§0.3 rather than faked; the general widget-creation entry returning
+  0 on the native desktop backend is recorded in §0.4, and the host uses the control backend's
+  own Canvas route. The debug panel drives a real gdb DAP session on a worker thread: the panel
+  reports the adapter-verified breakpoint, thread, stack frame and `n: i32 = 41`, and Step/Run/Stop
+  are real commands. A list-box rebuilt from a main-loop timer did not repaint; the panel uses
+  one label per row instead and the behaviour is recorded in §0.5.
 
 - [MS10's remaining seams and the MS11 debug client](log/log-20261020-1.md): local device discovery
   now starts the platform's own tools (`xcrun simctl`, `adb`), SDK detection reads the real

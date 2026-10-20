@@ -10,6 +10,42 @@
 
 use super::*;
 
+/// Reads a generation document, translating a rustage page document first.
+///
+/// `--generate document:` takes the library's widget document (one single-key object per node).
+/// A project page is a different file — a flat node list with `type`, `properties` and `children` —
+/// and [`crate::app::generate::document::to_library_document`] is the one translation between them.
+/// Without this branch the design model could never reach the generator, which is the J01/J06 seam
+/// (principle #26: a translation with no consumer is not an integration).
+fn read_document(path: &str) -> Result<String, String> {
+    use crate::project::record::json;
+
+    let text = read(path)?;
+    let value = match json::parse(&text) {
+        Ok(value) => value,
+        // The generator reports a malformed document with its own diagnosis; leave it to do so.
+        Err(_) => return Ok(text),
+    };
+    let is_page = value
+        .as_object()
+        .map(|object| object.get("page").is_some() && object.get("nodes").is_some())
+        .unwrap_or(false);
+    if !is_page {
+        return Ok(text);
+    }
+
+    use crate::project::document::buffer::root_of;
+    use crate::project::record::page::PageDocument;
+
+    // The project root is a file-system fact here: a page in a project resolves its assets against
+    // that root, and a page outside one is refused rather than resolved against an invented
+    // directory.
+    let root = root_of(std::path::Path::new(path)).map_err(|refusal| refusal.message())?;
+    let page = PageDocument::parse(&root, path, &text).map_err(|error| error.message())?;
+    let root_id = page.page().root();
+    crate::app::generate::document::to_library_document(root_id, page.nodes())
+}
+
 /// Reads a file, or reports why it could not be.
 fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|error| format!("{path} could not be read: {error}"))
@@ -75,7 +111,7 @@ pub(super) fn generate(options: &crate::cli::GenerateOptions) -> bool {
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<(), String> = match verb {
-            "document" => read(argument).map(|text| input.json = text),
+            "document" => read_document(argument).map(|text| input.json = text),
             "node" => match argument.split_once(':') {
                 Some((kind, children)) => match children.parse::<usize>() {
                     Ok(children) => {
@@ -645,4 +681,40 @@ pub(super) fn golden(options: &crate::cli::GoldenOptions) -> bool {
         ok &= comparison.is_match();
     }
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_document;
+
+    #[test]
+    fn a_project_page_is_translated_into_the_generator_document() {
+        let directory = std::env::temp_dir().join(format!(
+            "rustage-generate-page-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("pages")).expect("a temporary project");
+        std::fs::write(directory.join("project.json"), "{}").expect("the project marker");
+        let page = directory.join("pages/main.json");
+        std::fs::write(
+            &page,
+            r#"{"format":1,"page":{"id":1,"name":"Main","root":1},"nodes":[
+                {"id":1,"type":"window","children":[2],"properties":[]},
+                {"id":2,"type":"label","children":[],"properties":[{"name":"text","value":{"text":"Hi"}}]}
+            ]}"#,
+        )
+        .expect("the page document");
+
+        let translated =
+            read_document(page.to_str().expect("a UTF-8 path")).expect("the page translates");
+        assert!(
+            translated.contains("\"window\"") && translated.contains("\"label\""),
+            "{translated}"
+        );
+        assert!(translated.contains("\"Hi\""), "{translated}");
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 }

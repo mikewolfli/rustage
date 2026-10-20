@@ -217,3 +217,12 @@
   [`log-20261020-2.md`](../log/log-20261020-2.md) §5。
 - **验收人 / 日期 / 工程修订：** 待验收人填写；实现与证据见 [`docs/log/log-20261020-1.md`](../log/log-20261020-1.md)、
   [`docs/log/log-20261020-2.md`](../log/log-20261020-2.md)。
+- **2026-10-20 第三次复核（2.8.11）：** Linux gdb 调试链在本轮 MS12 脚本中重跑通过：断点命中
+  `main.rs:3`、`variable n: i32 = 41`、`evaluate i32 41`、`stopped: step`，attach 外部 `sleep`
+  后 disconnect 进程仍存活。窗口内调试面板仍未接线，因此“用户旅程/面板已更新”一项保持未勾选；
+  证据见 [`log-20261020-3.md`](../log/log-20261020-3.md) §4 与 [`blue13.md`](blue13.md)。
+- **2026-10-20 第四次补充（窗口内调试面板）：** 工作台新增 Debug 面板，后台 worker 用同一
+  `Client`/`Book` 启动真实 gdb DAP 会话，显示适配器验证的断点绑定、线程、栈帧与局部变量，
+  并提供 Step/Run/Stop。T19.03–T19.05 因此取得窗口证据；T19.06 的双向导航仍需加载工程
+  `SourceMap`，面板只显示原始位置并明确 `unmapped`。证据见
+  [`log-20261020-3.md`](../log/log-20261020-3.md) §12 与 `tools/gui-smoke/debug.py`。

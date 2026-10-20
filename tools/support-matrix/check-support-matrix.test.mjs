@@ -106,8 +106,8 @@ test('a truncated dependency revision is refused', () => {
 
 test('a document edited out of step with the data is refused', () => {
   const directory = fixture(null, (markdown) => markdown.replace(
-    '| macos | unverified | unverified | unverified | unverified | unverified |',
-    '| macos | certified | unverified | unverified | unverified | unverified |',
+    /^\| linux \| build-verified \|/m,
+    '| linux | certified |',
   ));
   assert.match(messages(directory), /the grid is/);
 });

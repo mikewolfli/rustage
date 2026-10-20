@@ -455,3 +455,7 @@ check、build、生成、运行有不同命令与结果。终端接真实 PTY，
   已接到真实 POSIX 主从伪终端（`host::pty`，`--terminal exec/arg/start/input/read/wait/terminate`），
   `/bin/sh` 与 `/bin/cat` 的三项集成测试通过。这补上了 §22.4 第 1 条“独立生成工程真实构建运行”
   的完整形态；Windows ConPTY 由 `portable-pty` 接上并通过 msvc 交叉构建，但未在 Windows 实机运行。证据见 [`log-20261019-2.md`](../log/log-20261019-2.md) §5.5–§5.6。
+- **2026-10-20 第三次复核（2.8.11）：** 修复两处 F15 seam：`--generate document:` 现在识别页面
+  文档并调用唯一的 `to_library_document` 翻译（此前该翻译无消费者）；新工程的页面根改为生成器
+  认识的 `window`，因此 J01 的“插入→保存→生成”可以落地。证据见
+  [`log-20261020-3.md`](../log/log-20261020-3.md) §2。

@@ -5,11 +5,11 @@
 > 逐行对照该文件校验，改一处而漏另一处会失败。
 > 依据：[项目原则](principle.md) #2/#11/#12/#24/#25、[完整路线图](roadmap.md) T00.03。
 > 需要真机/真设备的项汇总（含已验证标记）：[`docs/platform/verification.md`](../platform/verification.md)。
-> 状态：**矩阵已建立；宿主构建/运行证据有三处——macOS（certified，另有 cocoa NativeInteractive 有界窗口会话）、
-> Linux（certified，构建与有界 GTK 会话见 [log-20261019-1.md](../log/log-20261019-1.md) §2、§5.7）与 Windows（`x86_64-pc-windows-msvc`
-> 真实交叉构建 + `x86_64-pc-windows-gnu` 既有证据，见 [log-20261015-2.md](../log/log-20261015-2.md) §2）。MS10 与后续复核之后，
-> 三宿主的五个 profile 产物均取得真实构建证据；linux × tablet/mobile/mini/embedded 已于 2026-10-20 在 Linux 宿主补齐
-> （2.8.10 修复了 linux × mini 的编译缺陷），见 [log-20261020-2.md](../log/log-20261020-2.md)。**
+> 状态：**2.8.11 重钉后，只有 Linux 宿主重新取得了五个 profile 的构建记录；四格通过，embedded 因上游缺陷失败。
+> macOS 与 Windows 的 2.8.11 构建未在本机复跑，因此按原则 #25 退回 `unverified`（2.8.10 的旧证据保留在日志里，
+> 不作为 2.8.11 证据）。Linux × embedded 与所有 embedded 格因 2.8.11 的 E0599 编译失败标为 `unsupported`，
+> 缺陷见 [feedback-20261020.md](../rw-feedback/feedback-20261020.md) 与
+> [log-20261020-3.md](../log/log-20261020-3.md)。**
 
 ## 这份矩阵回答什么
 
@@ -34,9 +34,9 @@
 
 | 宿主 | triple | 设计器宿主 | 理由 |
 |---|---|---|---|
-| macos | aarch64-apple-darwin | certified | cargo build --bin rustage 与 target/debug/rustage --version；x86_64-apple-darwin 交叉构建后在 Rosetta 下运行通过（MS10，见 docs/log/log-20261016-4.md §28）；--launch --exit-after-ms 1500 在 cocoa/NativeInteractive 下真实创建 1280x800 窗口并有界结束（--smoke 也创建了三个真实控件），见 docs/log/log-20261019-2.md §6.1 |
-| windows | x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据） | build-verified | cargo build --target x86_64-pc-windows-msvc --bin rustage 通过（macOS 宿主 + rust-lld + xwin MSVC SDK/CRT，产出 48M PE32+ rustage.exe）；x86_64-pc-windows-gnu 的构建与 clippy 见 docs/log/log-20261015-2.md §2；运行证据仍缺（无 Windows 实机，Wine 不计为实机证据） |
-| linux | x86_64-unknown-linux-gnu | certified | cargo build --bin rustage 与 target/debug/rustage --version 在 Linux x86_64、rustc 1.98.1 上通过；cargo build --features linux-native 亦通过，--launch --exit-after-ms 8000 在 X11 下映射出真实 1280x800 GTK 窗口（xwininfo），绘制回调填充 clear colour；--launch --smoke 画出真实按钮与文本框并经 XTest 指针事件触发回调；--smoke-worker 把点击经管道送进真实 --logic-worker 并观察到 running/idle；2026-10-20 在 2.8.10 上实跑 tools/gui-smoke/run.py --keys 与 --ime（fcitx5 preedit 逐帧可见、提交你好），--workbench-gui 随窗口尺寸 1280x800→1600x900→1000x700 重排；见 docs/log/log-20261019-1.md §2、§5.7 与 docs/log/log-20261020-2.md §3、§4 |
+| macos | aarch64-apple-darwin | unverified | 2.8.10 上有 cargo build --bin rustage 与有界 cocoa 会话（docs/log/log-20261019-2.md §6.1）；2.8.11 未在本机复跑，宿主格与 profile 格都不冒充新修订证据 |
+| windows | x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据） | unverified | 2.8.10 上有 msvc 交叉构建（macOS 宿主 + rust-lld + xwin，docs/log/log-20261019-2.md）；2.8.11 未在本机复跑，宿主格与 profile 格都不冒充新修订证据；无 Windows 实机，Wine 不计为实机证据 |
+| linux | x86_64-unknown-linux-gnu | certified | 2.8.11 上 cargo build --bin rustage、--features linux-native、五个 profile 的 --lib 构建均通过；--launch --smoke 与 tools/gui-smoke/run.py --keys/--ime 使用真实 GTK/X11 与 fcitx5；--workbench-gui 在 2.8.11 上用 wmctrl 缩放后无需输入即显示新布局；见 docs/log/log-20261020-3.md |
 
 设计器宿主始终是桌面（原则 #2）；上表的"设计器宿主"指**设计器自身**能否在该 OS 上构建与运行，
 与输出目标无关。
@@ -49,52 +49,32 @@
 | tablet | tablet | unverified | build-verified |
 | mobile | mobile | unverified | build-verified |
 | mini | mini | unsupported | build-verified |
-| embedded | embedded | unsupported | build-verified |
+| embedded | embedded | unsupported | unsupported |
 
 - 模式 1（JSON + CSS 运行时加载）仅适用于 desktop/tablet/mobile；mini 与 embedded 必须使用
   模式 2（原则 #11）。这一格是**架构排除**，只会被明确决策改变，不会因为出现证据而变成可用。
-- 模式 2 在全部 profile 上适用；三宿主的五个 profile 均已有真实构建证据（rlib）：`desktop` 在 macOS、
-  Linux 与 Windows 宿主，`tablet`/`mobile`/`mini`/`embedded` 在 macOS、Linux 与 Windows 宿主。Linux 的四格
-  由 2026-10-20 在 Linux x86_64 上以 2.8.10 补齐，见 `docs/log/log-20261020-2.md` §2。构建通过**不**证明
-  产物能在该 profile 运行；没有把上述任何一格写成 `certified`。
+- 模式 2 在 desktop/tablet/mobile/mini 上仍有 2.8.11 的 Linux 构建证据；macOS/Windows 在 2.8.11 上未复跑。
+  `embedded` 的 2.8.11 构建在四条构造器上失败（E0599），因此模式 2 暂标 `unsupported`；这是固定依赖的缺陷，
+  不是架构排除，上游修复后应重新打开。构建通过**不**证明产物能运行；没有把任何一格写成 `certified`。
 
 ## 矩阵（宿主 × profile，模式 2 产物）
 
 | 宿主 \ profile | desktop | tablet | mobile | mini | embedded |
 |---|---|---|---|---|---|
-| macos | build-verified | build-verified | build-verified | build-verified | build-verified |
-| windows | build-verified | build-verified | build-verified | build-verified | build-verified |
-| linux | build-verified | build-verified | build-verified | build-verified | build-verified |
+| macos | unverified | unverified | unverified | unverified | unsupported |
+| windows | unverified | unverified | unverified | unverified | unsupported |
+| linux | build-verified | build-verified | build-verified | build-verified | unsupported |
 
-矩阵的证据范围（MS10 见 [log-20261016-4.md §28](../log/log-20261016-4.md)，Linux 补充见
-[log-20261019-1.md](../log/log-20261019-1.md) 与 [log-20261020-2.md](../log/log-20261020-2.md)）：
+矩阵的证据范围（2.8.11 的本轮记录见 [log-20261020-3.md](../log/log-20261020-3.md)；2.8.10 的旧记录见
+[log-20261020-2.md](../log/log-20261020-2.md)）：
 
-- `macos × desktop`：`cargo build --bin rustage` 与 `target/debug/rustage --version` 通过；
-  生成的 default 源码也已由 `tools/generated-project/run.py` 写进独立消费者 crate、真实链接并运行
-  （`generated-ui-ok`）；该格仍是构建级证据，不是设备认证。
-- `macos × mini`：`cargo build --manifest-path <rust-widgets>/Cargo.toml --no-default-features
-  --features mini --lib` 通过（rlib 84,282,248 字节）；`--generate target:stripped` 产出 441 字节源码。
-- `macos × embedded`：同一命令换成 `--features embedded` 通过（rlib 69,528,992 字节）。
-- `linux × desktop`（2026-10-19）：`cargo build --bin rustage` 与 `target/debug/rustage
-  --version` 在 Linux x86_64、rustc 1.98.1 上通过；`--logic-process` 的真实双进程走查也在同一
-  宿主上通过（见 [log-20261019-1.md §2](../log/log-20261019-1.md)）。生成物本身尚未链接，
-  因此这一格是构建级证据。
-- `windows × desktop`（2026-10-19 第二次记录）：`cargo build --target x86_64-pc-windows-msvc --bin
-  rustage` 在 macOS 宿主上用 rust-lld 与 xwin 提取的 MSVC SDK/CRT 通过，产出 PE32+ `rustage.exe`；
-  尚未在 Windows 实机运行，故为构建级证据。见 [log-20261019-2.md](../log/log-20261019-2.md)。
-- `macos × tablet` / `macos × mobile`（2026-10-19）：固定依赖以 `--no-default-features --features
-  tablet|mobile --lib` 在 `aarch64-apple-darwin` 上真实构建通过；未运行。
-- `windows × tablet/mobile/mini/embedded`（2026-10-19）：同一命令分别在 `x86_64-pc-windows-msvc`
-  上用 rust-lld + xwin 的 MSVC SDK/CRT 真实构建通过；未运行。
-- `tablet`/`mobile` 之前的两行“仍未验证”已不再成立：两个 profile 在 macOS、Linux 与 Windows 宿主上都有
-  真实 profile 构建。Linux 的 `tablet`/`mobile`/`mini`/`embedded` 已在 2026-10-20 于 Linux x86_64 上以
-  `--no-default-features --features <profile> --lib` 真实构建通过；`mini` 的 Linux 编译缺陷由上游 2.8.10
-  修复（`locale::from_environment` 的 alloc-frugal 分支与 `compat::Vec` 导入）。证据见
-  [log-20261020-2.md](../log/log-20261020-2.md) §2；没有把“编译到 rlib”写成“已运行”。
-
-15 格现在全部为 `build-verified`。这是**事实而非保守**：三宿主的五 profile 都有真实构建记录，但没有
-任何一格是 `certified`，因为 profile 产物（或宿主可执行文件）尚未在对应的目标设备/OS 上以该 profile
-运行。矩阵的价值在于它是逐格可核对的声明点——补上证据时只改一格，而不是重写一段"基本支持"的描述。
+- `linux × desktop/tablet/mobile/mini`（2.8.11）：`cargo build --manifest-path <rust-widgets>/Cargo.toml
+  --no-default-features --features <profile> --lib` 在 Linux x86_64、rustc 1.98.1 上真实通过。
+- `linux × embedded`（2.8.11）：同一命令失败，错误是 `WidgetKind::TabWidget/Splitter/Grid/Dialog`
+  不存在；四个新构造器用 `#[cfg(not(alloc_frugal))]` 门控，而变体由 `widgets_unstripped` 门控。
+  这是固定依赖的缺陷，已记入上游反馈。
+- `macos × *` 与 `windows × *`：2.8.11 未在本机复跑；表中退回 `unverified`，旧证据不冒充新修订。
+- `macos × desktop` 的设计器宿主 `certified` 仍描述 2.8.10 的窗口会话；它不覆盖 profile 格。
 
 ## 规则
 

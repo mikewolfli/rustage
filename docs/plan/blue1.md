@@ -232,3 +232,7 @@
   （见 [`support-matrix.md`](support-matrix.md)）；基准环境没有性能数据点；`cargo test`/`fmt`/`clippy`/`--probe-apis` 四个 Rust 门禁仍是
   人工门禁，未进 CI；MS00 没有端到端界面演示（其交付物是契约、登记、原型、数据集与门禁）。逐条见
   [`log-20261015-1.md`](../log/log-20261015-1.md) §12。
+- **2026-10-20 第三次复核（2.8.11）：** 支持矩阵随依赖重钉重算：Linux 的 desktop/tablet/mobile/mini
+  以 2.8.11 真实构建通过；macOS/Windows 未在 2.8.11 复跑，退回 `unverified`；embedded 因上游 E0599
+  标为 `unsupported`。这不是 MS00 的契约变化，而是“证据必须对被验证的修订成立”的后果，见
+  [`log-20261020-3.md`](../log/log-20261020-3.md) 与 [`support-matrix.md`](support-matrix.md)。

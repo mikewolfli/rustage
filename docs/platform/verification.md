@@ -73,23 +73,26 @@
 
 ## 2. 输出 profile 与设备（T00.03 的 15 格 + F18 多目标与部署）
 
-[支持矩阵](../plan/support-matrix.md) 的 15 格中，2026-10-20 之后全部为 `build-verified`
-（三宿主 × 五 profile）。逐格补法是"在某一宿主上为某一 profile 建立构建或运行证据"；构建通过
-不等于运行，因此没有任何 profile 格写成 `certified`：
+[支持矩阵](../plan/support-matrix.md) 的 15 格在 2.8.11 重钉后只有 Linux 的四格重新取得
+构建记录，`embedded` 因上游 E0599 失败，macOS/Windows 未在本机复跑而退回 `unverified`；
+构建通过不等于运行，因此没有任何 profile 格写成 `certified`：
+
+> **2.8.11 边界：** 下面 B4–B11 的 ✅ 描述的是 2.8.10 的构建记录；它们不是 2.8.11 证据，
+> 矩阵已按原则 #25 退回 `unverified`。B2/B3 已按 2.8.11 重跑，B3 的 embedded 一半失败。
 
 | # | 格 | 需要什么 | 状态 |
 |---|---|---|---|
 | B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ✅ `build-verified`：本机 `cargo build --bin rustage` 与 `--features linux-native` 原生会话（[log-20261019-1 §5.7、§11](../log/log-20261019-1.md)）；生成物本身未链接，故不写 `certified` |
-| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接 | ✅ `build-verified`：固定依赖 2.8.10 以 `--no-default-features --features tablet|mobile --lib` 在 Linux x86_64 真实构建通过（[log-20261020-2 §6](../log/log-20261020-2.md)）；未运行 |
-| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建 | ✅ `build-verified`：2.8.10 修复了 `linux × mini` 的编译缺陷，mini 与 embedded 的 rlib 在 Linux x86_64 真实构建通过（[log-20261020-2 §6](../log/log-20261020-2.md)）；未运行 |
+| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接 | ✅ `build-verified`：固定依赖 2.8.11 以 `--no-default-features --features tablet|mobile --lib` 在 Linux x86_64 真实构建通过（[log-20261020-3](../log/log-20261020-3.md)）；未运行 |
+| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建 | ⏳ 部分：2.8.11 的 mini rlib 真实构建通过；embedded 以同一命令失败（`WidgetKind` 变体被 `widgets_unstripped` 门控，而新构造器用 `not(alloc_frugal)` 门控），已记上游缺陷（[feedback-20261020](../rw-feedback/feedback-20261020.md)） |
 | B4 | macos × desktop | macOS 机器 | ✅ `build-verified`：desktop 构建通过；default 生成源码已由独立消费者 crate 链接运行 |
-| B5 | macos × tablet / mobile | macOS 上的 profile 构建（运行仍需目标 SDK/设备） | ✅ `build-verified`：tablet/mobile rlib 在 aarch64-apple-darwin 构建通过；无设备运行 |
-| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ✅ `build-verified`：两个 profile 的 rlib 真实构建通过；无板卡 |
-| B7–B11 | windows × 五个 profile | Windows 机器（构建用交叉编译，运行仍需机器） | ✅ `build-verified` ×5：msvc 交叉构建 + tablet/mobile/mini/embedded rlib；运行待真机 |
+| B5 | macos × tablet / mobile | macOS 上的 profile 构建（运行仍需目标 SDK/设备） | ⏳ 2.8.10 的 tablet/mobile rlib 构建通过；2.8.11 未复跑（[log-20261020-3](../log/log-20261020-3.md)） |
+| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ⏳ 2.8.10 的 rlib 构建通过；2.8.11 的 embedded 在源码层已失败，未复跑 |
+| B7–B11 | windows × 五个 profile | Windows 机器（构建用交叉编译，运行仍需机器） | ⏳ 2.8.10 的 msvc 交叉构建与 rlib 记录；2.8.11 未复跑，矩阵退回 `unverified` |
 | B12 | tablet/mobile 的**真设备**运行 | Android/iOS 真机 | ⏳ 待真机：路线图 T18.04 要求**模拟器与真设备分别记录**，不得互相顶替 |
 | B13 | mini/embedded 的容量与链接审计 | 目标设备 + 容量门禁 | ⏳ 部分：实际 profile build 通过，链接审计基于真实 `cargo tree`；无目标设备 |
 | B14 | 本地设备发现/选择/认证、打包导出与安装 | 每类设备 | ⏳ 部分：iOS/Android SDK 自动探测与真实设备发现已验证（xcrun simctl 11 台、adb 0 台）；macOS `codesign` 与 Linux `gpg` 均真实签名并验证；Windows `signtool` 与安装仍只到计划（[log-20261019-2 §5.8](../log/log-20261019-2.md)、[log-20261020-2 §6.3](../log/log-20261020-2.md)） |
-| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；15 格全部为构建级，但没有 profile 产物在对应设备/OS 上运行（[log-20261020-2 §6](../log/log-20261020-2.md)） |
+| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；2.8.11 只有 Linux 四格的构建级证据，embedded 被上游缺陷阻塞，没有 profile 产物在对应设备/OS 上运行（[log-20261020-3](../log/log-20261020-3.md)） |
 
 ## 3. 鸿蒙 2in1（不在"三宿主"内，单独跟踪）
 

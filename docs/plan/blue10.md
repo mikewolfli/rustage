@@ -236,3 +236,7 @@
   焦点、`ValueChanged` 与 IME context 接管，宿主的 `grab_focus`/`XSetInputFocus`/自建 IM
   context 绕行已删除。Linux 真实窗口复跑仍待做，见
   [`feedback-20261019.md`](../rw-feedback/feedback-20261019.md)。
+- **2026-10-20 第三次复核（2.8.11）：** 依赖重钉到 `cee6b223`；`--logic-process` 的双进程快照/
+  导入与迟到帧隔离在 2.8.11 上重跑通过（`snapshot generation 1: running` →
+  `restored generation 2: running` → `fault=the frame is from generation 1, not 2`）。
+  证据见 [`log-20261020-3.md`](../log/log-20261020-3.md) §4。

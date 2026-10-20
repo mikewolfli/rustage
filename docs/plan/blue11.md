@@ -226,3 +226,8 @@
   第二次补充改为 15/15 `build-verified`。没有 Windows 实机运行，故不写
   `certified`；tablet/mobile 的真机运行仍未验证。证据见
   [`log-20261019-2.md`](../log/log-20261019-2.md) §5、§5.7。
+- **2026-10-20 第三次复核（2.8.11）：** 2.8.11 的 embedded profile 因 E0599 不能编译（四个新构造器
+  用 `not(alloc_frugal)` 门控，而 `WidgetKind` 变体用 `widgets_unstripped` 门控）。Linux 的
+  desktop/tablet/mobile/mini 在 2.8.11 上真实构建通过；embedded 与未复跑的 macOS/Windows 格按
+  原则 #25 降级。缺陷与宿主处理见 [`feedback-20261020.md` §0.1](../rw-feedback/feedback-20261020.md)
+  和 [`support-matrix.md`](support-matrix.md)。

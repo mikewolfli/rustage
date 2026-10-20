@@ -790,7 +790,11 @@ fn template_files(
             PageId::from_raw(1),
             NodeId::from_raw(1),
             name,
-            NodeKind::new("page").expect("`page` is a kind"),
+            // A page document is also the unit a window is described by (decision Q5), and the
+            // generator's document has a `window` root. A template whose root kind was `page`
+            // produced a design that no generator could consume: J01's first-app chain ended at
+            // "no control by that name". The root of a new page is therefore the window it is.
+            NodeKind::new("window").expect("`window` is a kind"),
             page_document,
         )
         .ok_or(CreationRefusal::NameIsEmpty)?;
@@ -919,7 +923,9 @@ mod tests {
         assert_eq!(plan.files()[0].what(), "the project document");
         assert!(plan.files()[0].contents().contains("\"name\": \"Demo\""));
         assert!(plan.files()[0].contents().contains("\"generated\""));
-        assert!(plan.files()[1].contents().contains("\"type\": \"page\""));
+        // The first page's root is the window the page is; the generator consumes `window`,
+        // not the document's own `page` metadata member.
+        assert!(plan.files()[1].contents().contains("\"type\": \"window\""));
         // The staging directory is beside the project, on the same filesystem, so the move is one
         // operation.
         assert_eq!(plan.staging().parent(), Some(sandbox.root.as_path()));

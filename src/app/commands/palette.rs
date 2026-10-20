@@ -22,9 +22,10 @@
 //!   help line and its typed parameters, taken from the registry entry, so the palette cannot offer an
 //!   argument the command does not take.
 
-// The palette's grouping, help accessors and the entry-to-command conversion are exercised by the
-// tests until a palette surface (T04.07/T26) reads them; the silence is stated once here with its
-// reason, as the neighbouring trees do.
+// The search, recents, help and entry-to-command conversion are consumed by the workbench
+// palette (`src/app/run/workbench_palette.rs`). The grouping helpers (`categories`) remain for
+// the menu surface (T04.07) and are exercised by the tests below; the module-level allow states
+// that boundary once rather than hiding a warning per function.
 #![allow(dead_code)]
 
 use crate::app::commands::command::{Command, CommandId, ParamType, Registry};

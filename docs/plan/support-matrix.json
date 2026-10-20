@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "5e3a6f35df4e357fc9e18996b779e2d371e14041",
+    "revision": "cee6b22367244527aa407bb9ae67305751f61c26",
     "profile": "desktop"
   },
   "levels": {
@@ -15,20 +15,20 @@
     {
       "id": "macos",
       "triple": "aarch64-apple-darwin",
-      "designerHost": "certified",
-      "reason": "cargo build --bin rustage 与 target/debug/rustage --version；x86_64-apple-darwin 交叉构建后在 Rosetta 下运行通过（MS10，见 docs/log/log-20261016-4.md §28）；--launch --exit-after-ms 1500 在 cocoa/NativeInteractive 下真实创建 1280x800 窗口并有界结束（--smoke 也创建了三个真实控件），见 docs/log/log-20261019-2.md §6.1"
+      "designerHost": "unverified",
+      "reason": "2.8.10 上有 cargo build --bin rustage 与有界 cocoa 会话（docs/log/log-20261019-2.md §6.1）；2.8.11 未在本机复跑，宿主格与 profile 格都不冒充新修订证据"
     },
     {
       "id": "windows",
       "triple": "x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据）",
-      "designerHost": "build-verified",
-      "reason": "cargo build --target x86_64-pc-windows-msvc --bin rustage 通过（macOS 宿主 + rust-lld + xwin MSVC SDK/CRT，产出 48M PE32+ rustage.exe）；x86_64-pc-windows-gnu 的构建与 clippy 见 docs/log/log-20261015-2.md §2；运行证据仍缺（无 Windows 实机，Wine 不计为实机证据）"
+      "designerHost": "unverified",
+      "reason": "2.8.10 上有 msvc 交叉构建（macOS 宿主 + rust-lld + xwin，docs/log/log-20261019-2.md）；2.8.11 未在本机复跑，宿主格与 profile 格都不冒充新修订证据；无 Windows 实机，Wine 不计为实机证据"
     },
     {
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
       "designerHost": "certified",
-      "reason": "cargo build --bin rustage 与 target/debug/rustage --version 在 Linux x86_64、rustc 1.98.1 上通过；cargo build --features linux-native 亦通过，--launch --exit-after-ms 8000 在 X11 下映射出真实 1280x800 GTK 窗口（xwininfo），绘制回调填充 clear colour；--launch --smoke 画出真实按钮与文本框并经 XTest 指针事件触发回调；--smoke-worker 把点击经管道送进真实 --logic-worker 并观察到 running/idle；2026-10-20 在 2.8.10 上实跑 tools/gui-smoke/run.py --keys 与 --ime（fcitx5 preedit 逐帧可见、提交你好），--workbench-gui 随窗口尺寸 1280x800→1600x900→1000x700 重排；见 docs/log/log-20261019-1.md §2、§5.7 与 docs/log/log-20261020-2.md §3、§4"
+      "reason": "2.8.11 上 cargo build --bin rustage、--features linux-native、五个 profile 的 --lib 构建均通过；--launch --smoke 与 tools/gui-smoke/run.py --keys/--ime 使用真实 GTK/X11 与 fcitx5；--workbench-gui 在 2.8.11 上用 wmctrl 缩放后无需输入即显示新布局；见 docs/log/log-20261020-3.md"
     }
   ],
   "profiles": [
@@ -38,7 +38,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 的 desktop profile 已在 macos、linux 与 windows(msvc) 上真实构建；default 生成源码也已由独立消费者 crate 链接运行"
+      "mode2Reason": "固定依赖 rust_widgets 2.8.11 的 desktop profile 已在 Linux x86_64 上真实构建通过；macOS/Windows 在 2.8.11 上未复跑；见 docs/log/log-20261020-3.md"
     },
     {
       "id": "tablet",
@@ -46,7 +46,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 的 tablet/mobile profile 已在 macos、linux 与 windows(msvc) 上真实构建通过；未运行"
+      "mode2Reason": "固定依赖 rust_widgets 2.8.11 的 tablet profile 已在 Linux x86_64 上真实构建通过；macOS/Windows 在 2.8.11 上未复跑；见 docs/log/log-20261020-3.md"
     },
     {
       "id": "mobile",
@@ -54,7 +54,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 的 tablet/mobile profile 已在 macos、linux 与 windows(msvc) 上真实构建通过；未运行"
+      "mode2Reason": "固定依赖 rust_widgets 2.8.11 的 mobile profile 已在 Linux x86_64 上真实构建通过；macOS/Windows 在 2.8.11 上未复跑；见 docs/log/log-20261020-3.md"
     },
     {
       "id": "mini",
@@ -62,107 +62,107 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features mini|embedded --lib 在 macos、linux 与 windows(msvc) 上真实构建通过；见 docs/log/log-20261020-2.md"
+      "mode2Reason": "固定依赖 rust_widgets 2.8.11 的 mini profile 已在 Linux x86_64 上真实构建通过；macOS/Windows 在 2.8.11 上未复跑；见 docs/log/log-20261020-3.md"
     },
     {
       "id": "embedded",
       "feature": "embedded",
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
-      "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features mini|embedded --lib 在 macos、linux 与 windows(msvc) 上真实构建通过；见 docs/log/log-20261020-2.md"
+      "mode2": "unsupported",
+      "mode2Reason": "固定依赖 2.8.11 的 embedded profile 在 --no-default-features --features embedded --lib 下编译失败（WidgetKind::{TabWidget,Splitter,Grid,Dialog} 被 not(alloc_frugal) 门控的构造器引用，但变体由 widgets_unstripped 门控）；缺陷见 docs/rw-feedback/feedback-20261020.md，修复前没有构建证据"
     }
   ],
   "cells": [
     {
       "host": "macos",
       "profile": "desktop",
-      "status": "build-verified",
-      "reason": "cargo build --bin rustage（rust_widgets desktop feature）通过，并用 --generate 产出 default 模板源码；生成物本身尚未链接"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "macos",
       "profile": "tablet",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features tablet --lib 在 aarch64-apple-darwin 上真实构建通过（profile rlib）；未运行，故不写成 certified"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "macos",
       "profile": "mobile",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mobile --lib 在 aarch64-apple-darwin 上真实构建通过（profile rlib）；未运行，故不写成 certified"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "macos",
       "profile": "mini",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mini --lib 真实构建通过（84,282,248 字节 rlib）；生成物本身尚未链接"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "macos",
       "profile": "embedded",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features embedded --lib 真实构建通过（69,528,992 字节 rlib）；生成物本身尚未链接"
+      "status": "unsupported",
+      "reason": "固定依赖 2.8.11 的 embedded profile 在 --no-default-features --features embedded --lib 下编译失败（WidgetKind::{TabWidget,Splitter,Grid,Dialog} 被 not(alloc_frugal) 门控的构造器引用，但变体由 widgets_unstripped 门控）；缺陷见 docs/rw-feedback/feedback-20261020.md，修复前没有构建证据"
     },
     {
       "host": "windows",
       "profile": "desktop",
-      "status": "build-verified",
-      "reason": "cargo build --target x86_64-pc-windows-msvc --bin rustage 交叉构建通过；产物是 PE32+ rustage.exe，未在 Windows 实机运行，故不写成 certified"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "windows",
       "profile": "tablet",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features tablet --lib 在 x86_64-pc-windows-msvc 上真实构建通过（rust-lld + xwin MSVC SDK/CRT）；未运行"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "windows",
       "profile": "mobile",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mobile --lib 在 x86_64-pc-windows-msvc 上真实构建通过（rust-lld + xwin MSVC SDK/CRT）；未运行"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "windows",
       "profile": "mini",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features mini --lib 在 x86_64-pc-windows-msvc 上真实构建通过；未运行"
+      "status": "unverified",
+      "reason": "2.8.11 重钉后未在本机复跑：本机是 Linux，只有该修订的 Linux 构建证据；2.8.10 的旧证据保留在 docs/log/log-20261020-2.md，不作为 2.8.11 证据"
     },
     {
       "host": "windows",
       "profile": "embedded",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 以 --no-default-features --features embedded --lib 在 x86_64-pc-windows-msvc 上真实构建通过；未运行"
+      "status": "unsupported",
+      "reason": "固定依赖 2.8.11 的 embedded profile 在 --no-default-features --features embedded --lib 下编译失败（WidgetKind::{TabWidget,Splitter,Grid,Dialog} 被 not(alloc_frugal) 门控的构造器引用，但变体由 widgets_unstripped 门控）；缺陷见 docs/rw-feedback/feedback-20261020.md，修复前没有构建证据"
     },
     {
       "host": "linux",
       "profile": "desktop",
       "status": "build-verified",
-      "reason": "cargo build --bin rustage（rust_widgets desktop feature）通过，并在 Linux x86_64 上运行 --version；生成物本身尚未链接；见 docs/log/log-20261019-1.md §2"
+      "reason": "固定依赖 rust_widgets 2.8.11 以 --no-default-features --features desktop --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-3.md"
     },
     {
       "host": "linux",
       "profile": "tablet",
       "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features tablet --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
+      "reason": "固定依赖 rust_widgets 2.8.11 以 --no-default-features --features tablet --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-3.md"
     },
     {
       "host": "linux",
       "profile": "mobile",
       "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features mobile --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
+      "reason": "固定依赖 rust_widgets 2.8.11 以 --no-default-features --features mobile --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-3.md"
     },
     {
       "host": "linux",
       "profile": "mini",
       "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features mini --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
+      "reason": "固定依赖 rust_widgets 2.8.11 以 --no-default-features --features mini --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-3.md"
     },
     {
       "host": "linux",
       "profile": "embedded",
-      "status": "build-verified",
-      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features embedded --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
+      "status": "unsupported",
+      "reason": "固定依赖 2.8.11 的 embedded profile 在 --no-default-features --features embedded --lib 下编译失败（WidgetKind::{TabWidget,Splitter,Grid,Dialog} 被 not(alloc_frugal) 门控的构造器引用，但变体由 widgets_unstripped 门控）；缺陷见 docs/rw-feedback/feedback-20261020.md，修复前没有构建证据"
     }
   ]
 }

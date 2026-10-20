@@ -25,7 +25,7 @@
 use std::any::Any;
 
 use rust_widgets::core::{ObjectId, Rect};
-use rust_widgets::layout::Layout;
+use rust_widgets::layout::{BorderLayout, BorderRegion, Layout};
 
 /// The gap between regions, and the window's outer margin.
 const GAP: u32 = 8;
@@ -68,8 +68,12 @@ pub(super) enum Area {
         /// Which editor group.
         group: u32,
     },
+    /// The design canvas, over the first editor group's text area.
+    Canvas,
     /// The status bar, full width at the bottom.
     Status,
+    /// The command palette, centred over the content while it is open.
+    Palette,
 }
 
 // The last client size any workbench layout pass ran for on this thread.
@@ -130,6 +134,36 @@ impl WorkbenchLayout {
         let bottom_y = status_y - GAP as i32 - bottom_height as i32;
         let content_height = (bottom_y - GAP as i32 - content_top).max(0) as u32;
 
+        // The region shapes are still the workbench's own (this chrome is not a document subtree),
+        // but the pixel allocation inside each region is the library's `BorderLayout`: fixed
+        // tracks for a vertical stack, equal-stretch center tracks for a row. That keeps the
+        // spacing/clamp rules out of the host (feedback-20261020 §3.2, closed by 2.8.11).
+        let left_slices = slices(
+            Rect::new(rect.x, content_top, left_width, content_height),
+            self.count(|area| matches!(area, Area::LeftPanel { .. })),
+            true,
+        );
+        let right_slices = slices(
+            Rect::new(
+                rect.x + width.saturating_sub(right_width) as i32,
+                content_top,
+                right_width,
+                content_height,
+            ),
+            self.count(|area| matches!(area, Area::RightPanel { .. })),
+            true,
+        );
+        let bottom_slices = slices(
+            Rect::new(center_x, bottom_y, center_width, bottom_height),
+            self.count(|area| matches!(area, Area::BottomPanel { .. })),
+            false,
+        );
+        let group_slices = slices(
+            Rect::new(center_x, content_top, center_width, content_height),
+            self.groups,
+            false,
+        );
+
         let mut out = Vec::with_capacity(self.placements.len());
         for (id, area) in &self.placements {
             let placed = match *area {
@@ -141,93 +175,110 @@ impl WorkbenchLayout {
                     let x = rect.x + GAP as i32 + index as i32 * (button_width + GAP) as i32;
                     Rect::new(x, toolbar_y, button_width, TOOLBAR_HEIGHT)
                 }
-                Area::LeftPanel { index, count } => stack(
-                    rect.x,
-                    content_top,
-                    left_width,
-                    content_height,
-                    index,
-                    count,
-                ),
-                Area::RightPanel { index, count } => stack(
-                    rect.x + width.saturating_sub(right_width) as i32,
-                    content_top,
-                    right_width,
-                    content_height,
-                    index,
-                    count,
-                ),
-                Area::BottomPanel { index, count } => row(
-                    center_x,
-                    bottom_y,
-                    center_width,
-                    bottom_height,
-                    index,
-                    count,
-                ),
+                Area::LeftPanel { index, .. } => slice(&left_slices, index, rect),
+                Area::RightPanel { index, .. } => slice(&right_slices, index, rect),
+                Area::BottomPanel { index, .. } => slice(&bottom_slices, index, rect),
                 Area::Tab {
                     group,
                     index,
                     count,
                 } => {
-                    let (group_x, group_width) = self.group_box(center_x, center_width, group);
-                    let count = count.max(1);
-                    let tab_width = group_width
-                        .min(120 * count)
-                        .saturating_sub(GAP * (count - 1))
-                        / count;
-                    let x = group_x + index as i32 * (tab_width + GAP) as i32;
-                    Rect::new(x, content_top, tab_width.min(group_width), TAB_HEIGHT)
+                    let group_box = slice(&group_slices, group, rect);
+                    let strip_width = group_box.width.min(120 * count.max(1));
+                    let tab_slices = slices(
+                        Rect::new(group_box.x, group_box.y, strip_width, TAB_HEIGHT),
+                        count,
+                        false,
+                    );
+                    slice(&tab_slices, index, rect)
                 }
                 Area::Editor { group } => {
-                    let (group_x, group_width) = self.group_box(center_x, center_width, group);
+                    let group_box = slice(&group_slices, group, rect);
                     Rect::new(
-                        group_x,
-                        content_top + TAB_HEIGHT as i32 + GAP as i32,
-                        group_width,
+                        group_box.x,
+                        group_box.y + TAB_HEIGHT as i32 + GAP as i32,
+                        group_box.width,
+                        content_height.saturating_sub(TAB_HEIGHT + GAP),
+                    )
+                }
+                Area::Canvas => {
+                    let group_box = slice(&group_slices, 0, rect);
+                    Rect::new(
+                        group_box.x,
+                        group_box.y + TAB_HEIGHT as i32 + GAP as i32,
+                        group_box.width,
                         content_height.saturating_sub(TAB_HEIGHT + GAP),
                     )
                 }
                 Area::Status => Rect::new(rect.x, status_y, width, STATUS_HEIGHT),
+                Area::Palette => {
+                    // An overlay, not a dock: it is given the whole client rect so it can centre
+                    // itself, and the painter's creation order keeps it above the docked panels.
+                    // The bounds keep it usable on a narrow or short window.
+                    let palette_width = width.saturating_sub(GAP * 2).min(640);
+                    let palette_height = height
+                        .saturating_sub(MENU_HEIGHT + TOOLBAR_HEIGHT + STATUS_HEIGHT + GAP * 4)
+                        .min(420);
+                    Rect::new(
+                        rect.x + (width.saturating_sub(palette_width) / 2) as i32,
+                        content_top,
+                        palette_width,
+                        palette_height,
+                    )
+                }
             };
             out.push((*id, placed));
         }
         out
     }
 
-    /// The box one editor group occupies inside the centre column.
-    fn group_box(&self, x: i32, width: u32, group: u32) -> (i32, u32) {
-        let groups = self.groups.max(1);
-        if group >= groups {
-            return (x, width);
-        }
-        let pane = width.saturating_sub(GAP * (groups - 1)) / groups;
-        (x + group as i32 * (pane + GAP) as i32, pane)
+    /// The number of tracks one area role needs, taken from the registered placements.
+    fn count(&self, wanted: impl Fn(&Area) -> bool) -> u32 {
+        self.placements
+            .iter()
+            .filter(|(_, area)| wanted(area))
+            .filter_map(|(_, area)| match area {
+                Area::LeftPanel { count, .. }
+                | Area::RightPanel { count, .. }
+                | Area::BottomPanel { count, .. } => Some(*count),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1)
     }
 }
 
-/// Splits a box into `count` slices along the vertical axis.
-fn stack(x: i32, y: i32, width: u32, height: u32, index: u32, count: u32) -> Rect {
-    let count = count.max(1);
-    let pane = height.saturating_sub(GAP * (count - 1)) / count;
-    Rect::new(
-        x,
-        y + index as i32 * (pane + GAP) as i32,
-        width,
-        pane.min(height),
-    )
+/// One slice of a pre-allocated region, or the whole rect when the region is not there.
+fn slice(slices: &[Rect], index: u32, fallback: Rect) -> Rect {
+    slices.get(index as usize).copied().unwrap_or(fallback)
 }
 
-/// Splits a box into `count` slices along the horizontal axis.
-fn row(x: i32, y: i32, width: u32, height: u32, index: u32, count: u32) -> Rect {
+/// Splits `area` into `count` tracks with the library's [`BorderLayout`].
+///
+/// A vertical stack is a `North` track per slice (fixed height); a row is an equal-stretch
+/// `Center` track per slice. The library clamps tracks to the parent and reduces spacing when it
+/// cannot be paid, so a tiny window cannot place a control outside its region.
+fn slices(area: Rect, count: u32, vertical: bool) -> Vec<Rect> {
     let count = count.max(1);
-    let pane = width.saturating_sub(GAP * (count - 1)) / count;
-    Rect::new(
-        x + index as i32 * (pane + GAP) as i32,
-        y,
-        pane.min(width),
-        height,
-    )
+    let mut border = BorderLayout::new(GAP, 0);
+    if vertical {
+        let pane = area.height.saturating_sub(GAP.saturating_mul(count - 1)) / count;
+        for index in 0..count {
+            border.add(BorderRegion::North, u64::from(index) + 1, pane);
+        }
+    } else {
+        for index in 0..count {
+            border.add_with_stretch(BorderRegion::Center, u64::from(index) + 1, 0, 1);
+        }
+    }
+    let mut out = vec![Rect::new(area.x, area.y, 0, 0); count as usize];
+    border.update(area, &mut |id, rect| {
+        if let Some(slot) = out.get_mut((id - 1) as usize) {
+            *slot = rect;
+        }
+    });
+    out
 }
 
 impl Layout for WorkbenchLayout {
@@ -309,7 +360,8 @@ mod tests {
             )
             .place(11, Area::Editor { group: 0 })
             .place(12, Area::Editor { group: 1 })
-            .place(13, Area::Status);
+            .place(13, Area::Status)
+            .place(14, Area::Palette);
         let mut out = BTreeMap::new();
         layout.update(Rect::new(0, 0, width, height), &mut |id, rect| {
             out.insert(id, rect);
@@ -358,6 +410,20 @@ mod tests {
         assert_eq!(layout[&8].height, layout[&9].height);
         assert_eq!(layout[&8].x + layout[&8].width as i32, layout[&9].x - 8);
         assert!(layout[&8].width > 0 && layout[&8].height > 0);
+    }
+
+    #[test]
+    fn the_palette_is_centred_and_stays_inside_the_window() {
+        let layout = run(1000, 700);
+        let palette = layout[&14];
+        assert!(palette.width > 0 && palette.height > 0);
+        assert_eq!(palette.x, (1000 - palette.width as i32) / 2);
+        assert!(palette.x + palette.width as i32 <= 1000);
+        assert!(palette.y + palette.height as i32 <= 700);
+
+        let tiny = run(320, 240);
+        assert!(tiny[&14].width <= 320);
+        assert!(tiny[&14].height <= 240);
     }
 
     #[test]

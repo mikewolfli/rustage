@@ -27,10 +27,10 @@ use crate::app::debug::inspect::{PAGE_LIMIT, STACK_LIMIT};
 use crate::app::debug::protocol::{Client, ProtocolError, Response};
 use crate::app::targets::configuration::Os;
 use crate::app::targets::local::Probe;
+use crate::contracts::identity::NodeId;
+use crate::contracts::revision::{GeneratorVersion, Revision};
+use crate::contracts::source_map::{SourceMap, SourceSpan};
 use crate::project::record::json::{Json, JsonObject};
-
-/// The line the demo debuggee stops on.
-const BREAK_LINE: u32 = 3;
 
 /// How long one protocol request may take.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -98,7 +98,12 @@ impl DebugState {
     }
 
     /// Starts a worker unless one is already live.
-    pub(super) fn start(&mut self) -> bool {
+    ///
+    /// `nodes` are the design nodes the debuggee is generated from and `break_node` is the node
+    /// whose generated statement the first breakpoint anchors on. They come from the same scene
+    /// the canvas and Inspector show, so the source map is about real nodes rather than names
+    /// invented by the panel.
+    pub(super) fn start(&mut self, nodes: Vec<(NodeId, String)>, break_node: NodeId) -> bool {
         if self.live {
             return false;
         }
@@ -108,7 +113,7 @@ impl DebugState {
         self.updates = updates_rx;
         self.live = true;
         self.rows = vec!["starting a real debug session…".to_owned()];
-        std::thread::spawn(move || worker(commands_rx, updates));
+        std::thread::spawn(move || worker(commands_rx, updates, nodes, break_node));
         true
     }
 
@@ -161,8 +166,13 @@ impl Default for DebugState {
 }
 
 /// The worker loop: start a session, then serve commands until Stop or the channel closes.
-fn worker(commands: Receiver<Command>, updates: Sender<Update>) {
-    let mut worker = match Worker::start(updates.clone()) {
+fn worker(
+    commands: Receiver<Command>,
+    updates: Sender<Update>,
+    nodes: Vec<(NodeId, String)>,
+    break_node: NodeId,
+) {
+    let mut worker = match Worker::start(updates.clone(), nodes, break_node) {
         Ok(worker) => worker,
         Err(reason) => {
             let _ = updates.send(Update {
@@ -227,15 +237,25 @@ struct Worker {
     book: Book,
     updates: Sender<Update>,
     source: PathBuf,
+    source_file: String,
+    map: SourceMap,
+    line_offsets: Vec<u32>,
+    break_line: u32,
     adapter: Adapter,
     thread: Option<i64>,
     live: bool,
 }
 
 impl Worker {
-    /// Compiles the debuggee, launches it and stops at the demo breakpoint.
-    fn start(updates: Sender<Update>) -> Result<Self, String> {
-        let (source, program) = prepare_debuggee()?;
+    /// Compiles the generated debuggee, launches it and stops at the mapped breakpoint.
+    fn start(
+        updates: Sender<Update>,
+        nodes: Vec<(NodeId, String)>,
+        break_node: NodeId,
+    ) -> Result<Self, String> {
+        let prepared = prepare_debuggee(&nodes, break_node)?;
+        let source = prepared.source;
+        let program = prepared.program;
         let adapter = adapter::first_ready(Os::host(), &Probe::from_path())
             .map_err(|refusal| refusal.render())?;
         let adapter_program = adapter
@@ -249,6 +269,10 @@ impl Worker {
             book: Book::new(),
             updates,
             source,
+            source_file: prepared.source_file,
+            map: prepared.map,
+            line_offsets: prepared.line_offsets,
+            break_line: prepared.break_line,
             adapter,
             thread: None,
             live: true,
@@ -297,7 +321,7 @@ impl Worker {
         // directory, so this is the path GDB recorded in the compilation unit. A relative name
         // stays `pending` because GDB's source lookup does not find it.
         let file = self.source.display().to_string();
-        self.book.add_source(file.clone(), BREAK_LINE)?;
+        self.book.add_source(file.clone(), self.break_line)?;
 
         let mut launch = JsonObject::new();
         launch.insert("program", Json::string(program.display().to_string()));
@@ -594,8 +618,9 @@ impl Worker {
                 rows.push(format!("variable {}", variable.render()));
             }
             rows.push(format!(
-                "source {}:{frame_line}:{column} (unmapped: no generated source map loaded)",
-                file.as_deref().map(short).unwrap_or("no source")
+                "source {}:{frame_line}:{column}{}",
+                file.as_deref().map(short).unwrap_or("no source"),
+                self.describe_position(file.as_deref(), *frame_line)
             ));
             let _ = self.updates.send(Update {
                 phase: "stopped",
@@ -625,15 +650,35 @@ impl Worker {
         for point in self.book.points() {
             match &point.anchor {
                 Anchor::Source { file, line } => rows.push(format!(
-                    "breakpoint {} at {}:{line}: {}",
+                    "breakpoint {} at {}:{line}: {}{}",
                     point.id,
                     short(file),
-                    point.binding.render()
+                    point.binding.render(),
+                    self.describe_position(Some(file), *line)
                 )),
                 Anchor::Node { .. } => rows.push(point.render()),
             }
         }
         rows
+    }
+
+    /// What the source map says about a stopped position: the node whose generated construct
+    /// contains the line, or an explicit `unmapped` answer when no entry covers it.
+    fn describe_position(&self, file: Option<&str>, line: u32) -> String {
+        let Some(file) = file else {
+            return " (unmapped: the frame has no source)".to_owned();
+        };
+        if file != self.source_file {
+            return format!(" (unmapped: no generated source map for {})", short(file));
+        }
+        let node = self
+            .line_offsets
+            .get(line.saturating_sub(1) as usize)
+            .and_then(|offset| self.map.node_at(file, *offset));
+        match node {
+            Some(node) => format!(" -> node {}", node.get()),
+            None => " (unmapped: no node covers this line)".to_owned(),
+        }
     }
 
     fn threads(&mut self) -> Result<Vec<(i64, String)>, String> {
@@ -816,22 +861,36 @@ fn short(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-/// Writes and compiles the demo debuggee with the host's own `rustc`.
-fn prepare_debuggee() -> Result<(PathBuf, PathBuf), String> {
+/// What `prepare_debuggee` produced: the compiled source, the map back to design nodes, and the
+/// breakpoint line the generated statement occupies.
+struct PreparedDebuggee {
+    source: PathBuf,
+    program: PathBuf,
+    source_file: String,
+    map: SourceMap,
+    line_offsets: Vec<u32>,
+    break_line: u32,
+}
+
+/// Writes and compiles the debuggee generated from the design nodes with the host's own `rustc`.
+fn prepare_debuggee(
+    nodes: &[(NodeId, String)],
+    break_node: NodeId,
+) -> Result<PreparedDebuggee, String> {
     let directory = std::env::current_dir()
         .map_err(|error| format!("cannot read the working directory: {error}"))?
         .join("target/rustage-debug");
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-    const TEXT: &str = "fn main() {\n    let n = 41;\n    println!(\"value {}\", n + 1);\n}\n";
+    let (text, spans, break_line) = generated_source(nodes, break_node);
     let source = directory.join("main.rs");
     // Writing the source unconditionally would update its mtime on every Start and make the
     // binary permanently "stale", so each session would pay for a compile it does not need.
     let unchanged = std::fs::read_to_string(&source)
-        .map(|existing| existing == TEXT)
+        .map(|existing| existing == text)
         .unwrap_or(false);
     if !unchanged {
-        std::fs::write(&source, TEXT)
+        std::fs::write(&source, &text)
             .map_err(|error| format!("cannot write {}: {error}", source.display()))?;
     }
     let program = directory.join("app");
@@ -865,13 +924,124 @@ fn prepare_debuggee() -> Result<(PathBuf, PathBuf), String> {
         std::fs::write(&stamp, &command)
             .map_err(|error| format!("cannot write {}: {error}", stamp.display()))?;
     }
-    Ok((source, program))
+    let source_file = source.display().to_string();
+    let mut map = SourceMap::new(GeneratorVersion::CURRENT, Revision::INITIAL);
+    for (node, start, end) in spans {
+        if let Some(span) = SourceSpan::new(&source_file, start, end) {
+            map.insert(node, span);
+        }
+    }
+    Ok(PreparedDebuggee {
+        source,
+        program,
+        source_file,
+        map,
+        line_offsets: line_offsets(&text),
+        break_line,
+    })
+}
+
+/// Generates a Rust program from the design nodes and the spans that map it back.
+///
+/// Each node becomes one `#[inline(never)]` function that returns its title; `main` calls every
+/// function so a breakpoint inside one is reached. The span covers the whole function, so a stop
+/// on its `let` line maps to that node, and the node maps back to the same range.
+fn generated_source(
+    nodes: &[(NodeId, String)],
+    break_node: NodeId,
+) -> (String, Vec<(NodeId, u32, u32)>, u32) {
+    let mut nodes = nodes.to_vec();
+    if nodes.is_empty() {
+        nodes.push((NodeId::from_raw(0), "window".to_owned()));
+    }
+    let mut text = String::new();
+    let mut spans = Vec::new();
+    let mut first_let = None;
+    let mut break_line = None;
+    for (node, name) in &nodes {
+        let start = text.len() as u32;
+        let start_line = line_of_offset(&text, start);
+        let literal = format!("{name:?}");
+        text.push_str(&format!(
+            "#[inline(never)]\nfn node_{}() -> &'static str {{\n    let n = 41;\n    let title: &'static str = {literal};\n    let _ = n;\n    title\n}}\n\n",
+            node.get()
+        ));
+        // The `title` line runs after `n` is initialized, so the stopped frame carries both the
+        // demo local and the node's own title.
+        let break_at = start_line + 5;
+        first_let.get_or_insert(break_at);
+        if *node == break_node {
+            break_line = Some(break_at);
+        }
+        spans.push((*node, start, text.len() as u32));
+    }
+    text.push_str("fn main() {\n    let n = 41;\n    println!(\"value {}\", n + 1);\n");
+    for (node, _) in &nodes {
+        text.push_str(&format!("    println!(\"{{}}\", node_{}());\n", node.get()));
+    }
+    text.push_str("}\n");
+    (text, spans, break_line.or(first_let).unwrap_or(1))
+}
+
+/// The 1-based line a byte offset falls on.
+fn line_of_offset(text: &str, offset: u32) -> u32 {
+    text.bytes()
+        .take(offset as usize)
+        .filter(|byte| *byte == b'\n')
+        .count() as u32
+        + 1
+}
+
+/// The byte offset of each 1-based line, for turning a DAP line into a map lookup.
+fn line_offsets(text: &str) -> Vec<u32> {
+    let mut offsets = vec![0];
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            offsets.push((index + 1) as u32);
+        }
+    }
+    offsets
 }
 
 #[cfg(test)]
 mod tests {
     use super::DebugState;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_generated_source_maps_the_break_line_back_to_its_node() {
+        let nodes = vec![
+            (
+                crate::contracts::identity::NodeId::from_raw(0),
+                "window".to_owned(),
+            ),
+            (
+                crate::contracts::identity::NodeId::from_raw(1),
+                "Demo".to_owned(),
+            ),
+            (
+                crate::contracts::identity::NodeId::from_raw(2),
+                "button".to_owned(),
+            ),
+        ];
+        let (text, spans, break_line) =
+            super::generated_source(&nodes, crate::contracts::identity::NodeId::from_raw(2));
+        assert!(text.contains("let n = 41;"), "{text}");
+        assert!(text.contains("fn node_2()"), "{text}");
+        let offsets = super::line_offsets(&text);
+        let break_offset = offsets[(break_line - 1) as usize];
+        let (node, start, end) = spans
+            .iter()
+            .find(|(node, _, _)| node.get() == 2)
+            .copied()
+            .expect("node 2 is mapped");
+        assert_eq!(node.get(), 2);
+        assert!(start <= break_offset && break_offset < end);
+        // The reverse direction: node 2's span names the lines its function occupies.
+        let first_line = super::line_of_offset(&text, start);
+        let last_line = super::line_of_offset(&text, end);
+        assert!(first_line < break_line && break_line <= last_line);
+    }
 
     /// Drives the worker without a window: a real `rustc`, adapter, breakpoint and locals.
     ///
@@ -881,7 +1051,24 @@ mod tests {
     #[ignore = "starts rustc and gdb; run with --ignored"]
     fn a_real_session_reports_the_breakpoint_and_locals() {
         let mut state = DebugState::new();
-        assert!(state.start(), "the worker starts");
+        let nodes = vec![
+            (
+                crate::contracts::identity::NodeId::from_raw(0),
+                "window".to_owned(),
+            ),
+            (
+                crate::contracts::identity::NodeId::from_raw(1),
+                "Demo".to_owned(),
+            ),
+            (
+                crate::contracts::identity::NodeId::from_raw(2),
+                "button".to_owned(),
+            ),
+        ];
+        assert!(
+            state.start(nodes, crate::contracts::identity::NodeId::from_raw(2)),
+            "the worker starts"
+        );
         let deadline = Instant::now() + Duration::from_secs(45);
         let mut last = None;
         while Instant::now() < deadline {
@@ -897,7 +1084,12 @@ mod tests {
         let update = last.expect("the worker reports at least one update");
         assert_eq!(update.phase, "stopped", "{:?}", update.rows);
         assert!(
-            update.rows.iter().any(|row| row.contains("bound at 3")),
+            update.rows.iter().any(|row| row.contains("bound at")),
+            "{:?}",
+            update.rows
+        );
+        assert!(
+            update.rows.iter().any(|row| row.contains("-> node 2")),
             "{:?}",
             update.rows
         );

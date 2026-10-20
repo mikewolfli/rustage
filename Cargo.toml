@@ -25,7 +25,12 @@ publish = false
 linux-native = ["rust_widgets/gtk-native"]
 
 [dependencies]
-rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "cee6b22367244527aa407bb9ae67305751f61c26", default-features = false, features = ["desktop", "runtime-fonts"] }
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "ba1db3c274beab0a760a69eac1f9adf458c727eb", default-features = false, features = ["desktop", "runtime-fonts"] }
+
+# Extension packages and the release SBOM need a real digest; `sha2` is already resolved through the
+# widget dependency, so this adds no download. A hand-rolled checksum would not be comparable with
+# the digests a package author publishes (principle #25).
+sha2 = "0.10"
 
 # The pinned revision now owns the toolkit: it creates and focuses the GTK input method context
 # itself, so the host has no direct GTK dependency. Keeping the feature forwarding-only is also

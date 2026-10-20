@@ -143,12 +143,16 @@ def main() -> int:
         ))
         checks.append((
             "the real adapter stops at the bound breakpoint",
-            output.wait_for("debug: stopped: breakpoint at line 3", 45.0),
+            output.wait_for("debug: stopped: breakpoint at line", 45.0),
         ))
         checks.append((
             "the breakpoint is bound because the adapter verified it",
             "debug row: breakpoint 1 at " in output.text()
-            and "bound at 3" in output.text(),
+            and "bound at " in output.text(),
+        ))
+        checks.append((
+            "the bound breakpoint maps to the design node",
+            "-> node 1" in output.text(),
         ))
         checks.append((
             "a thread is reported",
@@ -156,7 +160,8 @@ def main() -> int:
         ))
         checks.append((
             "the top frame carries the adapter's source position",
-            "debug row: frame 0 main" in output.text()
+            "debug row: frame 0" in output.text()
+            and "node_1" in output.text()
             and " at " in output.text(),
         ))
         checks.append((
@@ -164,8 +169,9 @@ def main() -> int:
             "debug row: variable n: i32 = 41" in output.text(),
         ))
         checks.append((
-            "the raw source position is not guessed into a node",
-            "unmapped: no generated source map loaded" in output.text(),
+            "the source position maps back to the selected node",
+            "-> node 1" in output.text()
+            and "unmapped: no generated source map" not in output.text(),
         ))
 
         # The worker's rows are mirrored on the next main-loop turn; let that frame paint before

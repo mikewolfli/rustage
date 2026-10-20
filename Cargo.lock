@@ -2935,8 +2935,8 @@ dependencies = [
 
 [[package]]
 name = "rust_widgets"
-version = "2.8.11"
-source = "git+https://github.com/mikewolfli/rust-widgets?rev=cee6b22367244527aa407bb9ae67305751f61c26#cee6b22367244527aa407bb9ae67305751f61c26"
+version = "2.8.12"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=ba1db3c274beab0a760a69eac1f9adf458c727eb#ba1db3c274beab0a760a69eac1f9adf458c727eb"
 dependencies = [
  "aes",
  "boa_engine",
@@ -2979,6 +2979,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "rust_widgets",
+ "sha2",
 ]
 
 [[package]]

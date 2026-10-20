@@ -37,6 +37,7 @@ use crate::project::record::format::{ProjectContent, ProjectFile};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod ai;
 mod application;
 mod build;
 mod collection;
@@ -46,6 +47,7 @@ mod debug;
 mod design;
 mod document;
 mod editor;
+mod extension;
 mod form;
 mod generate;
 mod gui_smoke;
@@ -55,13 +57,20 @@ mod locale;
 mod logic;
 mod preview;
 mod project;
+mod quality;
+mod release;
 mod search;
+mod settings;
 mod style;
 mod target;
+mod vcs;
 mod workbench;
 mod workbench_debug;
+mod workbench_events;
 mod workbench_gui;
+mod workbench_inspect;
 mod workbench_layout;
+mod workbench_pages;
 mod workbench_palette;
 mod workbench_property;
 mod workbench_scene;
@@ -1154,6 +1163,42 @@ pub fn run(command: Command) {
         }
         Command::Dependencies(options) => {
             if !dependencies(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Vcs(options) => {
+            if !vcs::vcs(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Quality(options) => {
+            if !quality::quality(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Extension(options) => {
+            if !extension::extension(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Ai(options) => {
+            if !ai::ai(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Settings(options) => {
+            if !settings::settings(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::Release(options) => {
+            if !release::release(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }

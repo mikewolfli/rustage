@@ -30,6 +30,7 @@ use crate::project::{
     record::files::FileOperation,
 };
 
+pub mod ai;
 pub mod application;
 pub mod build;
 pub mod canvas;
@@ -40,6 +41,7 @@ pub mod data;
 pub mod debug;
 pub mod document;
 pub mod editor;
+pub mod extension;
 pub mod form;
 pub mod generate;
 pub mod host;
@@ -48,11 +50,16 @@ pub mod layout;
 pub mod logic;
 pub mod preview;
 pub mod project;
+pub mod quality;
+pub mod release;
 pub mod search;
+pub mod settings;
 pub mod shell;
 pub mod style;
 pub mod target;
+pub mod vcs;
 
+pub use ai::*;
 pub use application::*;
 pub use build::*;
 pub use canvas::*;
@@ -63,6 +70,7 @@ pub use data::*;
 pub use debug::*;
 pub use document::*;
 pub use editor::*;
+pub use extension::*;
 pub use form::*;
 pub use generate::*;
 pub use host::*;
@@ -71,10 +79,14 @@ pub use layout::*;
 pub use logic::*;
 pub use preview::*;
 pub use project::*;
+pub use quality::*;
+pub use release::*;
 pub use search::*;
+pub use settings::*;
 pub use shell::*;
 pub use style::*;
 pub use target::*;
+pub use vcs::*;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -120,6 +132,19 @@ pub enum Command {
     /// Resolves a workspace's dependencies: what it is made of, and what changed since a record
     /// (task T02.11).
     Dependencies(DependenciesOptions),
+    /// Drives the installed Git program: status, diff, stage, commit, branches, worktrees and
+    /// stash (task F20).
+    Vcs(VcsOptions),
+    /// The problem centre, design checks, tests, visual conditions and evidence (task F21).
+    Quality(QualityOptions),
+    /// Local extension packages, their contracts and templates (task F22).
+    Extension(ExtensionOptions),
+    /// The optional AI seam: authorized context, candidates and review (task F23).
+    Ai(AiOptions),
+    /// Layered settings, migration and keymap import (task F24).
+    Settings(SettingsOptions),
+    /// Release freeze, artifacts, SBOM, updates and maintenance (task F25).
+    Release(ReleaseOptions),
     /// Shows what a buffer over a page document is holding after some text is typed into it
     /// (task T03.01).
     Document(DocumentOptions),
@@ -1138,6 +1163,40 @@ pub fn help_text() -> &'static str {
         "                                     go:<page>, back, forward, close, finish-close,\n",
         "                                     check, state, show; a cycle, a missing entry and a\n",
         "                                     closing state are each diagnosable\n",
+        "       --vcs <op>...                 Drive the installed git program: repo:<path>, status,\n",
+        "                                     diff[:<path>], staged-diff[:<path>], stage:<path>,\n",
+        "                                     unstage:<path>, commit:<message>, branches,\n",
+        "                                     create:<branch>, switch:<branch>, worktrees,\n",
+        "                                     worktree-add:<path>:<branch>, stash[:<message>],\n",
+        "                                     stash-list, stash-pop[:<index>], stash-apply[:<index>],\n",
+        "                                     merge/rebase/cherry-pick and their -abort forms;\n",
+        "                                     a dirty tree refuses a branch change\n",
+        "       --quality <op>...              Problem centre, design checks and evidence: source:<name>,\n",
+        "                                     target:<name>, revision:<n>, problem:<text>, filter:<source>,\n",
+        "                                     duplicate/parent/capability/capacity/resource/focus,\n",
+        "                                     check, contrast:<fg>:<bg>:<min>, test:<name>:<status>,\n",
+        "                                     tests, junit:<file>, visual:<platform>:<scale>:<font>,\n",
+        "                                     visual-compare:..., evidence:<file>, state, show\n",
+        "       --extension <op>...            Local extension packages and templates: id/version,\n",
+        "                                     host-min/host-max, license, capability, permission,\n",
+        "                                     file:<name>:<text>, digest, install, status,\n",
+        "                                     disable/enable/remove, update-preflight, template,\n",
+        "                                     param, template-file, render, show\n",
+        "       --ai <op>...                   Optional AI seam: role, model, budget, tool, credential,\n",
+        "                                     context/ignore/authorize, change, candidate, verify,\n",
+        "                                     review, accept, base, apply, rollback, show;\n",
+        "                                     a model never authorizes its own context or writes files\n",
+        "       --settings <op>...            Layered settings and keymap import: schema:<key>:<kind>,\n",
+        "                                     set:<layer>:<key>=<value>, get, search, reset,\n",
+        "                                     migrate:<old>=<new>, keymap/keymap-other, keymap-diff,\n",
+        "                                     keymap-import, show; a higher layer wins and reset\n",
+        "                                     removes only that layer\n",
+        "       --release <op>...             Release freeze, artifacts and SBOM: freeze:<rev>:<gen>,\n",
+        "                                     format, component, support, freeze-check,\n",
+        "                                     artifact:<name>:<digest>:<size>:<signature>,\n",
+        "                                     verify-file:<path>, sbom:<file>, update:<from>:<to>,\n",
+        "                                     verify-update, install, rollback, channel, maintenance,\n",
+        "                                     limit, show; a failed digest never installs\n",
         "       --machine <op>...             A state machine: state:<name>, initial:<name>, final:<name>,\n",
         "                                     transition:<from>:<on>:<to>[:<guard>],\n",
         "                                     answer:<guard>:<true|false>:<sync|async>, start,\n",
@@ -1537,7 +1596,7 @@ where
 
     // Each family knows its own flags and answers `None` for anything else, so a flag belongs to
     // exactly one family and the order below is a reading order rather than a precedence rule.
-    let families: [Family; 22] = [
+    let families: [Family; 28] = [
         host::parse_host,
         project::parse_project,
         document::parse_document,
@@ -1560,6 +1619,12 @@ where
         logic::parse_logic,
         target::parse_target,
         debug::parse_debug,
+        vcs::parse_vcs,
+        quality::parse_quality,
+        extension::parse_extension,
+        ai::parse_ai,
+        settings::parse_settings,
+        release::parse_release,
     ];
     for family in families {
         if let Some(command) = family(text, argument.clone(), &mut arguments) {

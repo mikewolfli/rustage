@@ -87,13 +87,14 @@ def main() -> int:
             x11.XSync(display, 0)
             time.sleep(gap)
 
-        # Inspector geometry at 1280x800 with three right-hand panels: the Inspector is the
-        # first slice (y=74..258) and its value row is the last fixed row (y=200..228). Field
-        # centre (1040,214), Apply (1156,214), Clear (1236,214); the title row is near y=160.
-        field = (x + 1040, y + 214)
-        apply_button = (x + 1156, y + 214)
-        clear_button = (x + 1236, y + 214)
-        title_row = (x + 1050, y + 160)
+        # Inspector geometry at 1280x800: the first right-hand slice is 184px tall, so its value
+        # row is y=154..180 and the theme row y=184..210. Field centre (1000,167), Apply (1057,167),
+        # Clear (1112,167), Reset (1167,167), Values (1227,167); the title row is near y=120.
+        field = (x + 1000, y + 167)
+        apply_button = (x + 1057, y + 167)
+        clear_button = (x + 1112, y + 167)
+        reset_button = (x + 1167, y + 167)
+        title_row = (x + 1050, y + 120)
 
         checks: list[tuple[str, bool]] = []
 
@@ -133,11 +134,25 @@ def main() -> int:
         click(*apply_button)
         checks.append((
             "a valid value advances the revision once",
-            output.wait_for('inspector applied title = "test"; revision 1', 5.0),
+            output.wait_for('inspector applied title = "test" on 1; revision 1', 5.0),
         ))
         checks.append((
             "the Inspector row shows the accepted value",
-            output.wait_for("inspector rows: title: test", 4.0),
+            output.wait_for("inspector rows: title: agreed: test", 4.0),
+        ))
+
+        click(*reset_button)
+        checks.append((
+            "Reset restores the structural name",
+            output.wait_for("inspector reset 1 node(s)", 5.0),
+        ))
+        checks.append((
+            "Reset names the source it reverted to",
+            "reverted to" in output.text(),
+        ))
+        checks.append((
+            "the Inspector row is the structural name again",
+            output.wait_for("inspector rows: title: agreed: Demo", 5.0),
         ))
 
         time.sleep(0.5)

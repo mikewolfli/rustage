@@ -135,6 +135,17 @@ impl Wiring {
         Ok(())
     }
 
+    /// Takes a handler away from a node's event, answering whether one was wired.
+    ///
+    /// Removing the one attachment is what keeps a re-bind from leaving a second subscription
+    /// behind; an event that was not wired is reported rather than treated as success.
+    pub fn detach(&mut self, node: NodeId, event: &str) -> bool {
+        let before = self.attachments.len();
+        self.attachments
+            .retain(|attachment| !(attachment.node == node && attachment.event == event));
+        before != self.attachments.len()
+    }
+
     /// Whether a handler for this node's event is wired.
     pub fn is_wired(&self, node: NodeId, event: &str) -> bool {
         self.attachments

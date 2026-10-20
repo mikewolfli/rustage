@@ -51,7 +51,10 @@ use crate::host::startup::{StartupPlatform, StartupRequest};
 
 use super::report;
 use super::workbench_debug::{Command as DebugCommand, DebugState, Update as DebugUpdate};
+use super::workbench_events::EventsState;
+use super::workbench_inspect::InspectState;
 use super::workbench_layout::{Area, WorkbenchLayout};
+use super::workbench_pages::PagesState;
 use super::workbench_palette::Palette;
 use super::workbench_property::PropertyState;
 use super::workbench_scene::{CanvasLayout, CanvasState, CanvasTransform, span};
@@ -66,11 +69,25 @@ const STATUS_Y: i32 = 768;
 const STATUS_HEIGHT: u32 = 28;
 
 /// The panels this window adds to the built-in four.
-const EXTRA_PANELS: [(&str, &str, Dock); 3] = [
+const EXTRA_PANELS: [(&str, &str, Dock); 4] = [
+    ("pages", "Pages", Dock::Left),
     ("events", "Events", Dock::Left),
     ("data", "Data & State", Dock::Right),
     ("debug", "Debug", Dock::Right),
 ];
+
+/// The Inspector's list, value field, Apply/Clear/Reset/Values buttons, theme field and theme
+/// button, then the error line and note.
+type InspectorControls = (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64);
+
+/// The Events panel's list, handler field, Bind/Unbind/Fire buttons, error line and note.
+type EventControls = (u64, u64, u64, u64, u64, u64, u64);
+
+/// The Data panel's list, field, Apply button, error line and note.
+type DataControls = (u64, u64, u64, u64, u64);
+
+/// The Pages panel's list, field, Add/Open/Back/Fwd/Close buttons, error line and note.
+type PageControls = (u64, u64, u64, u64, u64, u64, u64, u64, u64);
 
 /// One editor group's widgets.
 struct GroupView {
@@ -123,6 +140,28 @@ struct Gui {
     debug: DebugState,
     /// The fixed label per row; a label repaints reliably from a timer, a list box did not.
     debug_rows: Vec<u64>,
+    /// The Events panel: declarations, wiring and triggers, with the event the rows select.
+    events: EventsState,
+    events_list: u64,
+    events_field: u64,
+    events_error: u64,
+    events_note: u64,
+    events_selected: usize,
+    /// The Data panel and the read-only inspector over the same document version.
+    inspect: InspectState,
+    data_list: u64,
+    data_field: u64,
+    data_error: u64,
+    data_note: u64,
+    data_selected: usize,
+    inspect_note: u64,
+    /// The Pages panel: the declarative graph and the window's back/forward stacks.
+    pages: PagesState,
+    pages_list: u64,
+    pages_field: u64,
+    pages_error: u64,
+    pages_note: u64,
+    pages_selected: usize,
     /// The latest canvas picture, and whether a repaint is already queued.
     ///
     /// Pointer motion can arrive much faster than the painter can draw; the snapshot is replaced
@@ -320,6 +359,32 @@ fn subscribe_index(
     }
 }
 
+/// Logs when a control gains keyboard focus.
+///
+/// Focus traversal is the library's: the platform consumes Tab and calls `focus_next` in the
+/// registration order. This observer makes that traversal observable in the host log so a window
+/// probe can assert that keyboard-only navigation reached a panel rather than only the toolbar.
+fn watch_focus(id: u64, name: &'static str) {
+    let watched = with_widget_mut(id, move |widget| {
+        widget.base().focus_gained.connect(move || {
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-focus",
+                &format!("focus gained {name} ({id})"),
+            );
+        });
+        true
+    })
+    .unwrap_or(false);
+    if !watched {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::workbench-focus",
+            &format!("control {id} could not be watched for focus"),
+        );
+    }
+}
+
 fn sync_palette(gui: &mut Gui) {
     let rows = gui.palette.rows();
     let selected = gui.palette.selected();
@@ -357,24 +422,164 @@ fn refresh_inspector(gui: &mut Gui) {
         .kind(gui.property.node())
         .map(|kind| kind.name())
         .unwrap_or("?");
+    let nodes = if gui.property.count() > 1 {
+        format!("{} nodes", gui.property.count())
+    } else {
+        gui.property.node().get().to_string()
+    };
     let items = [
-        format!("node: {}", gui.property.node().get()),
+        format!("node: {nodes}"),
         format!("kind: {kind}"),
         format!(
             "{}: {}",
             gui.property.name().as_str(),
-            gui.property.value_text()
+            gui.property.summary()
+        ),
+        format!(
+            "theme: {} · computed background {}",
+            gui.inspect.theme().unwrap_or("(none)"),
+            gui.inspect
+                .background(gui.property.node())
+                .unwrap_or("(not themed)")
         ),
     ];
     rust_widgets::list_box_clear_items(gui.inspector_list);
     for item in &items {
         let _ = rust_widgets::list_box_add_item(gui.inspector_list, item);
     }
+    rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
+    rust_widgets::set_widget_placeholder(
+        gui.property_field,
+        if gui.property.is_mixed() {
+            "mixed — typing applies to every selected node"
+        } else {
+            ""
+        },
+    );
+    if gui.inspect_note != 0 {
+        rust_widgets::set_widget_text(
+            gui.inspect_note,
+            &format!(
+                "design v{} · effects {} · read-only",
+                gui.inspect.version(),
+                gui.inspect.effects()
+            ),
+        );
+    }
     crate::host::log::emit(
         crate::host::log::Level::Info,
         "app::run::workbench-property",
         &format!("inspector rows: {}", items[2]),
     );
+}
+
+/// The event the Events rows currently select.
+fn selected_event(gui: &Gui) -> Option<String> {
+    gui.events.events().get(gui.events_selected).cloned()
+}
+
+/// Mirrors the Events model into its list and its two labels.
+fn sync_events(gui: &mut Gui) {
+    let rows = gui.events.rows();
+    let selected = gui.events_selected;
+    let status = selected_event(gui)
+        .map(|event| gui.events.status_of(&event).render(&event))
+        .unwrap_or_else(|| "no event is declared".to_owned());
+    let last = gui.events.last_firing().join(" | ");
+    let handlers = gui.events.handlers().join(", ");
+    let wiring = gui.events.wiring_rows().join("; ");
+    rust_widgets::set_widget_text(
+        gui.events_note,
+        &format!(
+            "{status} | rev {} | handlers: {handlers} | {wiring} | {last}",
+            gui.events.revision()
+        ),
+    );
+    let list = gui.events_list;
+    if list == 0 {
+        return;
+    }
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
+        rust_widgets::list_box_clear_items(list);
+        for row in &rows {
+            let _ = rust_widgets::list_box_add_item(list, row);
+        }
+        let _ = rust_widgets::list_box_set_current_index(list, selected);
+    });
+}
+
+/// Mirrors the Data model into its list and its labels.
+fn sync_data(gui: &mut Gui) {
+    let rows = gui.inspect.rows();
+    let fields = gui.inspect.fields();
+    let selected = gui.data_selected.min(fields.len().saturating_sub(1));
+    gui.data_selected = selected;
+    let value = fields
+        .get(selected)
+        .and_then(|field| gui.inspect.value_of(field))
+        .unwrap_or_default();
+    rust_widgets::set_widget_text(gui.data_field, &value);
+    if let Some(problem) = gui.inspect.problem() {
+        rust_widgets::set_widget_text(gui.data_error, &format!("not applied: {problem}"));
+    }
+    rust_widgets::set_widget_text(
+        gui.data_note,
+        &format!(
+            "data v{} · effects {} · runtime: none",
+            gui.inspect.version(),
+            gui.inspect.effects()
+        ),
+    );
+    let list = gui.data_list;
+    if list == 0 {
+        return;
+    }
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
+        rust_widgets::list_box_clear_items(list);
+        for row in &rows {
+            let _ = rust_widgets::list_box_add_item(list, row);
+        }
+    });
+}
+
+/// Mirrors the Pages model into its list and its labels.
+fn sync_pages(gui: &mut Gui) {
+    let rows = gui.pages.rows();
+    let selected = gui.pages_selected;
+    rust_widgets::set_widget_text(
+        gui.pages_note,
+        &format!(
+            "{} page(s) · current {} · revision {}",
+            gui.pages.pages().len(),
+            gui.pages.current().unwrap_or("(none)"),
+            gui.pages.revision()
+        ),
+    );
+    let list = gui.pages_list;
+    if list == 0 {
+        return;
+    }
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
+        rust_widgets::list_box_clear_items(list);
+        for row in &rows {
+            let _ = rust_widgets::list_box_add_item(list, row);
+        }
+        let _ = rust_widgets::list_box_set_current_index(list, selected);
+    });
+}
+
+/// Points the Events and Data panels at the same selection the tree and canvas share.
+fn retarget_panels(gui: &mut Gui) {
+    if let Some(node) = gui.scene.primary() {
+        gui.events.retarget(node);
+    }
+    let selected = gui.scene.selected().to_vec();
+    {
+        let Gui { inspect, scene, .. } = gui;
+        inspect.retarget(scene, &selected);
+    }
+    sync_events(gui);
+    sync_data(gui);
 }
 
 /// Commits the field's text through the schema editor (task T11.01).
@@ -387,33 +592,37 @@ fn apply_property(gui: &mut Gui) {
     );
     match gui.property.apply(&text) {
         Ok(revision) => {
-            let node = gui.property.node();
-            // The property is the tree's own name, so an accepted edit renames the node and both
-            // views (Outline and the canvas buttons) show the same fact.
-            let renamed = gui.scene.rename(node, &text);
+            let nodes = gui.property.nodes().to_vec();
+            // The property is the tree's own name, so an accepted edit renames every selected
+            // node and both views (Outline and the canvas) show the same fact.
+            let mut renamed = Vec::new();
+            for node in &nodes {
+                match gui.scene.rename(*node, &text) {
+                    Ok(()) => renamed.push(node.get().to_string()),
+                    Err(reason) => renamed.push(format!("{} refused: {reason}", node.get())),
+                }
+            }
+            let nodes_text = renamed.join(", ");
             rust_widgets::set_widget_text(gui.property_error, "");
             refresh_inspector(gui);
             sync_outline(gui);
             sync_canvas(gui);
             gui.message = format!(
-                "{} = {text:?} (revision {revision})",
+                "{} = {text:?} on {nodes_text} (revision {revision})",
                 gui.property.name().as_str()
             );
             crate::host::log::emit(
                 crate::host::log::Level::Info,
                 "app::run::workbench-property",
                 &format!(
-                    "inspector applied {} = {text:?}; revision {revision}",
+                    "inspector applied {} = {text:?} on {nodes_text}; revision {revision}",
                     gui.property.name().as_str()
                 ),
             );
             crate::host::log::emit(
                 crate::host::log::Level::Info,
                 "app::run::workbench-scene",
-                &match renamed {
-                    Ok(()) => format!("renamed node {} to {text:?}", node.get()),
-                    Err(reason) => format!("node {} was not renamed: {reason}", node.get()),
-                },
+                &format!("renamed node(s) {nodes_text} to {text:?}"),
             );
         }
         Err(reason) => {
@@ -600,6 +809,7 @@ fn select_node(gui: &mut Gui, node: NodeId, source: &str) {
             rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
             rust_widgets::set_widget_text(gui.property_error, "");
             refresh_inspector(gui);
+            retarget_panels(gui);
             sync_canvas(gui);
             sync_outline(gui);
             crate::host::log::emit(
@@ -637,13 +847,23 @@ fn marquee_select(gui: &mut Gui, rect: SceneRect) {
         })
         .collect();
     gui.message = format!("marquee selected {count} node(s)");
-    if let Some(primary) = gui.scene.primary() {
-        let name = gui.scene.name(primary).unwrap_or("?").to_owned();
-        gui.property.retarget(primary, &name);
+    if !gui.scene.selected().is_empty() {
+        let names: Vec<(NodeId, String)> = gui
+            .scene
+            .selected()
+            .iter()
+            .filter_map(|node| gui.scene.name(*node).map(|name| (*node, name.to_owned())))
+            .collect();
+        let refs: Vec<(NodeId, &str)> = names
+            .iter()
+            .map(|(node, name)| (*node, name.as_str()))
+            .collect();
+        gui.property.retarget_many(&refs);
         rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
         rust_widgets::set_widget_text(gui.property_error, "");
         refresh_inspector(gui);
     }
+    retarget_panels(gui);
     sync_canvas(gui);
     sync_outline(gui);
     crate::host::log::emit(
@@ -689,6 +909,7 @@ fn finish_canvas_drag(gui: &mut Gui) {
     } else {
         "selection cleared".to_owned()
     };
+    retarget_panels(gui);
     sync_canvas(gui);
     sync_outline(gui);
     update_status(gui);
@@ -915,7 +1136,24 @@ fn wire_debug_button(button: &ButtonHandle, command: DebugCommand, gui: &Arc<Mut
         let next = Arc::clone(&gui_for_click);
         if let Ok(mut gui) = next.lock() {
             let accepted = match command {
-                DebugCommand::Start => gui.debug.start(),
+                DebugCommand::Start => {
+                    // The debuggee is generated from the same scene the tree and canvas show, so
+                    // the source map entries name real nodes. The selected node is the breakpoint
+                    // anchor; with no selection the second row (the demo panel) is used.
+                    let nodes: Vec<(NodeId, String)> = gui
+                        .scene
+                        .row_nodes()
+                        .into_iter()
+                        .filter_map(|node| gui.scene.name(node).map(|name| (node, name.to_owned())))
+                        .collect();
+                    let break_node = gui
+                        .scene
+                        .primary()
+                        .or_else(|| nodes.get(1).map(|(node, _)| *node))
+                        .or_else(|| nodes.first().map(|(node, _)| *node))
+                        .unwrap_or_else(|| NodeId::from_raw(0));
+                    gui.debug.start(nodes, break_node)
+                }
                 other => gui.debug.send(other),
             };
             gui.message = if accepted {
@@ -1058,6 +1296,7 @@ pub(super) fn workbench_gui(
         .collect();
     let _ = &services;
     for id in [
+        "pages",
         "outline",
         "inspector",
         "messages",
@@ -1138,6 +1377,25 @@ pub(super) fn workbench_gui(
         pointer: None,
         debug: DebugState::new(),
         debug_rows: Vec::new(),
+        events: EventsState::new(),
+        events_list: 0,
+        events_field: 0,
+        events_error: 0,
+        events_note: 0,
+        events_selected: 0,
+        inspect: InspectState::new(),
+        data_list: 0,
+        data_field: 0,
+        data_error: 0,
+        data_note: 0,
+        data_selected: 0,
+        inspect_note: 0,
+        pages: PagesState::new(),
+        pages_list: 0,
+        pages_field: 0,
+        pages_error: 0,
+        pages_note: 0,
+        pages_selected: 0,
         canvas_snapshot: Arc::new(Mutex::new((Vec::new(), None))),
         canvas_scheduled: Arc::new(AtomicBool::new(false)),
     }));
@@ -1156,6 +1414,7 @@ pub(super) fn workbench_gui(
             "View",
             vec![
                 ("Command Palette", "palette:open"),
+                ("Pages", "toggle:pages"),
                 ("Outline", "toggle:outline"),
                 ("Inspector", "toggle:inspector"),
                 ("Messages", "toggle:messages"),
@@ -1232,20 +1491,29 @@ pub(super) fn workbench_gui(
             gui.scene.rows(),
         )
     };
-    let mut inspector_controls: Option<(u64, u64, u64, u64, u64)> = None;
+    let mut inspector_controls: Option<InspectorControls> = None;
+    let mut events_controls: Option<EventControls> = None;
+    let mut data_controls: Option<DataControls> = None;
+    let mut pages_controls: Option<PageControls> = None;
     let mut outline_list: Option<u64> = None;
     for (id, title, rect, area) in [
         (
+            "pages",
+            "Pages",
+            (0, CONTENT_Y, 260, 180),
+            Area::LeftPanel { index: 0, count: 3 },
+        ),
+        (
             "outline",
             "Outline",
-            (0, CONTENT_Y, 260, 280),
-            Area::LeftPanel { index: 0, count: 2 },
+            (0, 254, 260, 180),
+            Area::LeftPanel { index: 1, count: 3 },
         ),
         (
             "events",
             "Events",
-            (0, 358, 260, 280),
-            Area::LeftPanel { index: 1, count: 2 },
+            (0, 442, 260, 200),
+            Area::LeftPanel { index: 2, count: 3 },
         ),
         (
             "inspector",
@@ -1279,6 +1547,17 @@ pub(super) fn workbench_gui(
         // as an implicit contract (feedback-20261020 §3.1, closed by 2.8.11).
         let title_widget = panel.new_label(title, rect.0 + 8, rect.1 + 6, rect.2 - 16, 20);
         let list = panel.new_list_box(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 38);
+        let focus_name = match id {
+            "pages" => "pages list",
+            "outline" => "outline list",
+            "events" => "events list",
+            "inspector" => "inspector list",
+            "data" => "data list",
+            "messages" => "messages list",
+            "problems" => "problems list",
+            _ => "panel list",
+        };
+        watch_focus(list.raw_id(), focus_name);
         let mut inner = BoxLayout::new(Orientation::Vertical, 4, 8);
         inner.add_widget(title_widget.raw_id(), 0);
         inner.set_constraints(title_widget.raw_id(), LayoutConstraints::new(20, Some(20)));
@@ -1286,64 +1565,257 @@ pub(super) fn workbench_gui(
         inner.add_widget(list.raw_id(), 1);
         inner.set_size_policy(list.raw_id(), SizePolicy::Expanding);
         let mut extra_widgets: Vec<u64> = Vec::new();
+        if id == "pages" {
+            let field =
+                panel.new_line_edit("", rect.0 + 8, rect.1 + rect.3 as i32 - 96, rect.2 - 16, 26);
+            field.set_placeholder("page name");
+            watch_focus(field.raw_id(), "pages field");
+            let actions = panel.new_panel(rect.0 + 8, rect.1 + rect.3 as i32 - 66, rect.2 - 16, 26);
+            let add = actions.new_button("Add", 0, 0, 44, 26);
+            let open = actions.new_button("Open", 0, 0, 44, 26);
+            let back = actions.new_button("Back", 0, 0, 44, 26);
+            let forward = actions.new_button("Fwd", 0, 0, 44, 26);
+            let close = actions.new_button("Close", 0, 0, 44, 26);
+            let mut action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            for widget in [
+                add.raw_id(),
+                open.raw_id(),
+                back.raw_id(),
+                forward.raw_id(),
+                close.raw_id(),
+            ] {
+                action_layout.add_widget(widget, 1);
+                action_layout.set_size_policy(widget, SizePolicy::Expanding);
+            }
+            actions.set_layout(Box::new(action_layout));
+            let error =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 36, rect.2 - 16, 16);
+            let note =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 18, rect.2 - 16, 16);
+            for (widget, height) in [
+                (field.raw_id(), 26),
+                (actions.raw_id(), 26),
+                (error.raw_id(), 16),
+                (note.raw_id(), 16),
+            ] {
+                inner.add_widget(widget, 0);
+                inner.set_constraints(widget, LayoutConstraints::new(height, Some(height)));
+                inner.set_size_policy(widget, SizePolicy::Fixed);
+            }
+            pages_controls = Some((
+                list.raw_id(),
+                field.raw_id(),
+                add.raw_id(),
+                open.raw_id(),
+                back.raw_id(),
+                forward.raw_id(),
+                close.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ));
+            extra_widgets.extend([
+                field.raw_id(),
+                actions.raw_id(),
+                add.raw_id(),
+                open.raw_id(),
+                back.raw_id(),
+                forward.raw_id(),
+                close.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ]);
+        }
         if id == "inspector" {
             // The value row and its error line are real controls inside the Inspector panel, not
             // a second floating form: the panel's own layout owns their geometry.
-            let row_y = rect.1 + rect.3 as i32 - 66;
-            let row = panel.new_panel(rect.0 + 8, row_y, rect.2 - 16, 28);
-            let field = row.new_line_edit(&inspector_value, rect.0 + 8, row_y, rect.2 - 96, 28);
-            let apply = row.new_button("Apply", rect.0 + rect.2 as i32 - 152, row_y, 80, 28);
-            let clear = row.new_button("Clear", rect.0 + rect.2 as i32 - 72, row_y, 72, 28);
+            let theme_y = rect.1 + rect.3 as i32 - 80;
+            let value_y = rect.1 + rect.3 as i32 - 110;
+            let row = panel.new_panel(rect.0 + 8, value_y, rect.2 - 16, 26);
+            let field = row.new_line_edit(&inspector_value, rect.0 + 8, value_y, rect.2 - 96, 26);
+            let apply = row.new_button("Apply", rect.0 + rect.2 as i32 - 250, value_y, 54, 26);
+            let clear = row.new_button("Clear", rect.0 + rect.2 as i32 - 192, value_y, 48, 26);
+            let reset = row.new_button("Reset", rect.0 + rect.2 as i32 - 140, value_y, 54, 26);
+            let inspect = row.new_button("Values", rect.0 + rect.2 as i32 - 82, value_y, 58, 26);
+            let theme_row = panel.new_panel(rect.0 + 8, theme_y, rect.2 - 16, 26);
+            let theme_field = theme_row.new_line_edit("", rect.0 + 8, theme_y, rect.2 - 96, 26);
+            theme_field.set_placeholder("theme name (dark)");
+            watch_focus(field.raw_id(), "inspector value field");
+            watch_focus(theme_field.raw_id(), "inspector theme field");
+            let theme_button =
+                theme_row.new_button("Theme", rect.0 + rect.2 as i32 - 80, theme_y, 72, 26);
             let error =
-                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 32, rect.2 - 16, 18);
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 50, rect.2 - 16, 16);
+            let note =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 30, rect.2 - 16, 16);
             let mut row_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
             row_layout.add_widget(field.raw_id(), 1);
             row_layout.set_size_policy(field.raw_id(), SizePolicy::Expanding);
-            row_layout.add_widget(apply.raw_id(), 0);
-            row_layout.set_constraints(apply.raw_id(), LayoutConstraints::new(80, Some(80)));
-            row_layout.set_size_policy(apply.raw_id(), SizePolicy::Fixed);
-            row_layout.add_widget(clear.raw_id(), 0);
-            row_layout.set_constraints(clear.raw_id(), LayoutConstraints::new(72, Some(72)));
-            row_layout.set_size_policy(clear.raw_id(), SizePolicy::Fixed);
+            for (widget, width) in [
+                (apply.raw_id(), 54),
+                (clear.raw_id(), 48),
+                (reset.raw_id(), 54),
+                (inspect.raw_id(), 58),
+            ] {
+                row_layout.add_widget(widget, 0);
+                row_layout.set_constraints(widget, LayoutConstraints::new(width, Some(width)));
+                row_layout.set_size_policy(widget, SizePolicy::Fixed);
+            }
             row.set_layout(Box::new(row_layout));
-            inner.add_widget(row.raw_id(), 0);
-            inner.set_constraints(row.raw_id(), LayoutConstraints::new(28, Some(28)));
-            inner.set_size_policy(row.raw_id(), SizePolicy::Fixed);
-            inner.add_widget(error.raw_id(), 0);
-            inner.set_constraints(error.raw_id(), LayoutConstraints::new(18, Some(18)));
-            inner.set_size_policy(error.raw_id(), SizePolicy::Fixed);
+            let mut theme_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            theme_layout.add_widget(theme_field.raw_id(), 1);
+            theme_layout.set_size_policy(theme_field.raw_id(), SizePolicy::Expanding);
+            theme_layout.add_widget(theme_button.raw_id(), 0);
+            theme_layout
+                .set_constraints(theme_button.raw_id(), LayoutConstraints::new(72, Some(72)));
+            theme_layout.set_size_policy(theme_button.raw_id(), SizePolicy::Fixed);
+            theme_row.set_layout(Box::new(theme_layout));
+            for (widget, height) in [
+                (row.raw_id(), 26),
+                (theme_row.raw_id(), 26),
+                (error.raw_id(), 16),
+                (note.raw_id(), 16),
+            ] {
+                inner.add_widget(widget, 0);
+                inner.set_constraints(widget, LayoutConstraints::new(height, Some(height)));
+                inner.set_size_policy(widget, SizePolicy::Fixed);
+            }
             inspector_controls = Some((
                 list.raw_id(),
                 field.raw_id(),
                 apply.raw_id(),
                 clear.raw_id(),
+                reset.raw_id(),
+                inspect.raw_id(),
+                theme_field.raw_id(),
+                theme_button.raw_id(),
                 error.raw_id(),
+                note.raw_id(),
             ));
-            extra_widgets.push(row.raw_id());
-            extra_widgets.push(field.raw_id());
-            extra_widgets.push(apply.raw_id());
-            extra_widgets.push(clear.raw_id());
-            extra_widgets.push(error.raw_id());
+            extra_widgets.extend([
+                row.raw_id(),
+                field.raw_id(),
+                apply.raw_id(),
+                clear.raw_id(),
+                reset.raw_id(),
+                inspect.raw_id(),
+                theme_row.raw_id(),
+                theme_field.raw_id(),
+                theme_button.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ]);
+        }
+        if id == "events" {
+            // The handler field and the Bind/Unbind/Fire row are the editing half of the panel;
+            // the status line above keeps *declared*, *wired* and *fired* apart.
+            let field =
+                panel.new_line_edit("", rect.0 + 8, rect.1 + rect.3 as i32 - 96, rect.2 - 16, 26);
+            field.set_placeholder("handler name");
+            watch_focus(field.raw_id(), "events handler field");
+            field.on_value_changed(|text| {
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-focus",
+                    &format!("events field text {} character(s)", text.chars().count()),
+                );
+            });
+            let actions = panel.new_panel(rect.0 + 8, rect.1 + rect.3 as i32 - 66, rect.2 - 16, 26);
+            let bind = actions.new_button("Bind", 0, 0, 72, 26);
+            let unbind = actions.new_button("Unbind", 0, 0, 72, 26);
+            let fire = actions.new_button("Fire", 0, 0, 72, 26);
+            let mut action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            for widget in [bind.raw_id(), unbind.raw_id(), fire.raw_id()] {
+                action_layout.add_widget(widget, 1);
+                action_layout.set_size_policy(widget, SizePolicy::Expanding);
+            }
+            actions.set_layout(Box::new(action_layout));
+            let error =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 36, rect.2 - 16, 16);
+            let note =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 18, rect.2 - 16, 16);
+            for (widget, height) in [
+                (field.raw_id(), 26),
+                (actions.raw_id(), 26),
+                (error.raw_id(), 16),
+                (note.raw_id(), 16),
+            ] {
+                inner.add_widget(widget, 0);
+                inner.set_constraints(widget, LayoutConstraints::new(height, Some(height)));
+                inner.set_size_policy(widget, SizePolicy::Fixed);
+            }
+            events_controls = Some((
+                list.raw_id(),
+                field.raw_id(),
+                bind.raw_id(),
+                unbind.raw_id(),
+                fire.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ));
+            extra_widgets.extend([
+                field.raw_id(),
+                actions.raw_id(),
+                bind.raw_id(),
+                unbind.raw_id(),
+                fire.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ]);
+        }
+        if id == "data" {
+            let row_y = rect.1 + rect.3 as i32 - 74;
+            let row = panel.new_panel(rect.0 + 8, row_y, rect.2 - 16, 26);
+            let field = row.new_line_edit("", rect.0 + 8, row_y, rect.2 - 96, 26);
+            watch_focus(field.raw_id(), "data field");
+            let apply = row.new_button("Apply", rect.0 + rect.2 as i32 - 80, row_y, 72, 26);
+            let mut row_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            row_layout.add_widget(field.raw_id(), 1);
+            row_layout.set_size_policy(field.raw_id(), SizePolicy::Expanding);
+            row_layout.add_widget(apply.raw_id(), 0);
+            row_layout.set_constraints(apply.raw_id(), LayoutConstraints::new(72, Some(72)));
+            row_layout.set_size_policy(apply.raw_id(), SizePolicy::Fixed);
+            row.set_layout(Box::new(row_layout));
+            let error =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 44, rect.2 - 16, 16);
+            let note =
+                panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 24, rect.2 - 16, 16);
+            for (widget, height) in [
+                (row.raw_id(), 26),
+                (error.raw_id(), 16),
+                (note.raw_id(), 16),
+            ] {
+                inner.add_widget(widget, 0);
+                inner.set_constraints(widget, LayoutConstraints::new(height, Some(height)));
+                inner.set_size_policy(widget, SizePolicy::Fixed);
+            }
+            data_controls = Some((
+                list.raw_id(),
+                field.raw_id(),
+                apply.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ));
+            extra_widgets.extend([
+                row.raw_id(),
+                field.raw_id(),
+                apply.raw_id(),
+                error.raw_id(),
+                note.raw_id(),
+            ]);
         }
         panel.set_layout(Box::new(inner));
         let items: Vec<String> = match id {
             "outline" => outline_items.clone(),
-            "events" => vec![
-                "click -> count (command)".to_owned(),
-                "change -> edit (call)".to_owned(),
-                "submit -> submit (call)".to_owned(),
-            ],
-            "data" => vec![
-                "state.count: number".to_owned(),
-                "state.text: text".to_owned(),
-                "binding: field.text <-> state.text".to_owned(),
-            ],
             "inspector" => vec![
                 format!("node: {inspector_node}"),
                 format!("kind: {inspector_kind}"),
                 format!("{inspector_name}: {inspector_value}"),
             ],
             "messages" => vec!["ready".to_owned()],
+            // The Events and Data lists are filled from their models once the controls exist.
+            "events" | "data" => Vec::new(),
+            // Pages is filled from its model too; the empty list is replaced on the first sync.
+            "pages" => Vec::new(),
             _ => vec!["no problems".to_owned()],
         };
         for item in items {
@@ -1364,11 +1836,24 @@ pub(super) fn workbench_gui(
 
     // The Inspector's editor: Apply commits the typed text through the schema editor, and a
     // double-click on the property row moves the keyboard to the field.
-    if let Some((list_id, field_id, apply_id, clear_id, error_id)) = inspector_controls {
+    if let Some((
+        list_id,
+        field_id,
+        apply_id,
+        clear_id,
+        reset_id,
+        inspect_id,
+        theme_field_id,
+        theme_button_id,
+        error_id,
+        note_id,
+    )) = inspector_controls
+    {
         if let Ok(mut gui) = gui.lock() {
             gui.inspector_list = list_id;
             gui.property_field = field_id;
             gui.property_error = error_id;
+            gui.inspect_note = note_id;
         }
         {
             let gui = Arc::clone(&gui);
@@ -1403,6 +1888,127 @@ pub(super) fn workbench_gui(
                             gui.property.value_text()
                         ),
                     );
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(reset_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    // Reset is the T11.02 half the Clear button does not do: the explicit edit is
+                    // taken away and each node returns to the structural name it started from.
+                    let nodes = gui.property.nodes().to_vec();
+                    let (count, lines) = gui.property.reset();
+                    for node in &nodes {
+                        if let Some(value) = gui.property.value_for(*node) {
+                            let _ = gui.scene.rename(*node, &value);
+                        }
+                    }
+                    rust_widgets::set_widget_text(gui.property_error, &lines.join(" | "));
+                    refresh_inspector(&mut gui);
+                    sync_outline(&mut gui);
+                    sync_canvas(&gui);
+                    gui.message = format!("reset {count} node(s) to the structural title");
+                    update_status(&gui);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench-property",
+                        &format!("inspector reset {count} node(s): {}", lines.join("; ")),
+                    );
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(inspect_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    // The read-only half of T14.05: re-record the current selection, then read
+                    // design/computed/runtime and the source location. No trigger is dispatched.
+                    let selected = gui.scene.selected().to_vec();
+                    {
+                        let Gui { inspect, scene, .. } = &mut *gui;
+                        inspect.retarget(scene, &selected);
+                    }
+                    match gui.inspect.inspect() {
+                        Ok(lines) => {
+                            rust_widgets::list_box_clear_items(gui.inspector_list);
+                            for line in &lines {
+                                let _ = rust_widgets::list_box_add_item(gui.inspector_list, line);
+                            }
+                            gui.message = format!(
+                                "inspected node; design v{}, effects {}",
+                                gui.inspect.version(),
+                                gui.inspect.effects()
+                            );
+                            rust_widgets::set_widget_text(gui.property_error, "");
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-inspect",
+                                &format!(
+                                    "inspect rows: {} (effects {})",
+                                    lines.len(),
+                                    gui.inspect.effects()
+                                ),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.property_error,
+                                &format!("inspect refused: {reason}"),
+                            );
+                            gui.message = format!("inspect refused: {reason}");
+                        }
+                    }
+                    if gui.inspect_note != 0 {
+                        rust_widgets::set_widget_text(
+                            gui.inspect_note,
+                            &format!(
+                                "design v{} · effects {} · read-only",
+                                gui.inspect.version(),
+                                gui.inspect.effects()
+                            ),
+                        );
+                    }
+                    update_status(&gui);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(theme_button_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let name = rust_widgets::get_widget_text(theme_field_id);
+                    let selected = gui.scene.selected().to_vec();
+                    {
+                        let Gui { inspect, scene, .. } = &mut *gui;
+                        inspect.retarget(scene, &selected);
+                    }
+                    match gui.inspect.apply_theme(&name, &selected) {
+                        Ok(lines) => {
+                            rust_widgets::set_widget_text(gui.property_error, "");
+                            gui.message = lines[0].clone();
+                            refresh_inspector(&mut gui);
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-inspect",
+                                &format!("theme applied: {}", lines.join("; ")),
+                            );
+                        }
+                        Err(reason) => {
+                            let reason = gui.inspect.refuse(reason);
+                            rust_widgets::set_widget_text(
+                                gui.property_error,
+                                &format!("theme refused: {reason}"),
+                            );
+                            gui.message = format!("theme refused: {reason}");
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-inspect",
+                                &format!("theme refused: {reason}"),
+                            );
+                        }
+                    }
+                    update_status(&gui);
                 }
             });
         }
@@ -1454,6 +2060,402 @@ pub(super) fn workbench_gui(
                 select_node(&mut gui, node, "tree");
             }
         });
+    }
+
+    // The Pages panel (T13.05): the same Navigator the CLI drives, with the window's own
+    // back/forward stacks. A route only moves along a declared edge, and a closing window refuses.
+    if let Some((
+        list_id,
+        field_id,
+        add_id,
+        open_id,
+        back_id,
+        forward_id,
+        close_id,
+        error_id,
+        note_id,
+    )) = pages_controls
+    {
+        if let Ok(mut gui) = gui.lock() {
+            gui.pages_list = list_id;
+            gui.pages_field = field_id;
+            gui.pages_error = error_id;
+            gui.pages_note = note_id;
+            sync_pages(&mut gui);
+        }
+        {
+            let gui = Arc::clone(&gui);
+            subscribe_index(list_id, "item_selected", move |index| {
+                if let Ok(mut gui) = gui.lock() {
+                    if gui.pages_selected == index as usize {
+                        return;
+                    }
+                    gui.pages_selected = index as usize;
+                    if let Some(page) = gui.pages.pages().get(gui.pages_selected).cloned() {
+                        rust_widgets::set_widget_text(gui.pages_field, &page);
+                    }
+                    sync_pages(&mut gui);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(add_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let name = rust_widgets::get_widget_text(gui.pages_field);
+                    // "home -> detail" declares a navigation; a bare name declares a page.
+                    let outcome = match name.split_once("->") {
+                        Some((from, to)) => {
+                            let from = from.trim();
+                            let to = to.trim();
+                            gui.pages.add_edge(from, to).map(|revision| {
+                                format!(
+                                    "declared navigation {from:?} -> {to:?} (revision {revision})"
+                                )
+                            })
+                        }
+                        None => gui.pages.add_page(&name).map(|revision| {
+                            format!("declared page {name:?} (revision {revision})")
+                        }),
+                    };
+                    match outcome {
+                        Ok(message) => {
+                            rust_widgets::set_widget_text(gui.pages_error, "");
+                            gui.message = message.clone();
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-pages",
+                                &message,
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.pages_error,
+                                &format!("not added: {reason}"),
+                            );
+                            gui.message = format!("not added: {reason}");
+                        }
+                    }
+                    sync_pages(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(open_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let page = rust_widgets::get_widget_text(gui.pages_field);
+                    match gui.pages.open_page(&page) {
+                        Ok(revision) => {
+                            rust_widgets::set_widget_text(gui.pages_error, "");
+                            gui.message = format!(
+                                "opened {page:?}; current {:?} (revision {revision})",
+                                gui.pages.current()
+                            );
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-pages",
+                                &format!("open {page:?}; revision {revision}"),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.pages_error,
+                                &format!("not opened: {reason}"),
+                            );
+                            gui.message = format!("not opened: {reason}");
+                        }
+                    }
+                    sync_pages(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        for (button, forward) in [(back_id, false), (forward_id, true)] {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(button).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let outcome = if forward {
+                        gui.pages.forward()
+                    } else {
+                        gui.pages.back()
+                    };
+                    match outcome {
+                        Ok(page) => {
+                            rust_widgets::set_widget_text(gui.pages_error, "");
+                            gui.message = format!("now on {page:?}");
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-pages",
+                                &format!(
+                                    "{} -> {page:?}",
+                                    if forward { "forward" } else { "back" }
+                                ),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.pages_error,
+                                &format!("not moved: {reason}"),
+                            );
+                            gui.message = format!("not moved: {reason}");
+                        }
+                    }
+                    sync_pages(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(close_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    match gui.pages.close() {
+                        Ok(state) => {
+                            rust_widgets::set_widget_text(gui.pages_error, "");
+                            gui.message = state.clone();
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-pages",
+                                &format!("window {state}"),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.pages_error,
+                                &format!("not closed: {reason}"),
+                            );
+                            gui.message = format!("not closed: {reason}");
+                        }
+                    }
+                    sync_pages(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+    }
+
+    // The Events panel (T13.03/T13.04). A row selects a declared event; Bind/Unbind edit the
+    // one attachment the selected node has, and Fire checks a trigger against the declaration.
+    if let Some((list_id, field_id, bind_id, unbind_id, fire_id, error_id, note_id)) =
+        events_controls
+    {
+        if let Ok(mut gui) = gui.lock() {
+            gui.events_list = list_id;
+            gui.events_field = field_id;
+            gui.events_error = error_id;
+            gui.events_note = note_id;
+            sync_events(&mut gui);
+        }
+        {
+            let gui = Arc::clone(&gui);
+            subscribe_index(list_id, "item_selected", move |index| {
+                if let Ok(mut gui) = gui.lock() {
+                    // Rebuilding the list sets the current row to the selection; that programmatic
+                    // change emits this signal too, so a row that already is selected is a no-op.
+                    if gui.events_selected == index as usize {
+                        return;
+                    }
+                    gui.events_selected = index as usize;
+                    let handler = selected_event(&gui)
+                        .and_then(|event| gui.events.handler_of(&event).map(str::to_owned))
+                        .unwrap_or_default();
+                    rust_widgets::set_widget_text(gui.events_field, &handler);
+                    sync_events(&mut gui);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench-events",
+                        &format!(
+                            "events row {index} -> {} on node {}",
+                            selected_event(&gui).unwrap_or_default(),
+                            gui.events.node().get()
+                        ),
+                    );
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(bind_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let Some(event) = selected_event(&gui) else {
+                        return;
+                    };
+                    let handler = rust_widgets::get_widget_text(gui.events_field);
+                    match gui.events.bind(&event, &handler) {
+                        Ok(revision) => {
+                            rust_widgets::set_widget_text(gui.events_error, "");
+                            let node = gui.events.node().get();
+                            gui.message = format!(
+                                "bound {event} -> {handler} on node {node} (revision {revision})"
+                            );
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-events",
+                                &format!(
+                                    "bind {event} -> {handler} on node {node}: revision {revision}"
+                                ),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.events_error,
+                                &format!("not bound: {reason}"),
+                            );
+                            gui.message = format!("not bound: {reason}");
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-events",
+                                &format!("bind refused: {reason}"),
+                            );
+                        }
+                    }
+                    sync_events(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(unbind_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let Some(event) = selected_event(&gui) else {
+                        return;
+                    };
+                    match gui.events.unbind(&event) {
+                        Ok(revision) => {
+                            rust_widgets::set_widget_text(gui.events_error, "");
+                            gui.message = format!(
+                                "unbound {event} on node {} (revision {revision})",
+                                gui.events.node().get()
+                            );
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-events",
+                                &format!(
+                                    "unbind {event} on node {}: revision {revision}",
+                                    gui.events.node().get()
+                                ),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.events_error,
+                                &format!("not unbound: {reason}"),
+                            );
+                            gui.message = format!("not unbound: {reason}");
+                        }
+                    }
+                    sync_events(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(fire_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let Some(event) = selected_event(&gui) else {
+                        return;
+                    };
+                    match gui.events.fire(&event) {
+                        Ok(lines) => {
+                            rust_widgets::set_widget_text(gui.events_error, &lines.join(" | "));
+                            gui.message = lines.join(" | ");
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-events",
+                                &format!("fired {event}: {}", lines.join("; ")),
+                            );
+                        }
+                        Err(reason) => {
+                            rust_widgets::set_widget_text(
+                                gui.events_error,
+                                &format!("not fired: {reason}"),
+                            );
+                            gui.message = format!("not fired: {reason}");
+                        }
+                    }
+                    sync_events(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+    }
+
+    // The Data panel (T13.04/T14.05). The sample dataset is edited through the typed schema;
+    // the running layer stays unavailable because no instance is started in a design session.
+    if let Some((list_id, field_id, apply_id, error_id, note_id)) = data_controls {
+        if let Ok(mut gui) = gui.lock() {
+            gui.data_list = list_id;
+            gui.data_field = field_id;
+            gui.data_error = error_id;
+            gui.data_note = note_id;
+            sync_data(&mut gui);
+        }
+        {
+            let gui = Arc::clone(&gui);
+            subscribe_index(list_id, "item_selected", move |index| {
+                if let Ok(mut gui) = gui.lock() {
+                    // Row 0 is the dataset label, so field rows start at 1.
+                    gui.data_selected = (index as usize).saturating_sub(1);
+                    sync_data(&mut gui);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench-data",
+                        &format!(
+                            "data row {index} -> field {:?}",
+                            gui.inspect.fields().get(gui.data_selected)
+                        ),
+                    );
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            ButtonHandle::from_raw(apply_id).on_click(move || {
+                if let Ok(mut gui) = gui.lock() {
+                    let fields = gui.inspect.fields();
+                    let Some(field) = fields.get(gui.data_selected).cloned() else {
+                        return;
+                    };
+                    let text = rust_widgets::get_widget_text(gui.data_field);
+                    match gui.inspect.edit(&field, &text) {
+                        Ok(version) => {
+                            rust_widgets::set_widget_text(gui.data_error, "");
+                            gui.message = format!("{field} = {text:?} (data v{version})");
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-data",
+                                &format!(
+                                    "data applied {field} = {text:?}; version {version}; effects {}",
+                                    gui.inspect.effects()
+                                ),
+                            );
+                        }
+                        Err(reason) => {
+                            let reason = gui.inspect.refuse(reason);
+                            rust_widgets::set_widget_text(
+                                gui.data_error,
+                                &format!("not applied: {reason}"),
+                            );
+                            gui.message = format!(
+                                "{field} not applied at version {}: {reason}",
+                                gui.inspect.version()
+                            );
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench-data",
+                                &format!("data refused {field} = {text:?}: {reason}"),
+                            );
+                        }
+                    }
+                    sync_data(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
     }
 
     // The debug panel (T19.03–T19.06). Its controls drive a real DAP session on a worker
@@ -1607,6 +2609,7 @@ pub(super) fn workbench_gui(
         gui.canvas_surface = canvas_surface;
         gui.placements.push((canvas_panel.raw_id(), Area::Canvas));
     }
+    watch_focus(canvas_surface, "canvas");
 
     // Pointer facts for click selection and drag marquee. `mouse_pressed`/`mouse_released` carry
     // no position, so the `mouse_moved` payload keeps the current design-space point; the press
@@ -1666,6 +2669,7 @@ pub(super) fn workbench_gui(
     let palette_title = palette_panel.new_label("Command Palette", 0, 0, 0, 0);
     let palette_query = palette_panel.new_line_edit("", 0, 0, 0, 0);
     palette_query.set_placeholder("Type a command…");
+    watch_focus(palette_query.raw_id(), "palette query");
     let palette_list = palette_panel.new_list_box(0, 0, 0, 0);
     let palette_help = palette_panel.new_label("", 0, 0, 0, 0);
     let palette_hint =
@@ -1746,6 +2750,22 @@ pub(super) fn workbench_gui(
         });
     }
     {
+        // Escape ends editing. A focus move also emits `editing_finished`, so the panel only
+        // closes when the query still holds the keyboard — otherwise clicking a row would
+        // close the palette before its selection arrived.
+        let gui = Arc::clone(&gui);
+        subscribe_unit(palette_query.raw_id(), "editing_finished", move || {
+            if let Ok(mut gui) = gui.lock()
+                && gui.palette.is_open()
+                && focused_widget() == Some(gui.palette_query)
+            {
+                close_palette(&mut gui);
+                gui.message = "command palette closed".to_owned();
+                update_status(&gui);
+            }
+        });
+    }
+    {
         let gui = Arc::clone(&gui);
         subscribe_index(palette_list.raw_id(), "item_selected", move |index| {
             if let Ok(mut gui) = gui.lock()
@@ -1805,6 +2825,11 @@ pub(super) fn workbench_gui(
     if let Ok(mut gui) = gui.lock() {
         gui.sync_panels();
         gui.sync_editors();
+        // The initial selection is the same one the canvas paints, so the Inspector, Events and
+        // Data panels start from it rather than from a second demo value.
+        retarget_panels(&mut gui);
+        refresh_inspector(&mut gui);
+        sync_pages(&mut gui);
     }
     if let Ok(gui) = gui.lock() {
         let selection: Vec<u64> = gui.scene.selected().iter().map(|node| node.get()).collect();

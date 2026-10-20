@@ -8,7 +8,8 @@
 //!
 //! * The designer is grouped into one module per feature family — `shell`, `commands`, `editor`,
 //!   `language`, `search`, `canvas`, `layout`, `style`, `data`, `preview`, `generate`, `build`,
-//!   `component`, `application`, `collection`, `logic`, `targets`, `debug` and `locale` — because a flat
+//!   `component`, `application`, `collection`, `logic`, `targets`, `debug`, `locale`, `vcs`,
+//!   `quality`, `extension`, `ai`, `settings` and `release` — because a flat
 //!   directory of eighty modules cannot be navigated. The group names are the domains, and the task
 //!   numbers in each module (`T04.01`, `T05.01`, …) are the same families the roadmap uses, so a
 //!   reader can get from a roadmap entry to a file without a second index.
@@ -24,6 +25,7 @@
 //!   and `logic`, whose processes it observes but does not own.
 //! * [`run`] stays at the top rather than inside a group: it is the dispatcher every command passes
 //!   through, and its own submodules already follow this same domain split.
+pub mod ai;
 pub mod application;
 pub mod build;
 pub mod canvas;
@@ -33,16 +35,21 @@ pub mod component;
 pub mod data;
 pub mod debug;
 pub mod editor;
+pub mod extension;
 pub mod generate;
 pub mod language;
 pub mod layout;
 pub mod locale;
 pub mod logic;
 pub mod preview;
+pub mod quality;
+pub mod release;
 pub mod search;
+pub mod settings;
 pub mod shell;
 pub mod style;
 pub mod targets;
+pub mod vcs;
 
 // The dispatcher stays at the top level rather than inside a group: every command passes through it,
 // and its own submodules already follow the same domain split.

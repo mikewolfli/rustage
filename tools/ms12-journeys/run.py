@@ -243,10 +243,11 @@ def j02(session: Session) -> None:
          "check", "show"],
         expect=("closing",),
     )
-    session.blocked(
-        "J02", "new page and focus through the workbench window",
-        "the workbench window has no page tab strip or route editor yet (F04/F13 "
-        "GUI slice); the model chain above is the evidence this build has",
+    session.python(
+        "J02", "declare, navigate and close pages in a real window", "real",
+        "import subprocess,sys; sys.exit(subprocess.run([sys.executable,"
+        "'tools/gui-smoke/pages.py']).returncode)",
+        timeout=180,
     )
 
 
@@ -282,12 +283,11 @@ def j03(session: Session) -> None:
         "'tools/gui-smoke/palette.py']).returncode)",
         timeout=180,
     )
-    session.blocked(
-        "J03", "operate the whole journey without a mouse in the window",
-        "the command palette is real (open, type, select a row, Run, Close, focus restore), "
-        "but Enter/Escape are blocked by the pinned GTK keyval path "
-        "(docs/rw-feedback/feedback-20261020.md §0.2), and the object tree/canvas have "
-        "pointer evidence only: no keyboard focus traversal between them yet",
+    session.python(
+        "J03", "keyboard focus traverses panels, lists and fields", "real",
+        "import subprocess,sys; sys.exit(subprocess.run([sys.executable,"
+        "'tools/gui-smoke/focus.py']).returncode)",
+        timeout=180,
     )
 
 
@@ -338,11 +338,11 @@ def j04(session: Session) -> None:
         "'tools/gui-smoke/scene.py']).returncode)",
         timeout=180,
     )
-    session.blocked(
-        "J04", "theme review by pointer across a multi-selection",
-        "the canvas has one selection set and a drag marquee, and the Inspector edits the "
-        "primary node's title; a theme token applied to the whole selection (T11.02/T14.05) "
-        "has no window surface yet",
+    session.python(
+        "J04", "apply one theme token to a multi-selection and review computed values", "real",
+        "import subprocess,sys; sys.exit(subprocess.run([sys.executable,"
+        "'tools/gui-smoke/inspect.py']).returncode)",
+        timeout=180,
     )
 
 
@@ -576,16 +576,22 @@ def j09(session: Session) -> None:
         timeout=120,
     )
     session.python(
-        "J09", "the debug panel drives a real DAP session", "real",
+        "J09", "the debug panel drives a DAP session and maps line <-> node", "real",
         "import subprocess,sys; sys.exit(subprocess.run([sys.executable,"
         "'tools/gui-smoke/debug.py']).returncode)",
         timeout=180,
     )
-    session.blocked(
-        "J09", "two-way source navigation inside the debug panel",
-        "the panel shows the adapter's raw position and says no generated source map is "
-        "loaded; the model-level mapping tests and the CLI source round-trip remain the "
-        "evidence for T19.06",
+    session.python(
+        "J09", "bind, trigger and unbind an event in a real window", "real",
+        "import subprocess,sys; sys.exit(subprocess.run([sys.executable,"
+        "'tools/gui-smoke/events.py']).returncode)",
+        timeout=180,
+    )
+    session.python(
+        "J09", "read design/computed/runtime values and edit data in a real window", "real",
+        "import subprocess,sys; sys.exit(subprocess.run([sys.executable,"
+        "'tools/gui-smoke/inspect.py']).returncode)",
+        timeout=180,
     )
 
 

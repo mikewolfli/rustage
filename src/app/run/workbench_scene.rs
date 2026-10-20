@@ -155,6 +155,11 @@ impl CanvasState {
         self.tree.get(node).map(|entry| entry.kind)
     }
 
+    /// A node's parent in the structural tree, or `None` for a root.
+    pub(super) fn parent(&self, node: NodeId) -> Option<NodeId> {
+        self.tree.get(node).and_then(|entry| entry.parent)
+    }
+
     /// Renames a node after the Inspector accepted a new title.
     pub(super) fn rename(&mut self, node: NodeId, name: &str) -> Result<(), String> {
         self.tree

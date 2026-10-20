@@ -219,14 +219,27 @@ def main() -> int:
         checks.append(("Run executes the selected row", output.wait_for("palette ran file.save", 5.0)))
         checks.append(("the palette closed after activation", output.wait_for("palette closed; focus", 5.0)))
 
+        # Enter in the query field runs the selected command; Escape closes without running.
+        # Both are real key events through the GTK backend (2.8.12 normalises GDK keyvals).
+        if not open_palette():
+            print(output.text(), file=sys.stderr)
+            return 1
+        type_text("welcome")
+        key("Return")
+        checks.append(("Enter runs the selected command", output.wait_for("palette ran view.welcome", 5.0)))
+        checks.append(("Enter closes the palette", output.wait_for("palette closed; focus", 5.0)))
+
+        if not open_palette():
+            print(output.text(), file=sys.stderr)
+            return 1
+        type_text("welcome")
+        key("Escape")
+        checks.append(("Escape closes the palette", output.wait_for("palette closed; focus", 5.0)))
+
         ok = True
         for name, passed in checks:
             print(f"{'ok  ' if passed else 'FAIL'} {name}")
             ok &= passed
-        # Recorded, not asserted: the pinned GTK key path forwards raw GDK keyvals (Return =
-        # 0xFF0D, Escape = 0xFF1B) while LineEdit matches 13/27, so Enter/Escape do not reach the
-        # library's signals on this backend. See feedback-20261020.md.
-        print("blk  Enter/Escape via the query field: pinned GTK keyval path (upstream defect)")
         if not ok:
             print("\nhost log:\n" + output.text(), file=sys.stderr)
         return 0 if ok else 1

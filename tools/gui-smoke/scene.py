@@ -142,7 +142,7 @@ def main() -> int:
         ))
         checks.append((
             "the Inspector retargets at the selected node's title",
-            output.wait_for("inspector rows: title: label", 4.0),
+            output.wait_for("inspector rows: title: agreed: label", 4.0),
         ))
 
         # Outside the label but inside the button.

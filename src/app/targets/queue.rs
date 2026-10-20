@@ -842,9 +842,11 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    use super::sign_with;
     use super::{
         Action, Artifact, CredentialRef, CredentialSource, Proof, Queue, Refusal, SignatureState,
-        Signing, Summary, redact, sign, sign_with,
+        Signing, Summary, redact, sign,
     };
     use crate::app::targets::configuration::Os;
     use std::path::PathBuf;

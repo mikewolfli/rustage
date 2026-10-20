@@ -81,7 +81,12 @@ impl NativePlatform {
     /// focuses it, and the platform's key handler routes typing to the focused control. The
     /// callback counts a real activation; the host reports zero and exits non-zero when a requested
     /// smoke observed no click.
-    fn mount_smoke_controls(&mut self, window: u64, seed: Option<&str>) -> HostResult<()> {
+    fn mount_smoke_controls(
+        &mut self,
+        window: u64,
+        seed: Option<&str>,
+        ime: bool,
+    ) -> HostResult<()> {
         let handle = WindowHandle::from_raw(window);
 
         let field = handle.new_line_edit("", 40, 100, 300, 32);
@@ -98,6 +103,24 @@ impl NativePlatform {
             note_field_change(&last_text, text.to_owned());
         });
         self.smoke_field = Some(field_id);
+        if ime {
+            // The library owns the toolkit input method; this observer is the host-facing half
+            // (`WidgetHandle::on_ime_preedit`, added in the pinned 2.8.10). It logs each
+            // uncommitted composition frame, so `--ime` can prove composition happened instead
+            // of only seeing the final commit.
+            let observed = field.on_ime_preedit(move |text, cursor| {
+                emit(
+                    Level::Info,
+                    "host::platform",
+                    &format!("smoke IME preedit: {text:?}@{cursor}"),
+                );
+            });
+            if !observed {
+                return Err(HostError::WindowCreation {
+                    reason: "the smoke line edit refused the IME pre-edit observer".to_owned(),
+                });
+            }
+        }
         if let Some(text) = seed {
             *self.smoke_field_text.lock().expect("smoke text lock") = text.to_owned();
             rust_widgets::set_widget_text(field_id, text);
@@ -282,7 +305,7 @@ impl StartupPlatform for NativePlatform {
             });
         }
         if request.smoke {
-            self.mount_smoke_controls(id, request.smoke_text.as_deref())?;
+            self.mount_smoke_controls(id, request.smoke_text.as_deref(), request.ime)?;
         }
         rust_widgets::show_widget(id);
         #[cfg(all(target_os = "linux", feature = "linux-native"))]
@@ -292,8 +315,8 @@ impl StartupPlatform for NativePlatform {
                 // The pinned revision owns the toolkit IM context now: the window creates and
                 // focuses an `IMMulticontext`, filters composition keys before the widget layer,
                 // and delivers preedit/commit through `platform::ime`. Installing a second context
-                // here would compose twice, so `--ime` only records that the library path is the
-                // one under test.
+                // here would compose twice, so `--ime` only observes the library path the tool
+                // exposes (`on_ime_preedit`, wired above in `mount_smoke_controls`).
                 emit(
                     Level::Info,
                     "host::platform",

@@ -27,6 +27,8 @@ What it proves:
 
 With `--keys`:
 
+- the script clicks the field first, so the library's own pointer-press focus path is under test
+  rather than a host-side `focus_widget` workaround;
 - `abc` typed into the field produces `Field/change` events and `state=editing`;
 - `smoke field final: "abc"` proves the text reached the real control.
 
@@ -34,10 +36,10 @@ With `--ime`:
 
 - the script first makes the precondition explicit by running `fcitx5-remote -o` and
   `fcitx5-remote -s pinyin`, and restores the previous state on exit;
-- a real composition commits `你好` (`smoke field final: "你好"`). The host does not log each
-  preedit step any more because the pinned library owns the toolkit input context; a final
-  Chinese string is the observable proof that composition happened rather than five separate
-  letter commits.
+- the host registers the library's pre-edit observer (`WidgetHandle::on_ime_preedit`), so each
+  uncommitted frame is logged (`smoke IME preedit: "ni hao"@0`) before the commit;
+- a real composition commits `你好` (`smoke field final: "你好"`). The final Chinese string is the
+  observable proof that composition happened rather than five separate letter commits.
 
 What this is, precisely:
 

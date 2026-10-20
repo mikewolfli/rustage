@@ -210,10 +210,19 @@
   （`generated-mini-ok` / `generated-embedded-ok`）；Android 的 `mobile,android` 生成源码在
   `aarch64-linux-android` + NDK 29 上交叉构建为 ELF aarch64 共享库。两者都仍不是设备运行证据，
   也不把 Linux 的受限格或真机安装写成已验证。证据见 [`log-20261020-1.md`](../log/log-20261020-1.md) §2。
+- **2026-10-20 第二次补充（Linux 五 profile 补齐）：** 依赖 re-pin 到 2.8.10 后，Linux x86_64 上用
+  `cargo build --manifest-path <rust-widgets>/Cargo.toml --no-default-features --features <profile>
+  --lib` 分别构建 `desktop`/`tablet`/`mobile`/`mini`/`embedded` 均通过；2.8.10 修复了此前
+  `linux × mini` 的上游编译缺陷。支持矩阵因此变为 15/15 `build-verified`，但没有任何一格写成
+  `certified`（profile 产物未在对应设备/OS 上运行）。同一轮 Linux 的 `sign(... host:linux)` 也由
+  真实 `gpg --detach-sign` + `gpg --verify` 驱动，临时 keyring 的单元测试与 CLI 实跑均得到
+  `Good signature`；Windows 仍为 `Unavailable`。证据见
+  [`log-20261020-2.md`](../log/log-20261020-2.md) §6。
 - **2026-10-19 Windows 组合补充：** `x86_64-pc-windows-msvc` 在 macOS 宿主上用 `rust-lld` 与
   xwin 的 MSVC SDK/CRT 真实构建通过（PE32+ `rustage.exe`），支持矩阵 `windows × desktop` 从
   `unverified` 升为 `build-verified`（15 格中 11 格有构建证据）。macOS 与 Windows 的 tablet/mobile/
   mini/embedded 也用固定依赖的 profile rlib 真实构建通过；Linux 的四个非 desktop 格仍为
-  `unverified`（上游 mini 在 Linux target 的编译缺陷 + 缺 Linux 交叉链接器）。没有 Windows 实机运行，故不写
+  `unverified`（上游 mini 在 Linux target 的编译缺陷 + 缺 Linux 交叉链接器）；该状态后由 2026-10-20
+  第二次补充改为 15/15 `build-verified`。没有 Windows 实机运行，故不写
   `certified`；tablet/mobile 的真机运行仍未验证。证据见
   [`log-20261019-2.md`](../log/log-20261019-2.md) §5、§5.7。

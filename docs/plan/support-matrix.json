@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "504698fec4028b2ddb96609e517d145ea30a25e2",
+    "revision": "5e3a6f35df4e357fc9e18996b779e2d371e14041",
     "profile": "desktop"
   },
   "levels": {
@@ -28,7 +28,7 @@
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
       "designerHost": "certified",
-      "reason": "cargo build --bin rustage 与 target/debug/rustage --version 在 Linux x86_64、rustc 1.98.1 上通过；cargo build --features linux-native 亦通过，--launch --exit-after-ms 8000 在 X11 下映射出真实 1280x800 GTK 窗口（xwininfo），绘制回调填充 clear colour；--launch --smoke 画出真实按钮与文本框并经 XTest 指针事件触发回调；--smoke-worker 把点击经管道送进真实 --logic-worker 并观察到 running/idle；见 docs/log/log-20261019-1.md §2、§5.7"
+      "reason": "cargo build --bin rustage 与 target/debug/rustage --version 在 Linux x86_64、rustc 1.98.1 上通过；cargo build --features linux-native 亦通过，--launch --exit-after-ms 8000 在 X11 下映射出真实 1280x800 GTK 窗口（xwininfo），绘制回调填充 clear colour；--launch --smoke 画出真实按钮与文本框并经 XTest 指针事件触发回调；--smoke-worker 把点击经管道送进真实 --logic-worker 并观察到 running/idle；2026-10-20 在 2.8.10 上实跑 tools/gui-smoke/run.py --keys 与 --ime（fcitx5 preedit 逐帧可见、提交你好），--workbench-gui 随窗口尺寸 1280x800→1600x900→1000x700 重排；见 docs/log/log-20261019-1.md §2、§5.7 与 docs/log/log-20261020-2.md §3、§4"
     }
   ],
   "profiles": [
@@ -46,7 +46,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 的 tablet profile 已在 macos(aarch64) 与 windows(msvc) 上真实构建通过；未运行"
+      "mode2Reason": "固定依赖 rust_widgets 的 tablet/mobile profile 已在 macos、linux 与 windows(msvc) 上真实构建通过；未运行"
     },
     {
       "id": "mobile",
@@ -54,7 +54,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 的 mobile profile 已在 macos(aarch64) 与 windows(msvc) 上真实构建通过；未运行"
+      "mode2Reason": "固定依赖 rust_widgets 的 tablet/mobile profile 已在 macos、linux 与 windows(msvc) 上真实构建通过；未运行"
     },
     {
       "id": "mini",
@@ -62,7 +62,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features mini --lib 真实构建通过；见 docs/log/log-20261016-4.md §28"
+      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features mini|embedded --lib 在 macos、linux 与 windows(msvc) 上真实构建通过；见 docs/log/log-20261020-2.md"
     },
     {
       "id": "embedded",
@@ -70,7 +70,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features embedded --lib 真实构建通过；见 docs/log/log-20261016-4.md §28"
+      "mode2Reason": "固定依赖 rust_widgets 以 --no-default-features --features mini|embedded --lib 在 macos、linux 与 windows(msvc) 上真实构建通过；见 docs/log/log-20261020-2.md"
     }
   ],
   "cells": [
@@ -143,26 +143,26 @@
     {
       "host": "linux",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features tablet --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
     },
     {
       "host": "linux",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features mobile --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
     },
     {
       "host": "linux",
       "profile": "mini",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features mini --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
     },
     {
       "host": "linux",
       "profile": "embedded",
-      "status": "unverified",
-      "reason": null
+      "status": "build-verified",
+      "reason": "固定依赖 rust_widgets 2.8.10 以 --no-default-features --features embedded --lib 在 Linux x86_64（rustc 1.98.1）上真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-2.md"
     }
   ]
 }

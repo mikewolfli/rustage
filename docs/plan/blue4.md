@@ -399,6 +399,12 @@
   实机与 `tests/workbench_gui.rs`（2 项）见 [`log-20261019-2.md`](../log/log-20261019-2.md) §5.10。
   仍未做：拖拽停靠、浮动、每个 tab 的滚动位置、完整代码编辑器、macOS 原生菜单绘制
   （该修订的 macOS 后端不提供 NSMenu，工具栏与窗口内按钮是可达路径）。
+- **2026-10-20 响应式布局补充：** `--workbench-gui` 的窗口 chrome 不再使用固定像素矩形，
+  而是 `WorkbenchLayout`（库的 `Layout` trait）加每个面板的 `BoxLayout`；窗口从 1280x800
+  缩放到 1600x900 / 1000x700 时重排，Split 后编辑组从 1 组变 2 组。证据见
+  [`log-20261020-2.md`](../log/log-20261020-2.md) §4；拖拽停靠/浮动仍未做。GTK 在 resize 后
+  不主动重绘窗口 paint area（上游 `window_painters` 未被读取），新布局在下一次输入事件前可能
+  仍显示旧帧，已记入 [`feedback-20261020.md` §3.3](../rw-feedback/feedback-20261020.md)。
 
 ### 逐任务复核
 

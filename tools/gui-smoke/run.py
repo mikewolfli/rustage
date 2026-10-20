@@ -21,11 +21,12 @@ It asserts, in order:
 
 The keyboard-mode rationale: the pinned rust-widgets revision moves router focus on a pointer
 press (`focus_on_pointer_press`) and its GTK window grabs keyboard focus on `map`, so a real
-click followed by real keys exercises the library path with no host workaround. `--ime` is
-opt-in because it depends on a running input method: the script activates fcitx and selects
-pinyin, then restores what it found. The library now owns the toolkit IM context too, so the
-host does not log preedit lines; the committed `你好` is the observable proof that composition
-happened rather than five separate letter commits.
+click on the field followed by real keys exercises the library path with no host workaround.
+`--ime` is opt-in because it depends on a running input method: the script activates fcitx and
+selects pinyin, then restores what it found. The library now owns the toolkit IM context too,
+and the host observes the library's pre-edit seam (`WidgetHandle::on_ime_preedit`) to log each
+uncommitted frame; the committed `你好` is the observable proof that composition happened
+rather than five separate letter commits.
 
 `--ime` is not a claim that every environment composes. If fcitx is inactive or on its
 `keyboard-us` method, GTK correctly receives one commit per letter; the script reports that
@@ -399,6 +400,10 @@ def main() -> int:
 
     if args.keys:
         focus_window()
+        # The pinned revision moves router focus on a pointer press, and that is the path under
+        # test: click the field (client rect (40,100)-(340,132)) rather than focusing it from the
+        # host. Without this click the keys would go to whichever control was focused last.
+        click(x + 190, y + 116)
         clear_field()
         for name in ("a", "b", "c"):
             key(name)
@@ -406,6 +411,8 @@ def main() -> int:
 
     if args.ime:
         focus_window()
+        # Same pointer-press path as the key smoke; the composition target is the focused field.
+        click(x + 190, y + 116)
         clear_field()
         # Make the precondition explicit: an inactive fcitx or its keyboard-us method would make
         # every letter a separate commit, which is correct input-method behaviour and not a
@@ -454,6 +461,7 @@ def main() -> int:
         expected.extend(
             [
                 "smoke IME: the pinned library owns the toolkit input context",
+                "smoke IME preedit: ",
                 'event accepted: Field/change (text="你好") -> node 2: call edit (call)',
                 "worker after change: state=editing",
             ]

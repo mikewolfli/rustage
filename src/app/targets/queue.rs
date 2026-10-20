@@ -21,7 +21,7 @@
 
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::configuration::Os;
 use super::matrix::Proof;
@@ -251,33 +251,49 @@ impl Signature {
 
 /// Signs an artifact with the host's own tool, then verifies the signature.
 ///
-/// This is the real seam T18.07's record points at: on macOS `codesign --force --sign <identity>`
-/// runs against the file and `codesign --verify` has to agree before the result is
-/// [`SignatureState::Signed`]. The other hosts answer `Unavailable` naming the adapter they do not
-/// have, rather than pretending `signtool` or `gpg` was driven.
+/// This is the real seam T18.07's record points at: macOS runs `codesign --force --sign
+/// <identity>` and Linux runs `gpg --detach-sign`; the tool's own verification must agree before the
+/// result is [`SignatureState::Signed`]. Windows answers `Unavailable` naming `signtool`, rather
+/// than pretending it was driven.
+///
+/// `gpg` is invoked without a passphrase: the credential reference is checked for existence by the
+/// caller and is never passed on a command line. A key that requires a passphrase therefore fails
+/// with the tool's own message, which is the honest outcome for a non-interactive signing job.
 pub fn sign(identity: &str, artifact: &Path, host: Os) -> Result<Signature, Refusal> {
+    sign_with(identity, artifact, host, None)
+}
+
+/// `sign`, with an optional GnuPG home used by the unit test.
+///
+/// The test must not create a key in the user's keyring, so it passes a throwaway `--homedir`.
+/// Production passes `None` and lets `gpg` read the user's own configuration.
+fn sign_with(
+    identity: &str,
+    artifact: &Path,
+    host: Os,
+    gpg_home: Option<&Path>,
+) -> Result<Signature, Refusal> {
     if !artifact.is_file() {
         return Err(Refusal::ArtifactMissing {
             path: artifact.display().to_string(),
         });
     }
-    if host != Os::Macos {
-        return Ok(Signature {
+    match host {
+        Os::Macos => sign_with_codesign(identity, artifact),
+        Os::Linux => sign_with_gpg(identity, artifact, gpg_home),
+        Os::Windows => Ok(Signature {
             identity: identity.to_owned(),
-            program: match host {
-                Os::Linux => "gpg",
-                Os::Windows => "signtool",
-                Os::Macos => unreachable!(),
-            }
-            .to_owned(),
+            program: "signtool".to_owned(),
             state: SignatureState::Unavailable {
-                reason: format!(
-                    "this build has no {} adapter; only the macOS codesign path is driven",
-                    host.name()
-                ),
+                reason:
+                    "this build has no windows signing adapter; only codesign and gpg are driven"
+                        .to_owned(),
             },
-        });
+        }),
     }
+}
+
+fn sign_with_codesign(identity: &str, artifact: &Path) -> Result<Signature, Refusal> {
     let artifact = artifact.display().to_string();
     let sign = std::process::Command::new("codesign")
         .args(["--force", "--sign", identity, &artifact])
@@ -321,6 +337,83 @@ pub fn sign(identity: &str, artifact: &Path, host: Os) -> Result<Signature, Refu
     Ok(Signature {
         identity: identity.to_owned(),
         program: "codesign".to_owned(),
+        state,
+    })
+}
+
+fn sign_with_gpg(
+    identity: &str,
+    artifact: &Path,
+    gpg_home: Option<&Path>,
+) -> Result<Signature, Refusal> {
+    // `artifact.sig` rather than `with_extension("sig")`: an artifact named `app.apk` must keep its
+    // name and gain a suffix, not become `app.sig`.
+    let mut signature_path = artifact.as_os_str().to_owned();
+    signature_path.push(".asc");
+    let signature_path = PathBuf::from(signature_path);
+
+    let mut sign = std::process::Command::new("gpg");
+    if let Some(home) = gpg_home {
+        sign.arg("--homedir").arg(home);
+    }
+    let answer = sign
+        .args([
+            "--batch",
+            "--yes",
+            "--detach-sign",
+            "--local-user",
+            identity,
+        ])
+        .arg("--output")
+        .arg(&signature_path)
+        .arg(artifact)
+        .output();
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(error) => {
+            return Ok(Signature {
+                identity: identity.to_owned(),
+                program: "gpg".to_owned(),
+                state: SignatureState::Failed {
+                    reason: format!("gpg could not be started: {error}"),
+                },
+            });
+        }
+    };
+    if !answer.status.success() {
+        return Ok(Signature {
+            identity: identity.to_owned(),
+            program: "gpg".to_owned(),
+            state: SignatureState::Failed {
+                reason: String::from_utf8_lossy(&answer.stderr).trim().to_owned(),
+            },
+        });
+    }
+
+    let mut verify = std::process::Command::new("gpg");
+    if let Some(home) = gpg_home {
+        verify.arg("--homedir").arg(home);
+    }
+    let verify = verify
+        .args(["--batch", "--verify"])
+        .arg(&signature_path)
+        .arg(artifact)
+        .output();
+    let state = match verify {
+        Ok(answer) if answer.status.success() => SignatureState::Signed,
+        Ok(answer) => SignatureState::Failed {
+            reason: format!(
+                "gpg signed the file but verification failed: {}",
+                String::from_utf8_lossy(&answer.stderr).trim()
+            ),
+        },
+        Err(error) => SignatureState::Failed {
+            reason: format!("gpg verification could not be started: {error}"),
+        },
+    };
+    Ok(Signature {
+        identity: identity.to_owned(),
+        program: "gpg".to_owned(),
         state,
     })
 }
@@ -751,7 +844,7 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
 mod tests {
     use super::{
         Action, Artifact, CredentialRef, CredentialSource, Proof, Queue, Refusal, SignatureState,
-        Signing, Summary, redact, sign,
+        Signing, Summary, redact, sign, sign_with,
     };
     use crate::app::targets::configuration::Os;
     use std::path::PathBuf;
@@ -973,17 +1066,89 @@ mod tests {
     }
 
     #[test]
-    fn a_non_macos_host_reports_the_missing_adapter_instead_of_signing() {
+    fn a_windows_host_reports_the_missing_adapter_instead_of_signing() {
         let directory = std::env::temp_dir();
         let path = directory.join(format!("rustage-sign-unavailable-{}", std::process::id()));
         std::fs::write(&path, b"artifact").expect("a temporary artifact");
-        let signature = sign("identity", &path, Os::Linux).expect("an answer");
+        let signature = sign("identity", &path, Os::Windows).expect("an answer");
         assert!(matches!(
             signature.state,
             SignatureState::Unavailable { .. }
         ));
-        assert!(signature.render().contains("no linux adapter"));
+        assert!(signature.render().contains("no windows signing adapter"));
         std::fs::remove_file(&path).ok();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gpg_signs_and_verifies_a_real_file_with_a_throwaway_key() {
+        // The test creates its own keyring so it never touches the user's keys. A machine without
+        // `gpg` cannot exercise the real path; it reports that rather than pretending a signature
+        // happened.
+        if std::process::Command::new("gpg")
+            .arg("--version")
+            .output()
+            .map(|output| !output.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("gpg is not installed; the real signing path was not exercised");
+            return;
+        }
+        let id = SERIAL.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("rustage-gpg-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("a temporary keyring");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        }
+        let generated = std::process::Command::new("gpg")
+            .arg("--homedir")
+            .arg(&root)
+            .args([
+                "--batch",
+                "--passphrase",
+                "",
+                "--quick-generate-key",
+                "Rustage Test <rustage@example.invalid>",
+                "default",
+                "default",
+                "0",
+            ])
+            .output()
+            .expect("gpg starts");
+        assert!(
+            generated.status.success(),
+            "key generation failed: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let listing = std::process::Command::new("gpg")
+            .arg("--homedir")
+            .arg(&root)
+            .args(["--batch", "--with-colons", "--list-secret-keys"])
+            .output()
+            .expect("gpg lists keys");
+        let fingerprint = String::from_utf8_lossy(&listing.stdout)
+            .lines()
+            .filter(|line| line.starts_with("fpr:"))
+            .find_map(|line| line.split(':').nth(9))
+            .expect("a fingerprint")
+            .to_owned();
+
+        let artifact = root.join("artifact.bin");
+        std::fs::write(&artifact, b"signed bytes").expect("a temporary artifact");
+        let signature = sign_with(&fingerprint, &artifact, Os::Linux, Some(&root))
+            .expect("a signature attempt");
+        assert_eq!(signature.program, "gpg");
+        assert_eq!(
+            signature.state,
+            SignatureState::Signed,
+            "{}",
+            signature.render()
+        );
+        assert!(artifact.with_extension("bin.asc").is_file());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

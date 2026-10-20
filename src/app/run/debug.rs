@@ -15,6 +15,7 @@
 //! session's. When a command fails, [`Machine::fail`] disconnects (with the session's own flag) and
 //! terminates the adapter, so a failure does not leave a process behind.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -52,6 +53,9 @@ struct Machine {
     last_frame: Option<i64>,
     wanted_source_version: u64,
     stop_on_entry: bool,
+    /// How many variables each reference is known to hold, from `scopes` or a parent `variables`
+    /// answer. Used to bound a page before it is asked for.
+    reference_counts: BTreeMap<i64, usize>,
     failed: bool,
 }
 
@@ -72,6 +76,7 @@ impl Machine {
             last_frame: None,
             wanted_source_version: 0,
             stop_on_entry: false,
+            reference_counts: BTreeMap::new(),
             failed: false,
         }
     }
@@ -222,7 +227,15 @@ impl Machine {
         if config.directory.is_none() && !current.is_empty() {
             launch.insert("cwd", Json::string(current));
         }
-        launch.insert("stopOnEntry", Json::bool(config.stop_on_entry));
+        let stages = self.ensure_adapter()?.stages_breakpoints_at_entry;
+        if stages {
+            // GDB's DAP `launch` runs the program inside the request and its `configurationDone` is
+            // a no-op (`gdb/dap/launch.py`). Asking it to stop at the main subprogram first is the
+            // only point at which breakpoints can be installed before the program passes them.
+            launch.insert("stopAtBeginningOfMainSubprogram", Json::bool(true));
+        } else {
+            launch.insert("stopOnEntry", Json::bool(config.stop_on_entry));
+        }
         launch.insert("console", Json::string("internalConsole"));
         launch.insert("sourceLanguages", Json::array([Json::string("rust")]));
         // `lldb-dap` sends `initialized` while it handles `launch` and answers the request only after
@@ -242,10 +255,20 @@ impl Machine {
         self.apply_breakpoints_all()?;
         self.request("configurationDone", Json::Null)?;
         self.await_request(launch_seq, "launch")?;
-        if let Some(session) = self.session.as_mut() {
-            session.resumed();
+        if stages {
+            // The program is stopped at main rather than running: that is how this adapter reports
+            // a successful launch whose breakpoints were applied. Saying `resumed` here would be a
+            // state the adapter is not in.
+            if let Some(session) = self.session.as_mut() {
+                session.stopped(StopReason::Entry, None);
+            }
+            println!("launched {program} (staged at main to apply breakpoints; continue to run)");
+        } else {
+            if let Some(session) = self.session.as_mut() {
+                session.resumed();
+            }
+            println!("launched {program}");
         }
-        println!("launched {program}");
         Ok(())
     }
 
@@ -662,13 +685,25 @@ impl Machine {
                     .map(|count| format!(" ({count} variables)"))
                     .unwrap_or_default()
             );
+            if let Some(count) = scope.count {
+                self.reference_counts
+                    .insert(scope.variables_reference, count);
+            }
         }
         Ok(())
     }
 
     fn variables(&mut self, reference: i64, count: usize) -> Result<(), String> {
         self.permit(Action::Inspect)?;
-        let count = count.min(PAGE_LIMIT);
+        // Ask for no more than the container is known to hold. GDB's DAP `fetch_children` indexes
+        // a list sized by the child count with the *requested* count, so `count` larger than the
+        // container raises `list index out of range` instead of clamping. The DAP contract allows
+        // a client to ask for a page, not to require the adapter to over-read.
+        let known = self.reference_counts.get(&reference).copied();
+        let count = match known {
+            Some(known) => count.min(PAGE_LIMIT).min(known),
+            None => count.min(PAGE_LIMIT),
+        };
         let mut arguments = JsonObject::new();
         arguments.insert("variablesReference", Json::number(reference.max(0) as u64));
         arguments.insert("start", Json::number(0));
@@ -711,6 +746,14 @@ impl Machine {
                 })
             })
             .collect();
+        for variable in &variables {
+            if variable.variables_reference != 0
+                && let Some(count) = variable.named.or(variable.indexed)
+            {
+                self.reference_counts
+                    .insert(variable.variables_reference, count);
+            }
+        }
         let page = inspect::page(variables, 0, count, None);
         println!("variables {}", page.render());
         for variable in &page.variables {
@@ -728,7 +771,15 @@ impl Machine {
             EvalDecision::Run => {
                 let mut arguments = JsonObject::new();
                 arguments.insert("expression", Json::string(expression));
-                arguments.insert("context", Json::string("repl"));
+                // The context is an adapter fact, not a preference: GDB's `repl` context runs its
+                // own commands (`n` = `next`), while `variables` evaluates the expression in the
+                // selected frame. Sending `repl` to GDB silently stepped the program.
+                let context = self
+                    .adapter
+                    .as_ref()
+                    .map(|adapter| adapter.evaluate_context)
+                    .unwrap_or("repl");
+                arguments.insert("context", Json::string(context));
                 if let Some(frame) = self.last_frame {
                     arguments.insert("frameId", Json::number(frame.max(0) as u64));
                 }

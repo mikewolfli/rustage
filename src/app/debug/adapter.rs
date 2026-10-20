@@ -112,6 +112,21 @@ pub struct Adapter {
     pub state: State,
     /// What it supports.
     pub capabilities: Capabilities,
+    /// Whether `launch` starts the program immediately and needs a stop at the main subprogram
+    /// before breakpoints can be applied.
+    ///
+    /// GDB's DAP implementation runs the program inside the `launch` request and treats
+    /// `configurationDone` as a no-op (`gdb/dap/launch.py`), unlike `lldb-dap`, which waits for
+    /// `configurationDone`. The session therefore asks GDB to stop at main first; otherwise a
+    /// breakpoint set after `launch` can be installed after the program has already passed it.
+    pub stages_breakpoints_at_entry: bool,
+    /// The DAP `context` value that makes this adapter evaluate an **expression** rather than a
+    /// debugger command.
+    ///
+    /// GDB's DAP treats `repl` as its own CLI (`n` runs `next`), so the designer would step the
+    /// program instead of reading a local; `variables` is the expression-like context. `lldb-dap`
+    /// treats `repl` as an expression and has been verified with it.
+    pub evaluate_context: &'static str,
 }
 
 impl Adapter {
@@ -225,6 +240,8 @@ fn lldb(host: Os, probe: &Probe) -> Adapter {
             evaluate: true,
             restart: false,
         },
+        stages_breakpoints_at_entry: false,
+        evaluate_context: "repl",
     }
 }
 
@@ -253,6 +270,8 @@ fn vsdbg(probe: &Probe) -> Adapter {
             evaluate: true,
             restart: false,
         },
+        stages_breakpoints_at_entry: false,
+        evaluate_context: "repl",
     }
 }
 
@@ -281,6 +300,8 @@ fn gdb(probe: &Probe) -> Adapter {
             evaluate: true,
             restart: false,
         },
+        stages_breakpoints_at_entry: true,
+        evaluate_context: "variables",
     }
 }
 
@@ -340,6 +361,8 @@ pub fn explicit(program: &Path) -> Adapter {
             evaluate: true,
             restart: false,
         },
+        stages_breakpoints_at_entry: false,
+        evaluate_context: "repl",
     }
 }
 
@@ -411,6 +434,25 @@ mod tests {
             assert_eq!(adapters[0].name, "lldb-dap");
             assert!(adapters[0].capabilities.conditional_breakpoints);
         }
+    }
+
+    #[test]
+    fn gdb_is_driven_differently_from_lldb() {
+        // The two adapters disagree about two protocol facts. GDB runs the program inside
+        // `launch` and treats `repl` as its CLI; lldb-dap waits for `configurationDone` and
+        // evaluates an expression in `repl`. The table must carry that difference, not a
+        // single assumed sequence.
+        let adapters = table(Os::Linux, &Probe::of([]));
+        let gdb = adapters
+            .iter()
+            .find(|adapter| adapter.name == "gdb")
+            .expect("gdb is listed on Linux");
+        assert!(gdb.stages_breakpoints_at_entry);
+        assert_eq!(gdb.evaluate_context, "variables");
+
+        let lldb = &adapters[0];
+        assert!(!lldb.stages_breakpoints_at_entry);
+        assert_eq!(lldb.evaluate_context, "repl");
     }
 
     #[test]

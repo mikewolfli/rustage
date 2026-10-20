@@ -25,7 +25,7 @@ publish = false
 linux-native = ["rust_widgets/gtk-native"]
 
 [dependencies]
-rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "504698fec4028b2ddb96609e517d145ea30a25e2", default-features = false, features = ["desktop", "runtime-fonts"] }
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "5e3a6f35df4e357fc9e18996b779e2d371e14041", default-features = false, features = ["desktop", "runtime-fonts"] }
 
 # The pinned revision now owns the toolkit: it creates and focuses the GTK input method context
 # itself, so the host has no direct GTK dependency. Keeping the feature forwarding-only is also

@@ -107,8 +107,8 @@ node tools/fixtures/generate-fixtures.mjs --verify                   # 只算哈
 - **没有任何测量。** 18 个场景全为 `unmeasured` 或 `future`；`measured` 状态必须附原始数据、修订
   与日期，检查脚本会拒绝缺少这些字段的测量声明。
 - **受限目标与设备场景缺环境。** 需要目标 SDK、真机或辅助技术环境的场景只能标 `blocked`；支持
-  矩阵里 15 格目前只有 4 格 `build-verified`（macOS 的 desktop/mini/embedded 与 Linux desktop），
-  其余 11 格未验证，这一点不会被这里的数字掩盖。
+  矩阵里 15 格目前全部为 `build-verified`（三宿主 × 五 profile），但没有 profile 产物在对应设备/OS
+  上运行；这一点不会被这里的数字掩盖。
 - **硬件基线只是设计器宿主。** 目标侧性能必须用目标设备测量；本文件不把宿主数字当作目标数字
   （原则 #24）。
 - **fixture 的"期望"尚未自动化。** `expect` 描述的是每个 fixture 应当呈现什么（解析通过/失败、

@@ -206,4 +206,14 @@
   受控求值、双向源映射、热更新互斥与重新附加确认、以及失败后的资源清理。真实 `lldb-dap` 会话与
   真实 attach 已在 macOS 验证；独立 DAP 子进程（`tests/fixtures/dap_stub.py`，非调试器）用于固化
   协议顺序与负向路径。未验证的 Linux/Windows 适配器与真机目标已在日志中逐项列出。
-- **验收人 / 日期 / 工程修订：** 待验收人填写；实现与证据见 [`docs/log/log-20261020-1.md`](../log/log-20261020-1.md)。
+- **2026-10-20 第二次补充（Linux gdb 真实会话）：** Linux 宿主 `/usr/bin/gdb` 15.1 的
+  `--interpreter=dap` 已真实跑通 T19.01/T19.02/T19.04/T19.05 的最小链路：断点在
+  `main.rs:3` 命中、`n: i32 = 41`、`evaluate` 返回 `i32 41`、继续后打印 `value 42` 并以 0 退出；
+  attach 外部 `sleep` 后 disconnect，进程仍存活。当场确认并处理了三处 GDB 协议差异：
+  launch 在请求内启动程序（用 `stopAtBeginningOfMainSubprogram` 在 main 停下后布置断点）、
+  `repl` 上下文执行 GDB 命令而不是表达式（GDB 改用 `variables` 上下文）、`variables` 不夹取
+  count（客户端按已知子项数收紧分页）。GDB 的 logpoint/命中计数未用真实会话验证，能力表仍禁用。
+  Windows `vsdbg` 与 macOS `lldb-dap` 未在本机复跑；证据见
+  [`log-20261020-2.md`](../log/log-20261020-2.md) §5。
+- **验收人 / 日期 / 工程修订：** 待验收人填写；实现与证据见 [`docs/log/log-20261020-1.md`](../log/log-20261020-1.md)、
+  [`docs/log/log-20261020-2.md`](../log/log-20261020-2.md)。

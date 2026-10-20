@@ -543,6 +543,8 @@ mod tests {
                 evaluate: true,
                 restart: false,
             },
+            stages_breakpoints_at_entry: false,
+            evaluate_context: "repl",
         }
     }
 

@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rust_widgets::app::{ButtonHandle, WidgetHandle, WindowHandle};
+use rust_widgets::layout::{BoxLayout, Layout as _, LayoutConstraints, Orientation, SizePolicy};
 
 use crate::app::shell::groups::{Axis, Groups};
 use crate::app::shell::layout::Layout;
@@ -38,6 +39,7 @@ use crate::host::platform::NativePlatform;
 use crate::host::startup::{StartupPlatform, StartupRequest};
 
 use super::report;
+use super::workbench_layout::{Area, WorkbenchLayout};
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 800;
@@ -74,6 +76,10 @@ struct Gui {
     group_views: Vec<GroupView>,
     status: u64,
     message: String,
+    /// The window whose children this layout places.
+    window: u64,
+    /// Every widget's place in the responsive chrome.
+    placements: Vec<(u64, Area)>,
 }
 
 impl Gui {
@@ -99,6 +105,19 @@ impl Gui {
         self.panels.layout().shown().into_iter().collect()
     }
 
+    /// Re-applies the responsive chrome layout with the current editor-group count.
+    ///
+    /// The library stores the layout on the window and re-runs it on every `Resized` event, so
+    /// this is what makes a resize scale the chrome instead of only the widgets present at
+    /// startup. Splitting or closing a group changes the count and therefore the layout object.
+    fn refresh_layout(&self) {
+        let mut layout = WorkbenchLayout::new(self.groups.len() as u32);
+        for (id, area) in &self.placements {
+            layout.place(*id, *area);
+        }
+        WindowHandle::from_raw(self.window).set_layout(layout);
+    }
+
     fn sync_panels(&mut self) {
         let shown = self.shown_panels();
         for (id, widgets) in &self.panel_widgets {
@@ -110,7 +129,9 @@ impl Gui {
     }
 
     fn sync_editors(&mut self) {
-        layout_group_widgets(self);
+        // The model decides how many groups exist; the responsive layout follows it. Geometry is
+        // no longer written here, so the two cannot disagree about which box a group owns.
+        self.refresh_layout();
         let groups: Vec<(u64, Vec<String>, String)> = self
             .groups
             .group_ids()
@@ -249,23 +270,6 @@ fn wire_tab(button: &ButtonHandle, group: usize, index: usize, gui: &Arc<Mutex<G
     });
 }
 
-/// Sizes the two editor groups from the model: one group uses the full centre, two split it.
-fn layout_group_widgets(gui: &mut Gui) {
-    let split = gui.groups.len() > 1;
-    if let Some(view) = gui.group_views.first() {
-        let width = if split { 330 } else { 680 };
-        for (index, id) in view.tabs.iter().enumerate() {
-            rust_widgets::set_widget_geometry(*id, 270 + index as i32 * 110, CONTENT_Y, 108, 26);
-        }
-        rust_widgets::set_widget_geometry(view.editor, 270, CONTENT_Y + 30, width, 535);
-    }
-    if let Some(view) = gui.group_views.get(1) {
-        for widget in &view.all {
-            rust_widgets::set_widget_visible(*widget, split);
-        }
-    }
-}
-
 /// Opens the workbench window and runs it until the window closes or the deadline passes.
 pub(super) fn workbench_gui(
     layout_path: Option<PathBuf>,
@@ -361,12 +365,17 @@ pub(super) fn workbench_gui(
         group_views: Vec::new(),
         status: 0,
         message: "ready".to_owned(),
+        window,
+        placements: Vec::new(),
     }));
 
     // Menu bar. The toolbar is the portable path (macOS paints no native menus in this revision);
     // the menu bar is still created because on the other hosts it is the native one.
     let bar = handle.new_menu_bar(0, 0, WIDTH, MENU_HEIGHT);
     let _ = handle.attach_menu_bar(&bar);
+    if let Ok(mut gui) = gui.lock() {
+        gui.placements.push((bar.raw_id(), Area::Menu));
+    }
     let mut menu_actions: BTreeMap<u64, String> = BTreeMap::new();
     for (menu_name, entries) in [
         ("File", vec![("Quit", "quit")]),
@@ -400,9 +409,10 @@ pub(super) fn workbench_gui(
         }
     }
 
-    // Toolbar. Buttons are the actions a person can reach without a menu.
-    let mut x = 8;
-    for (label, action) in [
+    // Toolbar. Buttons are the actions a person can reach without a menu. Their widths are
+    // shared evenly by the responsive layout, so a wider window widens them rather than leaving
+    // a strip of unused chrome at the right edge.
+    let toolbar: Vec<(&str, &str)> = vec![
         ("Outline", "toggle:outline"),
         ("Inspector", "toggle:inspector"),
         ("Messages", "toggle:messages"),
@@ -413,31 +423,74 @@ pub(super) fn workbench_gui(
         ("Next group", "group:next"),
         ("Save layout", "layout:save"),
         ("Reset layout", "layout:reset"),
-    ] {
-        let width = (label.chars().count() as u32 * 9 + 24).max(96);
-        let button = handle.new_button(label, x, TOOLBAR_Y, width, TOOLBAR_HEIGHT);
+    ];
+    let toolbar_count = toolbar.len() as u32;
+    for (index, (label, action)) in toolbar.iter().enumerate() {
+        let button = handle.new_button(label, 0, TOOLBAR_Y, 120, TOOLBAR_HEIGHT);
         wire_button(&button, action, &gui);
-        x += width as i32 + 6;
+        if let Ok(mut gui) = gui.lock() {
+            gui.placements.push((
+                button.raw_id(),
+                Area::Toolbar {
+                    index: index as u32,
+                    count: toolbar_count,
+                },
+            ));
+        }
     }
 
-    // Docked panels. The rects are the first slice's fixed docks; a later slice moves them by the
-    // layout's groups and sizes, which the model already carries.
-    for (id, title, rect) in [
-        ("outline", "Outline", (0, CONTENT_Y, 260, 280)),
-        ("events", "Events", (0, 358, 260, 280)),
+    // Docked panels. The model owns which panels exist and whether they are shown; the responsive
+    // layout owns where they sit, and each panel's own `BoxLayout` owns its title/list split. A
+    // panel therefore keeps its internal proportions when the window scales.
+    for (id, title, rect, area) in [
+        (
+            "outline",
+            "Outline",
+            (0, CONTENT_Y, 260, 280),
+            Area::LeftPanel { index: 0, count: 2 },
+        ),
+        (
+            "events",
+            "Events",
+            (0, 358, 260, 280),
+            Area::LeftPanel { index: 1, count: 2 },
+        ),
         (
             "inspector",
             "Inspector",
             (WIDTH as i32 - 320, CONTENT_Y, 320, 280),
+            Area::RightPanel { index: 0, count: 2 },
         ),
-        ("data", "Data & State", (WIDTH as i32 - 320, 358, 320, 280)),
-        ("messages", "Messages", (260, 645, 340, 120)),
-        ("problems", "Problems", (610, 645, 340, 120)),
+        (
+            "data",
+            "Data & State",
+            (WIDTH as i32 - 320, 358, 320, 280),
+            Area::RightPanel { index: 1, count: 2 },
+        ),
+        (
+            "messages",
+            "Messages",
+            (260, 645, 340, 120),
+            Area::BottomPanel { index: 0, count: 2 },
+        ),
+        (
+            "problems",
+            "Problems",
+            (610, 645, 340, 120),
+            Area::BottomPanel { index: 1, count: 2 },
+        ),
     ] {
         let panel = handle.new_panel(rect.0, rect.1, rect.2, rect.3);
         panel.set_title(title);
-        let title = handle.new_label(title, rect.0 + 8, rect.1 + 6, rect.2 - 16, 20);
+        let title_widget = handle.new_label(title, rect.0 + 8, rect.1 + 6, rect.2 - 16, 20);
         let list = handle.new_list_box(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 38);
+        let mut inner = BoxLayout::new(Orientation::Vertical, 4, 8);
+        inner.add_widget(title_widget.raw_id(), 0);
+        inner.set_constraints(title_widget.raw_id(), LayoutConstraints::new(20, Some(20)));
+        inner.set_size_policy(title_widget.raw_id(), SizePolicy::Fixed);
+        inner.add_widget(list.raw_id(), 1);
+        inner.set_size_policy(list.raw_id(), SizePolicy::Expanding);
+        panel.set_layout(Box::new(inner));
         let items: Vec<String> = match id {
             "outline" => vec![
                 "src/main.rs".to_owned(),
@@ -466,9 +519,10 @@ pub(super) fn workbench_gui(
             let _ = rust_widgets::list_box_add_item(list.raw_id(), &item);
         }
         if let Ok(mut gui) = gui.lock() {
+            gui.placements.push((panel.raw_id(), area));
             let entry = gui.panel_widgets.entry(id.to_owned()).or_default();
             entry.push(panel.raw_id());
-            entry.push(title.raw_id());
+            entry.push(title_widget.raw_id());
             entry.push(list.raw_id());
         }
     }
@@ -477,6 +531,7 @@ pub(super) fn workbench_gui(
     let status = handle.new_status_bar("", 0, STATUS_Y, WIDTH, STATUS_HEIGHT);
     if let Ok(mut gui) = gui.lock() {
         gui.status = status.raw_id();
+        gui.placements.push((status.raw_id(), Area::Status));
     }
 
     // Two editor groups: the second stays hidden until "Split" is used.
@@ -493,9 +548,27 @@ pub(super) fn workbench_gui(
             wire_tab(&button, group, index, &gui);
             tabs.push(button.raw_id());
             all.push(button.raw_id());
+            if let Ok(mut gui) = gui.lock() {
+                gui.placements.push((
+                    button.raw_id(),
+                    Area::Tab {
+                        group: group as u32,
+                        index: index as u32,
+                        count: 3,
+                    },
+                ));
+            }
         }
         let editor = handle.new_list_box(tx, CONTENT_Y + 30, ew, 535);
         all.push(editor.raw_id());
+        if let Ok(mut gui) = gui.lock() {
+            gui.placements.push((
+                editor.raw_id(),
+                Area::Editor {
+                    group: group as u32,
+                },
+            ));
+        }
         if group == 1 {
             for widget in &all {
                 rust_widgets::set_widget_visible(*widget, false);

@@ -36,13 +36,13 @@
 pub const DEPENDENCY_CRATE: &str = "rust_widgets";
 
 /// The pinned dependency version, matching `Cargo.lock`.
-pub const DEPENDENCY_VERSION: &str = "2.8.9";
+pub const DEPENDENCY_VERSION: &str = "2.8.10";
 
 /// The pinned dependency revision, matching the `rev` in `Cargo.toml`.
 ///
 /// Kept in step with the lockfile by a drift test in [`crate::probe::report`], which re-reads
 /// `Cargo.lock` and fails if the two disagree.
-pub const DEPENDENCY_REVISION: &str = "504698fec4028b2ddb96609e517d145ea30a25e2";
+pub const DEPENDENCY_REVISION: &str = "5e3a6f35df4e357fc9e18996b779e2d371e14041";
 
 /// The API families on the designer's critical path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

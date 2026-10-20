@@ -60,6 +60,7 @@ mod style;
 mod target;
 mod workbench;
 mod workbench_gui;
+mod workbench_layout;
 use application::*;
 use build::*;
 use collection::*;

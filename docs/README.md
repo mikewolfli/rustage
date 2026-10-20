@@ -39,6 +39,21 @@ order they are being closed in. It is a work list, not a statement of implemente
 
 ## Records
 
+- [2.8.10 re-pin, Linux profiles and the responsive workbench](log/log-20261020-2.md): the dependency
+  moved to `5e3a6f35df4e357fc9e18996b779e2d371e14041` (2.8.10). The upstream release closes
+  `feedback-20261019.md` §4 (Linux × mini now compiles) and adds `WidgetHandle::on_ime_preedit`,
+  which the `--ime` smoke uses to log real fcitx5 pre-edit frames before the committed `你好`.
+  All five profiles now build on Linux as well, so the support matrix records 15/15
+  build-verified cells (none certified). The workbench chrome moved from fixed rectangles to a
+  `rust_widgets::layout::Layout` implementation plus per-panel `BoxLayout`s, and resizing the
+  window to 1600×900 and 1000×700 reflows it (a split changes the editor from one group to two).
+  The state reflows on resize; the GTK backend's missing window repaint until the next input event
+  is recorded as an upstream gap in `docs/rw-feedback/feedback-20261020.md` §3.3.
+  A real `gdb --interpreter=dap` session on Linux now stops on a breakpoint, reports
+  `n: i32 = 41`, evaluates `i32 41`, continues to `value 42` and exits 0; attach to an external
+  `sleep` disconnects without terminating it. GDB's launch/evaluate/variables differences are
+  handled per adapter, and the first-run flaky lifecycle test is recorded rather than hidden.
+
 - [MS10's remaining seams and the MS11 debug client](log/log-20261020-1.md): local device discovery
   now starts the platform's own tools (`xcrun simctl`, `adb`), SDK detection reads the real
   installations (iOS 26.2, Android android-36), signing runs `codesign --force --sign` and verifies

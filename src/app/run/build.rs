@@ -9,9 +9,103 @@
 //! the exact command it would run rather than a success shape.
 
 use super::*;
-use std::process::Command as ProcessCommand;
-#[cfg(any(unix, windows))]
+use crate::app::build::build_diagnostics::Report;
+use crate::app::quality::{Center, Filter};
+use crate::contracts::identity::NodeId;
+use crate::contracts::revision::{GeneratorVersion, Revision};
+use crate::contracts::source_map::{SourceMap, SourceSpan};
 use std::time::Duration;
+
+/// How `--compile` reads a real build's `--message-format=json` stream into problems (task T16.03).
+///
+/// The ops are optional: every `execute` run already captures the JSON stream, and naming these
+/// adds the map and the source text needed to link a position back to a node, plus where to record
+/// the resulting rows.
+#[derive(Default)]
+struct BuildDiagnostics {
+    /// The path `diag-source` read, used to match the compiler's relative file name.
+    source_path: Option<String>,
+    /// The text of that file, for turning line/column into a byte offset.
+    source_text: Option<String>,
+    /// The model revision the build was started against.
+    model: Revision,
+    /// The revision now on screen, when the caller wants a staleness verdict.
+    current: Option<Revision>,
+    /// Node spans from the source map.
+    spans: Vec<(NodeId, SourceSpan)>,
+    /// Where the parsed problem rows are written, when the caller asked for a record.
+    record: Option<String>,
+    /// Whether any diagnostic op was named, so a stream that cannot exist is refused.
+    explicit: bool,
+}
+
+impl BuildDiagnostics {
+    /// The source map the spans describe, stamped with the model revision.
+    fn map(&self) -> SourceMap {
+        let mut map = SourceMap::new(GeneratorVersion::CURRENT, self.model);
+        for (node, span) in &self.spans {
+            map.insert(*node, span.clone());
+        }
+        map
+    }
+
+    /// The text of `file`: the supplied source when it is that file, else what is on disk.
+    fn text_of(&self, file: &str) -> Option<String> {
+        if let (Some(path), Some(text)) = (&self.source_path, &self.source_text)
+            && (std::path::Path::new(path).ends_with(file)
+                || std::path::Path::new(file).ends_with(path))
+        {
+            return Some(text.clone());
+        }
+        read(file).ok()
+    }
+}
+
+/// Parses a captured JSON stream and places each message against the map.
+fn build_report(output: &str, diagnostics: &BuildDiagnostics) -> Report {
+    use crate::app::build::build_diagnostics::parse;
+
+    let batch = parse(output, diagnostics.model);
+    let map = diagnostics.map();
+    let mut files: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    for message in &batch.messages {
+        if let Some(span) = &message.span {
+            files
+                .entry(span.file.clone())
+                .or_insert_with(|| diagnostics.text_of(&span.file));
+        }
+    }
+    batch.place(&map, |file| files.get(file).cloned().flatten())
+}
+
+/// Prints the problems a real build reported and records them for the problem centre.
+///
+/// This runs after the exit was measured and never replaces it: the verdict is the process's, and
+/// a diagnostic stream is what the process said on the way there.
+fn print_build_diagnostics(output: &str, diagnostics: &BuildDiagnostics, target: &str) {
+    let report = build_report(output, diagnostics);
+    let mut center = Center::new();
+    report.record(&mut center, target);
+    for line in report.render(target) {
+        println!("{line}");
+    }
+    if let Some(current) = diagnostics.current {
+        println!(
+            "{}",
+            crate::contracts::revision::Staleness::between(diagnostics.model, current)
+        );
+    }
+    if let Some(path) = &diagnostics.record {
+        let mut text = center.render(&Filter::default()).join("\n");
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        if let Err(error) = std::fs::write(path, text) {
+            println!("the build problems could not be written to {path}: {error}");
+        }
+    }
+}
 
 /// Reads a file, or reports why it could not be.
 fn read(path: &str) -> Result<String, String> {
@@ -34,10 +128,22 @@ fn yes_no(value: &str) -> Result<bool, String> {
 }
 
 /// Probes a toolchain and chooses a feature set (task T16.01).
+///
+/// The probe is the real machine first: `cargo --version`, `rustc --version` and
+/// `rustup target list --installed` each run as their own argv, never through a shell. The CLI
+/// operations then override or extend what it found, which is how a test drives this path without
+/// the machine having to match, and how a person corrects a probe that looked at the wrong toolchain.
 pub(super) fn toolchain(options: &crate::cli::ToolchainOptions) -> bool {
-    use crate::app::build::toolchain::{Environment, Finding, diagnose, selection};
+    toolchain_with(options, crate::app::build::toolchain::Environment::probe())
+}
 
-    let mut environment = Environment::default();
+/// The same, with the probe supplied, so a test can judge a machine it describes itself.
+fn toolchain_with(
+    options: &crate::cli::ToolchainOptions,
+    mut environment: crate::app::build::toolchain::Environment,
+) -> bool {
+    use crate::app::build::toolchain::{Finding, diagnose, selection};
+
     let mut profile = String::new();
     let mut extra: Vec<String> = Vec::new();
     let mut triple: Option<String> = None;
@@ -95,21 +201,33 @@ pub(super) fn toolchain(options: &crate::cli::ToolchainOptions) -> bool {
     };
     println!("{}", chosen.render());
     println!("features: {}", chosen.feature_arguments().join(" "));
+    for line in environment.render() {
+        println!("{line}");
+    }
     let findings = diagnose(&chosen, triple.as_deref(), &environment);
     for finding in &findings {
         println!("{}", finding.render());
     }
-    if check && findings.is_empty() {
+    let unsupported = findings
+        .iter()
+        .any(|finding| matches!(finding, Finding::Unsupported { .. }));
+    if !findings.is_empty() {
+        println!("toolchain: not ready ({} finding(s))", findings.len());
+    } else if check {
         println!("toolchain: ready");
     }
-    findings
-        .iter()
-        .all(|finding| !matches!(finding, Finding::Unsupported { .. }))
+    if unsupported {
+        return false;
+    }
+    // `check` is the request to judge readiness: a missing tool or target is not ready, while
+    // without it this is a report of what the probe found.
+    !check || findings.is_empty()
 }
 
 /// Checks, builds or rebuilds (task T16.02).
 pub(super) fn compile(options: &crate::cli::CompileOptions) -> bool {
-    use crate::app::build::compile::{Action, Job, Outcome};
+    use crate::app::build::compile::{Action, Job};
+    use crate::app::build::reproducible::Reproducibility;
     use crate::app::build::toolchain::Selection;
 
     let mut action = Action::Check;
@@ -120,8 +238,11 @@ pub(super) fn compile(options: &crate::cli::CompileOptions) -> bool {
     let mut job_target: Option<String> = None;
     let mut package: Option<String> = None;
     let mut manifest: Option<String> = None;
-    let mut exit: Option<Option<i32>> = None;
+    let mut reproducible = Reproducibility::default();
+    let mut expected_exit: Option<i32> = None;
+    let mut cancel = false;
     let mut execute = false;
+    let mut diagnostics = BuildDiagnostics::default();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<(), String> = match verb {
@@ -160,15 +281,84 @@ pub(super) fn compile(options: &crate::cli::CompileOptions) -> bool {
                 manifest = Some(argument.to_owned());
                 Ok(())
             }
+            "locked" => yes_no(argument).map(|value| reproducible.locked = value),
+            "offline" => yes_no(argument).map(|value| reproducible.offline = value),
+            "vendor" => {
+                reproducible.vendor = Some(argument.to_owned());
+                Ok(())
+            }
+            "cache" => {
+                reproducible.cache = Some(argument.to_owned());
+                Ok(())
+            }
+            "source" => {
+                reproducible.source = Some(argument.to_owned());
+                Ok(())
+            }
+            "diag-source" => match read(argument) {
+                Ok(text) => {
+                    diagnostics.source_path = Some(argument.to_owned());
+                    diagnostics.source_text = Some(text);
+                    diagnostics.explicit = true;
+                    Ok(())
+                }
+                Err(reason) => Err(reason),
+            },
+            "diag-model" => match argument.parse::<u64>() {
+                Ok(value) => {
+                    diagnostics.model = Revision::from_raw(value);
+                    diagnostics.explicit = true;
+                    Ok(())
+                }
+                Err(_) => Err(format!("{argument:?} is not a revision")),
+            },
+            "diag-current" => match argument.parse::<u64>() {
+                Ok(value) => {
+                    diagnostics.current = Some(Revision::from_raw(value));
+                    diagnostics.explicit = true;
+                    Ok(())
+                }
+                Err(_) => Err(format!("{argument:?} is not a revision")),
+            },
+            "diag-span" => {
+                let parts: Vec<&str> = argument.split(':').collect();
+                match parts.as_slice() {
+                    [node, path, start, end] => match (
+                        node.parse::<u64>(),
+                        start.parse::<u32>(),
+                        end.parse::<u32>(),
+                    ) {
+                        (Ok(node), Ok(start), Ok(end)) => match SourceSpan::new(path, start, end) {
+                            Some(span) => {
+                                diagnostics.spans.push((NodeId::from_raw(node), span));
+                                diagnostics.explicit = true;
+                                Ok(())
+                            }
+                            None => Err(format!("diag-span {argument:?} is empty or reversed")),
+                        },
+                        _ => Err(format!(
+                            "diag-span {argument:?} is not <node>:<file>:<start>:<end>"
+                        )),
+                    },
+                    _ => Err(format!(
+                        "diag-span needs <node>:<file>:<start>:<end>, got {argument:?}"
+                    )),
+                }
+            }
+            "diag-record" => {
+                diagnostics.record = Some(argument.to_owned());
+                diagnostics.explicit = true;
+                Ok(())
+            }
             "exit" => match argument.parse::<i32>() {
                 Ok(code) => {
-                    exit = Some(Some(code));
+                    expected_exit = Some(code);
                     Ok(())
                 }
                 Err(_) => Err(format!("{argument:?} is not an exit code")),
             },
             "cancel" => {
-                exit = Some(None);
+                cancel = true;
                 Ok(())
             }
             "execute" => {
@@ -182,56 +372,149 @@ pub(super) fn compile(options: &crate::cli::CompileOptions) -> bool {
             return report(reason);
         }
     }
+    let diagnostic_target = job_target
+        .clone()
+        .unwrap_or_else(|| selection.profile.clone());
     let job = Job {
         action,
         selection,
         target: job_target,
         package,
         manifest,
+        reproducible,
     };
+    if !job.reproducible.cache_is_outside_source() {
+        return report(
+            "the build cache is inside the committed source; choose a cache outside it".to_owned(),
+        );
+    }
     if let Some(clean) = job.clean_command() {
         println!("clean: cargo {}", clean.join(" "));
     }
     println!("cargo {}", job.command().join(" "));
     if execute {
-        // The real command, with the real exit code: this is what turns "it built" from a claim into
-        // a measurement (principle 25). Nothing here uses a shell, so the argv is the one printed.
-        let outcome = ProcessCommand::new("cargo").args(job.command()).output();
-        match outcome {
-            Ok(output) => {
-                let code = output.status.code();
-                let outcome = Outcome::from_exit(
-                    job,
-                    code,
-                    String::from_utf8_lossy(&output.stdout).into_owned(),
-                    String::from_utf8_lossy(&output.stderr).into_owned(),
-                );
-                for line in outcome.render() {
-                    println!("{line}");
-                }
-                return outcome.verdict.is_success();
-            }
-            Err(error) => return report(format!("cargo could not be started: {error}")),
-        }
+        return execute_compile(
+            &job,
+            cancel,
+            expected_exit,
+            &diagnostics,
+            &diagnostic_target,
+        );
     }
-    match exit {
-        Some(code) => {
-            let outcome = Outcome::from_exit(job, code, String::new(), String::new());
+    if diagnostics.explicit {
+        return report(
+            "build diagnostics read a real build's JSON stream; add `execute` so there is one"
+                .to_owned(),
+        );
+    }
+    if cancel {
+        return report(
+            "cancel is a request to a running build; add `execute` so there is one".to_owned(),
+        );
+    }
+    if let Some(code) = expected_exit {
+        return report(format!(
+            "an exit code is a fact about a real run; add `execute` to measure it (expected {code})"
+        ));
+    }
+    true
+}
+
+/// Runs the job through the host's task executor, which owns it and gives it a real token.
+///
+/// `cancel` is a request to the executor, not a value written into the result: the task's process
+/// group is what stops. `expected_exit` turns `exit:<n>` into an assertion about the measured code
+/// instead of a fabricated verdict. The captured stdout is cargo's JSON stream: it is parsed into
+/// problems after the exit was measured, and the measured verdict is what this returns.
+fn execute_compile(
+    job: &crate::app::build::compile::Job,
+    cancel: bool,
+    expected_exit: Option<i32>,
+    diagnostics: &BuildDiagnostics,
+    target: &str,
+) -> bool {
+    use crate::app::build::compile::{BuildTask, Verdict};
+    use crate::host::tasks::{Executor, ExecutorConfig, OwnerId, TaskState};
+
+    if cancel && expected_exit.is_some() {
+        return report(
+            "a build cannot be both cancelled and expected to exit with a code".to_owned(),
+        );
+    }
+    let executor = match Executor::new(ExecutorConfig::responsive()) {
+        Ok(executor) => executor,
+        Err(error) => return report(format!("the task executor could not start: {error}")),
+    };
+    let owner = OwnerId::new();
+    let submitted = match BuildTask::submit(&executor, owner, job.clone(), "cargo") {
+        Ok(submitted) => submitted,
+        Err(error) => return report(format!("the build could not be submitted: {error}")),
+    };
+
+    if cancel {
+        // A cancel is meaningful once the job is running; wait for that, but never past the point
+        // where it has already finished (in which case the real exit stands).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match executor.record(submitted.task()) {
+                Some(record) if record.state == TaskState::Running => break,
+                Some(record) if record.is_final() => break,
+                _ if std::time::Instant::now() >= deadline => break,
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        println!("cancel: {:?}", executor.cancel(submitted.task()));
+    }
+
+    // Wait for the task to be final; a build may take as long as it takes.
+    let record = loop {
+        let record = executor.wait(submitted.task(), Duration::from_secs(1));
+        match record {
+            Some(record) if record.is_final() => break record,
+            Some(_) => continue,
+            None => {
+                let _ = executor.shutdown();
+                return report("the submitted build disappeared from the executor".to_owned());
+            }
+        }
+    };
+
+    let result = submitted.result();
+    let _ = executor.shutdown();
+    match result {
+        Some(Ok(outcome)) => {
             for line in outcome.render() {
                 println!("{line}");
             }
+            print_build_diagnostics(&outcome.stdout, diagnostics, target);
+            if let Some(expected) = expected_exit {
+                let measured = match outcome.verdict {
+                    Verdict::Succeeded => Some(0),
+                    Verdict::Failed { code } => Some(code),
+                    _ => None,
+                };
+                if measured != Some(expected) {
+                    return report(format!(
+                        "the build was expected to exit {expected} but {}: {}",
+                        outcome.verdict.render(),
+                        record.summary(),
+                    ));
+                }
+            }
             outcome.verdict.is_success()
         }
-        None => true,
+        Some(Err(reason)) => report(reason),
+        // The job never ran (cancelled while queued) or was abandoned; the record is the fact.
+        None => {
+            println!("{}", record.summary());
+            false
+        }
     }
 }
 
 /// Reads a build's problems and links them to nodes (task T16.03).
 pub(super) fn build_diag(options: &crate::cli::BuildDiagOptions) -> bool {
-    use crate::app::build::build_diagnostics::{locate, parse};
-    use crate::contracts::identity::NodeId;
-    use crate::contracts::revision::{GeneratorVersion, Revision};
-    use crate::contracts::source_map::{SourceMap, SourceSpan};
+    use crate::app::build::build_diagnostics::parse;
 
     let mut output = String::new();
     let mut source = String::new();
@@ -298,12 +581,27 @@ pub(super) fn build_diag(options: &crate::cli::BuildDiagOptions) -> bool {
         map.insert(node, span);
     }
     let batch = parse(&output, model);
+    let report = batch.place(&map, |span_file| {
+        if source.is_empty() {
+            read(span_file).ok()
+        } else {
+            Some(source.clone())
+        }
+    });
     for line in batch.render() {
         println!("{line}");
     }
-    for message in &batch.messages {
-        if let Some(node) = locate(message, &source, &map) {
-            println!("  -> node {} in {file}", node.get());
+    for diagnostic in &report.diagnostics {
+        if let Some(node) = diagnostic.node {
+            let at = diagnostic
+                .message
+                .span
+                .as_ref()
+                .map(|span| span.file.as_str())
+                .unwrap_or(&file);
+            println!("  -> node {} in {at}", node.get());
+        } else if diagnostic.unmapped {
+            println!("  -> unmapped (position kept)");
         }
     }
     if let Some(current) = current {
@@ -312,9 +610,15 @@ pub(super) fn build_diag(options: &crate::cli::BuildDiagOptions) -> bool {
     batch.errors() == 0
 }
 
+/// How long `exit:<code>` and `signal:<n>` wait for the real process before reporting it.
+const PROGRAM_WAIT: Duration = Duration::from_secs(30);
+
 /// Runs the delivered program on its own (task T16.04).
+///
+/// `start` really starts the program; `stop` signals the process group; `exit:<code>` and
+/// `signal:<n>` are assertions about the measured exit, never a value written into the reason.
 pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
-    use crate::app::build::runner::{Config, Reason, Run, State};
+    use crate::app::build::runner::{Artifact, Config, Reason, Run, State};
 
     let mut config = Config {
         program: String::new(),
@@ -322,7 +626,9 @@ pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
         environment: Vec::new(),
         directory: None,
         standalone: false,
+        artifact: Artifact::Preview,
     };
+    let mut artifact: Option<Artifact> = None;
     let mut run: Option<Run> = None;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
@@ -353,42 +659,94 @@ pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
                 }
                 Err(reason) => Err(reason),
             },
+            "artifact" => match argument {
+                "preview" => {
+                    artifact = Some(Artifact::Preview);
+                    Ok(Vec::new())
+                }
+                "compiled" => {
+                    artifact = Some(Artifact::Compiled);
+                    Ok(Vec::new())
+                }
+                other => Err(format!("{other:?} is not preview or compiled")),
+            },
             "start" => {
+                config.artifact = artifact.unwrap_or(if config.standalone {
+                    Artifact::Compiled
+                } else {
+                    Artifact::Preview
+                });
                 run = Some(Run::new(config.clone()));
-                match run.as_mut().expect("set above").start() {
-                    Ok(()) => Ok(vec![format!("started {}", config.render())]),
-                    Err(reason) => Err(reason),
+                let started = run.as_mut().expect("set above").start();
+                match started {
+                    Ok(()) => {
+                        let pid = run
+                            .as_ref()
+                            .and_then(Run::pid)
+                            .map(|pid| pid.to_string())
+                            .unwrap_or_else(|| "unknown".to_owned());
+                        Ok(vec![format!(
+                            "started {} ({} artifact, pid {pid})",
+                            config.render(),
+                            config.artifact.name(),
+                        )])
+                    }
+                    Err(reason) => {
+                        // A failed start leaves no run behind, so a later stop cannot claim one.
+                        run = None;
+                        Err(reason)
+                    }
                 }
             }
             "exit" => match argument.parse::<i32>() {
                 Ok(code) => match run.as_mut() {
-                    Some(run) => {
-                        run.ended(Reason::NonZero { code });
-                        Ok(vec![format!(
-                            "ended: {}",
-                            run.reason.clone().unwrap().render()
-                        )])
-                    }
+                    Some(run) => match run.wait(PROGRAM_WAIT) {
+                        Some(reason) => match (reason, code) {
+                            (Reason::Clean, 0) => {
+                                Ok(vec![format!("ended: {}", Reason::Clean.render())])
+                            }
+                            (Reason::NonZero { code: actual }, expected) if actual == expected => {
+                                Ok(vec![format!("ended: exited with code {actual}")])
+                            }
+                            (other, expected) => Err(format!(
+                                "the program did not exit {expected}; it {}",
+                                other.render()
+                            )),
+                        },
+                        None => Err(format!(
+                            "the program is still running after {PROGRAM_WAIT:?}; no exit was measured"
+                        )),
+                    },
                     None => Err("no run has started".to_owned()),
                 },
                 Err(_) => Err(format!("{argument:?} is not an exit code")),
             },
             "signal" => match argument.parse::<i32>() {
-                Ok(signal) => match run.as_mut() {
-                    Some(run) => {
-                        run.ended(Reason::Signalled { signal });
-                        Ok(vec![format!(
-                            "ended: {}",
-                            run.reason.clone().unwrap().render()
-                        )])
-                    }
+                Ok(expected) => match run.as_mut() {
+                    Some(run) => match run.wait(PROGRAM_WAIT) {
+                        Some(Reason::Signalled { signal }) if signal == expected => {
+                            Ok(vec![format!("ended: killed by signal {signal}")])
+                        }
+                        Some(other) => Err(format!(
+                            "the program was not killed by signal {expected}; it {}",
+                            other.render()
+                        )),
+                        None => Err(format!(
+                            "the program is still running after {PROGRAM_WAIT:?}; no signal was measured"
+                        )),
+                    },
                     None => Err("no run has started".to_owned()),
                 },
                 Err(_) => Err(format!("{argument:?} is not a signal")),
             },
             "stop" => match run.as_mut() {
                 Some(run) => match run.stop() {
-                    Ok(()) => Ok(vec![run.reason.clone().unwrap().render().to_string()]),
+                    Ok(()) => Ok(vec![
+                        run.reason
+                            .as_ref()
+                            .map(Reason::render)
+                            .unwrap_or_else(|| "stopped".to_owned()),
+                    ]),
                     Err(reason) => Err(reason),
                 },
                 None => Err("no run has started".to_owned()),
@@ -409,10 +767,32 @@ pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
                     println!("{note}");
                 }
             }
-            Err(reason) => return report(reason),
+            Err(reason) => {
+                // A failed start or a mismatch must not leave the program running behind us.
+                if let Some(run) = run.as_mut()
+                    && run.is_running()
+                {
+                    let _ = run.stop();
+                }
+                return report(reason);
+            }
         }
     }
-    if let Some(run) = &run {
+    if let Some(run) = run.as_mut() {
+        // This host owns the process; returning while it still runs would leave an orphan. A
+        // one-shot CLI command stops what it started, and says so.
+        if run.is_running() {
+            match run.stop() {
+                Ok(()) => println!(
+                    "stopped: {}",
+                    run.reason
+                        .as_ref()
+                        .map(Reason::render)
+                        .unwrap_or_else(|| "stopped on request".to_owned())
+                ),
+                Err(reason) => return report(reason),
+            }
+        }
         println!(
             "state: {}",
             match run.state {
@@ -421,6 +801,9 @@ pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
                 State::Ended => "ended",
             }
         );
+        if let Some(reason) = &run.reason {
+            println!("reason: {}", reason.render());
+        }
     }
     true
 }
@@ -1132,4 +1515,172 @@ pub(super) fn headless(options: &crate::cli::HeadlessOptions) -> bool {
         );
     }
     exit_code(&outcomes) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BuildDiagnostics, build_report, run_program, toolchain_with};
+    use crate::app::build::toolchain::Environment;
+    use crate::cli::{CompileOptions, RunOptions, ToolchainOptions};
+    use crate::contracts::identity::NodeId;
+    use crate::contracts::revision::Revision;
+    use crate::contracts::source_map::SourceSpan;
+
+    fn options(ops: &[&str]) -> ToolchainOptions {
+        ToolchainOptions {
+            ops: ops.iter().map(|op| (*op).to_owned()).collect(),
+        }
+    }
+
+    fn run_options(ops: &[&str]) -> RunOptions {
+        RunOptions {
+            ops: ops.iter().map(|op| (*op).to_owned()).collect(),
+        }
+    }
+
+    fn intact() -> Environment {
+        Environment {
+            cargo: Some("cargo 1.98.1".to_owned()),
+            rustc: Some("rustc 1.98.1".to_owned()),
+            targets: vec!["aarch64-apple-darwin".to_owned()],
+            sdk: None,
+        }
+    }
+
+    #[test]
+    fn an_intact_probe_is_ready_for_an_installed_target() {
+        assert!(toolchain_with(
+            &options(&["profile:desktop", "target:aarch64-apple-darwin", "check"]),
+            intact(),
+        ));
+    }
+
+    #[test]
+    fn check_fails_when_the_target_is_not_installed() {
+        assert!(!toolchain_with(
+            &options(&[
+                "profile:desktop",
+                "target:riscv64gc-unknown-none-elf",
+                "check",
+            ]),
+            intact(),
+        ));
+    }
+
+    #[test]
+    fn check_fails_when_the_tool_is_absent() {
+        assert!(!toolchain_with(
+            &options(&["profile:desktop", "check"]),
+            Environment::default(),
+        ));
+    }
+
+    #[test]
+    fn a_missing_environment_is_a_report_not_a_failure_without_check() {
+        assert!(toolchain_with(
+            &options(&["profile:desktop"]),
+            Environment::default(),
+        ));
+    }
+
+    #[test]
+    fn an_unsupported_profile_fails_even_without_check() {
+        assert!(!toolchain_with(
+            &options(&["profile:watch"]),
+            Environment::default(),
+        ));
+    }
+
+    #[test]
+    fn cli_overrides_replace_or_extend_the_probe() {
+        assert!(toolchain_with(
+            &options(&[
+                "profile:desktop",
+                "cargo:cargo 9.0",
+                "rustc:rustc 9.0",
+                "installed:thumbv7em-none-eabihf",
+                "target:thumbv7em-none-eabihf",
+                "sdk:xwin",
+                "check",
+            ]),
+            Environment::default(),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_real_exit_is_measured_through_the_cli() {
+        assert!(run_program(&run_options(&[
+            "program:sh",
+            "arg:-c",
+            "arg:exit 0",
+            "artifact:compiled",
+            "start",
+            "exit:0",
+        ])));
+        assert!(run_program(&run_options(&[
+            "program:sh",
+            "arg:-c",
+            "arg:exit 3",
+            "artifact:compiled",
+            "start",
+            "exit:3",
+        ])));
+        // A claim about the exit that the process contradicts is a failure, not a pass.
+        assert!(!run_program(&run_options(&[
+            "program:sh",
+            "arg:-c",
+            "arg:exit 3",
+            "artifact:compiled",
+            "start",
+            "exit:7",
+        ])));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_preview_is_refused_as_a_standalone_artifact_through_the_cli() {
+        assert!(!run_program(&run_options(&[
+            "program:sh",
+            "arg:-c",
+            "arg:exit 0",
+            "artifact:preview",
+            "standalone:yes",
+            "start",
+        ])));
+    }
+
+    #[test]
+    fn a_captured_json_stream_becomes_a_build_problem_with_a_node() {
+        let source = "line one\nline two\npub fn x() { let a = 1; }\n";
+        let diagnostics = BuildDiagnostics {
+            source_path: Some("/tmp/project/src/main.rs".to_owned()),
+            source_text: Some(source.to_owned()),
+            model: Revision::from_raw(3),
+            spans: vec![(
+                NodeId::from_raw(9),
+                SourceSpan::new("src/main.rs", 18, source.len() as u32).unwrap(),
+            )],
+            ..BuildDiagnostics::default()
+        };
+        let output = r#"{"reason":"compiler-message","message":{"message":"mismatched types","level":"error","code":{"code":"E0308"},"spans":[{"file_name":"src/main.rs","line_start":3,"line_end":3,"column_start":5,"column_end":9,"is_primary":true}]}}"#;
+
+        let report = build_report(output, &diagnostics);
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].node, Some(NodeId::from_raw(9)));
+        assert!(!report.diagnostics[0].unmapped);
+
+        let problems = report.problems("aarch64-apple-darwin");
+        assert_eq!(problems[0].node, Some(9));
+        assert_eq!(problems[0].revision, 3);
+        assert_eq!(problems[0].target, "aarch64-apple-darwin");
+        assert_eq!(problems[0].location.as_deref(), Some("src/main.rs:3:5"));
+    }
+
+    #[test]
+    fn diagnostics_without_execute_have_no_stream_to_read() {
+        assert!(!super::compile(&CompileOptions {
+            ops: vec!["diag-model:2".to_owned()],
+        }));
+    }
 }

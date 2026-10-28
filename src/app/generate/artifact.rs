@@ -15,6 +15,11 @@
 //! * **The commit decision is a value.** Decision `D7-b-3` in the library is *generated sources are
 //!   committed*; [`CommitPolicy::Committed`] states that in the plan, so "is this file ours to
 //!   overwrite?" is answered by the plan and not by a heuristic at the write site.
+//! * **A whole project groups its outputs by source.** [`plan_project`] keeps one design source with
+//!   the files generated from it, so the library's dual product pair (`ui_default.rs` and
+//!   `ui_stripped.rs`) is one generation rather than two unrelated entries (T15.07). Any other
+//!   source with two outputs is still refused: the project model does not say which of them the
+//!   source owns.
 //!
 //! ## Generated regions and hand-written boundaries
 //!
@@ -336,10 +341,138 @@ pub fn plan(targets: &[(String, String)]) -> Result<Plan, String> {
     })
 }
 
+/// One design source and every file generated from it.
+///
+/// A source normally owns one output. The exception is the library's dual product pair, which is
+/// generated from one design in one pass and therefore cannot be split into two independent sources.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PlannedGroup {
+    /// The page document this comes from, project-relative.
+    pub source: String,
+    /// The files generated from it, sorted by output path.
+    pub outputs: Vec<String>,
+}
+
+/// Every file a project generates, grouped by the source that generates it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectPlan {
+    /// How the generated files are kept.
+    pub policy: CommitPolicy,
+    /// The sources and their outputs, sorted by source.
+    pub groups: Vec<PlannedGroup>,
+}
+
+impl ProjectPlan {
+    /// The plan in one line per generated file.
+    pub fn render(&self) -> Vec<String> {
+        let mut out = vec![format!("policy: {}", self.policy.render())];
+        for group in &self.groups {
+            for output in &group.outputs {
+                out.push(format!("{} -> {output}", group.source));
+            }
+        }
+        out
+    }
+
+    /// Whether the project names no generated file at all.
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    /// Every output the plan writes, in plan order.
+    pub fn outputs(&self) -> impl Iterator<Item = &str> {
+        self.groups
+            .iter()
+            .flat_map(|group| group.outputs.iter().map(String::as_str))
+    }
+}
+
+/// The two paths the library's dual generation writes, default product first.
+///
+/// Imported from the library rather than spelled here: a second copy of the pair's names would be a
+/// second answer to "is this the dual pair", and the two would drift exactly when it mattered.
+pub fn dual_outputs() -> [String; 2] {
+    use rust_widgets::designer::{ArtifactPaths, TargetProfile};
+    [
+        ArtifactPaths::path_for(TargetProfile::Default),
+        ArtifactPaths::path_for(TargetProfile::Stripped),
+    ]
+}
+
+/// Turns a whole project's `generated` entries into a grouped plan, or explains why it cannot.
+///
+/// The rules are [`plan`]'s, with one addition: a source may name the library's dual product pair
+/// and nothing else. That pair is produced by one generation pass over one design, so treating its
+/// two files as two sources would generate the same design twice and let a later write clobber an
+/// earlier one. A source that names any other two outputs is refused, because the project model does
+/// not say which of them the source owns.
+pub fn plan_project(targets: &[(String, String)]) -> Result<ProjectPlan, String> {
+    let mut by_source: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (source, output) in targets {
+        let source = source.trim();
+        let output = output.trim();
+        if source.is_empty() || output.is_empty() {
+            return Err(format!(
+                "a generated entry names a blank {}",
+                if source.is_empty() {
+                    "source"
+                } else {
+                    "output"
+                }
+            ));
+        }
+        let outputs = by_source.entry(source.to_owned()).or_default();
+        if outputs.iter().any(|existing| existing == output) {
+            return Err(format!("{source} would generate {output} twice"));
+        }
+        outputs.push(output.to_owned());
+    }
+
+    // One output belongs to one source: two sources writing one file would let the later write
+    // clobber the earlier one, which is the same refusal `plan` makes for a single artifact.
+    let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+    for (source, outputs) in &by_source {
+        if outputs.len() > 1 {
+            let mut expected = dual_outputs();
+            expected.sort();
+            let mut actual = outputs.clone();
+            actual.sort();
+            if actual != expected {
+                return Err(format!(
+                    "{source} would generate {} files ({}); a source generates exactly one unless it names the library's dual product pair ({})",
+                    outputs.len(),
+                    outputs.join(", "),
+                    expected.join(", ")
+                ));
+            }
+        }
+        for output in outputs {
+            if let Some(other) = seen.insert(output.as_str(), source.as_str()) {
+                return Err(format!(
+                    "{output} would be generated by two sources ({other} and {source})"
+                ));
+            }
+        }
+    }
+
+    let groups = by_source
+        .into_iter()
+        .map(|(source, mut outputs)| {
+            outputs.sort();
+            PlannedGroup { source, outputs }
+        })
+        .collect();
+    Ok(ProjectPlan {
+        policy: CommitPolicy::Committed,
+        groups,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CommitPolicy, FILE_MARKER, Plan, Planned, Region, RegionKind, is_generated, plan, regions,
+        CommitPolicy, FILE_MARKER, Plan, Planned, Region, RegionKind, dual_outputs, is_generated,
+        plan, plan_project, regions,
     };
 
     const GENERATED: &str = "// Generated by the rust_widgets designer. Do not edit by hand.\n\
@@ -474,5 +607,52 @@ mod tests {
         let rendered = plan.render();
         assert!(rendered[0].starts_with("policy: committed"));
         assert_eq!(rendered[1], "pages/main.json -> src/generated/main.rs");
+    }
+
+    #[test]
+    fn a_project_plan_groups_one_source_with_the_dual_product_pair() {
+        let [default, stripped] = dual_outputs();
+        let built = plan_project(&[
+            ("pages/b.json".to_owned(), "src/generated/b.rs".to_owned()),
+            ("pages/main.json".to_owned(), stripped.clone()),
+            ("pages/main.json".to_owned(), default.clone()),
+        ])
+        .expect("a project plan");
+
+        assert_eq!(built.groups.len(), 2);
+        assert_eq!(built.groups[0].source, "pages/b.json");
+        assert_eq!(built.groups[0].outputs, vec!["src/generated/b.rs"]);
+        assert_eq!(built.groups[1].source, "pages/main.json");
+        assert_eq!(built.groups[1].outputs, vec![default, stripped]);
+        assert_eq!(
+            built.outputs().collect::<Vec<_>>(),
+            vec![
+                "src/generated/b.rs",
+                "src/generated/ui_default.rs",
+                "src/generated/ui_stripped.rs"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_project_plan_refuses_two_outputs_that_are_not_the_dual_pair() {
+        let error = plan_project(&[
+            ("pages/a.json".to_owned(), "src/a.rs".to_owned()),
+            ("pages/a.json".to_owned(), "src/b.rs".to_owned()),
+        ])
+        .expect_err("two outputs");
+        assert!(error.contains("dual product pair"), "{error}");
+
+        let error = plan_project(&[
+            ("pages/a.json".to_owned(), "src/generated/ui.rs".to_owned()),
+            ("pages/b.json".to_owned(), "src/generated/ui.rs".to_owned()),
+        ])
+        .expect_err("one output, two sources");
+        assert!(error.contains("two sources"), "{error}");
+
+        assert!(
+            plan_project(&[("pages/a.json".to_owned(), "src/a.rs".to_owned())])
+                .is_ok_and(|plan| plan.groups.len() == 1)
+        );
     }
 }

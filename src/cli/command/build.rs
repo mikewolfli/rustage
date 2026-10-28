@@ -27,7 +27,9 @@ impl ToolchainOptions {
 #[derive(Debug, PartialEq, Eq)]
 pub struct CompileOptions {
     /// The operations: `action:<check|build|rebuild>`, `profile:<name>`, `feature:<name>` (repeatable),
-    /// `target:<triple>`, `package:<name>`, `manifest:<path>`, `exit:<code>`, `cancel`, `show`.
+    /// `target:<triple>`, `package:<name>`, `manifest:<path>`, `locked:<yes|no>`,
+    /// `offline:<yes|no>`, `vendor:<path>`, `cache:<path>`, `source:<path>`, `exit:<code>`, `cancel`,
+    /// `show`.
     pub ops: Vec<String>,
 }
 

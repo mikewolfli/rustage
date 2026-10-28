@@ -2,9 +2,20 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "ba1db3c274beab0a760a69eac1f9adf458c727eb",
+    "revision": "177716410bc714cb0b1131d0c8f7065076f10583",
     "profile": "desktop"
   },
+  "capacityBudgets": [
+    { "id": "Device", "controls": 4096, "textures": 4096, "glyphCache": "2 MiB", "eventQueue": 256 },
+    { "id": "Surface", "controls": 512, "textures": 2048, "glyphCache": "1 MiB", "eventQueue": 128 },
+    { "id": "Minimal", "controls": 64, "textures": 1024, "glyphCache": "256 KiB", "eventQueue": 64 }
+  ],
+  "desktopOnly": [
+    "chart",
+    "print",
+    "pdf",
+    "color-emoji"
+  ],
   "levels": {
     "unsupported": "项目架构排除，或固定依赖不提供；没有明确决策不得打开",
     "unverified": "本仓库没有构建或运行的记录",
@@ -16,19 +27,19 @@
       "id": "macos",
       "triple": "aarch64-apple-darwin",
       "designerHost": "certified",
-      "reason": "2.8.12（ba1db3c2）上 cargo build --bin rustage 与五个 profile 的 --lib 构建均通过；--workbench-gui --exit-after-ms 4000 在 macOS aarch64 上创建真实 1280x800 窗口并按时退出（真实运行，不是截图）；见 docs/log/log-20261020-4.md"
+      "reason": "3.0.0（17771641）上 cargo build --bin rustage 与五个 profile 的 --lib 构建均通过；--workbench-gui --exit-after-ms 4000 在 macOS aarch64 上创建真实 1280x800 窗口并按时退出（真实运行，不是截图）；见 docs/log/log-20261029-1.md"
     },
     {
       "id": "windows",
       "triple": "x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据）",
-      "designerHost": "unverified",
-      "reason": "2.8.10 上有 msvc 交叉构建（macOS 宿主 + rust-lld + xwin，docs/log/log-20261019-2.md）；2.8.12 未在本机复跑，宿主格与 profile 格都不冒充新修订证据；无 Windows 实机，Wine 不计为实机证据"
+      "designerHost": "build-verified",
+      "reason": "3.0.0（17771641）上在 macOS 宿主用 rust-lld + xwin 的 MSVC CRT/SDK 执行 cargo build --target x86_64-pc-windows-msvc --bin rustage 通过，产出 67 MB PE32+ executable (console) x86-64；未在 Windows 实机运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
       "designerHost": "unverified",
-      "reason": "2.8.11 上的构建与 GTK/X11 运行证据见 docs/log/log-20261020-3.md；2.8.12 未在 Linux 上复跑，因此退回 unverified，不拿旧修订证据冒充新修订"
+      "reason": "2.8.11 上的构建与 GTK/X11 运行证据见 docs/log/log-20261020-3.md；3.0.0 未在 Linux 上复跑，因此保持 unverified，不拿旧修订证据冒充新修订"
     }
   ],
   "profiles": [
@@ -38,7 +49,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 2.8.12 的 desktop profile 已在 macOS aarch64（rustc 1.98.1）上以 --no-default-features --features desktop --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "mode2Reason": "固定依赖 rust_widgets 3.0.0 的 desktop profile 已在 macOS aarch64（rustc 1.98.1）上以 --no-default-features --features desktop --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "id": "tablet",
@@ -46,7 +57,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 2.8.12 的 tablet profile 已在 macOS aarch64 上以 --no-default-features --features tablet --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "mode2Reason": "固定依赖 rust_widgets 3.0.0 的 tablet profile 已在 macOS aarch64 上以 --no-default-features --features tablet --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "id": "mobile",
@@ -54,7 +65,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 2.8.12 的 mobile profile 已在 macOS aarch64 上以 --no-default-features --features mobile --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "mode2Reason": "固定依赖 rust_widgets 3.0.0 的 mobile profile 已在 macOS aarch64 上以 --no-default-features --features mobile --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "id": "mini",
@@ -62,7 +73,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "固定依赖 rust_widgets 2.8.12 的 mini profile 已在 macOS aarch64 上以 --no-default-features --features mini --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "mode2Reason": "固定依赖 rust_widgets 3.0.0 的 mini profile 已在 macOS aarch64 上以 --no-default-features --features mini --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "id": "embedded",
@@ -70,7 +81,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "2.8.12 把四个构造器与 WidgetKind 变体统一为 widgets_unstripped 门控；embedded profile 已在 macOS aarch64 上以 --no-default-features --features embedded --lib 真实构建通过；见 docs/log/log-20261020-4.md 与 docs/rw-feedback/feedback-20261020.md §0.6"
+      "mode2Reason": "2.8.12 已把四个构造器与 WidgetKind 变体统一为 widgets_unstripped 门控；3.0.0 的 embedded profile 已在 macOS aarch64 上以 --no-default-features --features embedded --lib 真实构建通过；未运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     }
   ],
   "cells": [
@@ -78,91 +89,91 @@
       "host": "macos",
       "profile": "desktop",
       "status": "build-verified",
-      "reason": "2.8.12 的 --no-default-features --features desktop --lib 在 macOS aarch64（rustc 1.98.1）上真实构建通过；未运行窗口，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "reason": "3.0.0 的 --no-default-features --features desktop --lib 在 macOS aarch64（rustc 1.98.1）上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "macos",
       "profile": "tablet",
       "status": "build-verified",
-      "reason": "2.8.12 的 --no-default-features --features tablet --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "reason": "3.0.0 的 --no-default-features --features tablet --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "macos",
       "profile": "mobile",
       "status": "build-verified",
-      "reason": "2.8.12 的 --no-default-features --features mobile --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "reason": "3.0.0 的 --no-default-features --features mobile --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "macos",
       "profile": "mini",
       "status": "build-verified",
-      "reason": "2.8.12 的 --no-default-features --features mini --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "reason": "3.0.0 的 --no-default-features --features mini --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "macos",
       "profile": "embedded",
       "status": "build-verified",
-      "reason": "2.8.12 的 --no-default-features --features embedded --lib 在 macOS aarch64 上真实构建通过（2.8.11 的 E0599 已修复）；未运行产品，故不写成 certified；见 docs/log/log-20261020-4.md"
+      "reason": "3.0.0 的 --no-default-features --features embedded --lib 在 macOS aarch64 上真实构建通过；未运行产品，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "windows",
       "profile": "desktop",
-      "status": "unverified",
-      "reason": "2.8.12 未在 Windows 宿主上复跑；2.8.10 的旧证据保留在 docs/log/log-20261019-2.md，不作为 2.8.12 证据"
+      "status": "build-verified",
+      "reason": "3.0.0 的 --target x86_64-pc-windows-msvc --no-default-features --features desktop --lib 在 macOS 宿主用 rust-lld + xwin 交叉构建通过；未在 Windows 实机运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "windows",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": "2.8.12 未在 Windows 宿主上复跑；2.8.10 的旧证据保留在 docs/log/log-20261019-2.md，不作为 2.8.12 证据"
+      "status": "build-verified",
+      "reason": "3.0.0 的 --target x86_64-pc-windows-msvc --no-default-features --features tablet --lib 在 macOS 宿主用 rust-lld + xwin 交叉构建通过；未在 Windows 实机运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "windows",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": "2.8.12 未在 Windows 宿主上复跑；2.8.10 的旧证据保留在 docs/log/log-20261019-2.md，不作为 2.8.12 证据"
+      "status": "build-verified",
+      "reason": "3.0.0 的 --target x86_64-pc-windows-msvc --no-default-features --features mobile --lib 在 macOS 宿主用 rust-lld + xwin 交叉构建通过；未在 Windows 实机运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "windows",
       "profile": "mini",
-      "status": "unverified",
-      "reason": "2.8.12 未在 Windows 宿主上复跑；2.8.10 的旧证据保留在 docs/log/log-20261019-2.md，不作为 2.8.12 证据"
+      "status": "build-verified",
+      "reason": "3.0.0 的 --target x86_64-pc-windows-msvc --no-default-features --features mini --lib 在 macOS 宿主用 rust-lld + xwin 交叉构建通过；未在 Windows 实机运行，故不写成 certified；见 docs/log/log-20261029-1.md"
     },
     {
       "host": "windows",
       "profile": "embedded",
       "status": "unverified",
-      "reason": "2.8.12 未在 Windows 宿主上复跑；2.8.10 的旧证据保留在 docs/log/log-20261019-2.md，不作为 2.8.12 证据"
+      "reason": "3.0.0 的 --target x86_64-pc-windows-msvc --no-default-features --features embedded --lib 交叉构建失败：src/platform/external.rs:139 的 to_owned 在 embedded/no_std 下未导入 ToOwned（E0599）；缺口已记入 docs/rw-feedback/feedback-20261029.md，不写成通过"
     },
     {
       "host": "linux",
       "profile": "desktop",
       "status": "unverified",
-      "reason": "2.8.12 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 2.8.12 证据"
+      "reason": "3.0.0 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 3.0.0 证据"
     },
     {
       "host": "linux",
       "profile": "tablet",
       "status": "unverified",
-      "reason": "2.8.12 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 2.8.12 证据"
+      "reason": "3.0.0 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 3.0.0 证据"
     },
     {
       "host": "linux",
       "profile": "mobile",
       "status": "unverified",
-      "reason": "2.8.12 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 2.8.12 证据"
+      "reason": "3.0.0 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 3.0.0 证据"
     },
     {
       "host": "linux",
       "profile": "mini",
       "status": "unverified",
-      "reason": "2.8.12 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 2.8.12 证据"
+      "reason": "3.0.0 未在 Linux 上复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为 3.0.0 证据"
     },
     {
       "host": "linux",
       "profile": "embedded",
       "status": "unverified",
-      "reason": "2.8.12 未在 Linux 上复跑；2.8.11 的 embedded 构建失败已被 2.8.12 修复，但本机没有该修订的 Linux 证据"
+      "reason": "3.0.0 未在 Linux 上复跑；2.8.11 的 embedded 构建失败与 2.8.12 的修复证据见 docs/log/log-20261020-4.md，不作为 3.0.0 证据"
     }
   ]
 }

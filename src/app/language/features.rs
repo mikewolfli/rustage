@@ -312,6 +312,11 @@ impl Completions {
         self.version = version;
     }
 
+    /// The document version the next request is made against.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     /// Asks for completions against the current version.
     pub fn request(&mut self) -> Request {
         self.pending.request(self.version)

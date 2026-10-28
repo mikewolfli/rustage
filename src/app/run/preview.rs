@@ -9,10 +9,66 @@
 use super::*;
 
 pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
-    use crate::app::preview::preview_service::Preview;
+    use rust_widgets::core::{ObjectId, Rect};
+    use rust_widgets::widget::{Widget, WidgetFactory, runtime};
+
+    use crate::app::preview::hot_update::Updater;
+    use crate::app::preview::preview_service::{Document, DocumentNode, Preview};
+    use crate::app::preview::state_keep::Capture;
     use crate::contracts::identity::NodeId;
 
+    /// Builds real, registered controls, so a mounted preview is a live session rather than ids on
+    /// paper. The library's factory is headless; it needs no window.
+    fn creator(
+        factory: &WidgetFactory,
+    ) -> impl Fn(&rust_widgets::view::Node) -> Option<ObjectId> + '_ {
+        move |node| {
+            let widget: Box<dyn Widget> = factory.create(
+                &node.widget,
+                Rect::new(0, 0, 200, 28),
+                node.key_str().unwrap_or("anon"),
+            )?;
+            runtime::register(widget)
+        }
+    }
+
+    /// `<node>:<kind>:<text>`.
+    fn document_node(text: &str) -> Result<DocumentNode, String> {
+        let mut parts = text.splitn(3, ':');
+        let node = parts
+            .next()
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .map(NodeId::from_raw)
+            .ok_or_else(|| format!("{text:?} needs <node>:<kind>:<text>"))?;
+        let kind = parts
+            .next()
+            .filter(|kind| !kind.is_empty())
+            .ok_or_else(|| format!("{text:?} needs <node>:<kind>:<text>"))?;
+        let body = parts.next().unwrap_or("");
+        Ok(DocumentNode::new(node, kind, body))
+    }
+
+    /// `<root>:<node>:<kind>:<text>`.
+    fn parse_document(text: &str) -> Result<Document, String> {
+        let mut parts = text.splitn(2, ':');
+        let root = parts
+            .next()
+            .filter(|root| !root.is_empty())
+            .ok_or_else(|| format!("{text:?} needs <root>:<node>:<kind>:<text>"))?;
+        let rest = parts
+            .next()
+            .ok_or_else(|| format!("{text:?} needs <root>:<node>:<kind>:<text>"))?;
+        Ok(Document::new(root).with(document_node(rest)?))
+    }
+
     let mut preview = Preview::new();
+    let mut document: Option<Document> = None;
+    let mut capture = Capture::new();
+    // The classified-edit path is reachable from the same session, so an edit's classification and
+    // its effect cannot be demonstrated on two different previews: `edit` records what the designer
+    // changed, `apply` flushes the burst into one classified batch and applies it.
+    let mut updater = Updater::new("preview");
+    let mut edit_source = "editor".to_owned();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let node = |text: &str| -> Result<NodeId, String> {
@@ -36,6 +92,102 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                 },
                 Err(_) => Err(format!("{argument:?} is not a process id")),
             },
+            "mount" => match parse_document(argument) {
+                Ok(next) => {
+                    let factory = WidgetFactory::new_with_defaults();
+                    let make = creator(&factory);
+                    match preview.mount_view(&next, &make) {
+                        Ok(report) => {
+                            document = Some(next);
+                            Ok(vec![format!(
+                                "mounted {} control(s), {} issue(s), generation {}",
+                                report.widgets_created, report.issues, report.generation
+                            )])
+                        }
+                        Err(reason) => Err(reason),
+                    }
+                }
+                Err(reason) => Err(reason),
+            },
+            "update" => match document.as_mut() {
+                None => Err("no document is mounted, so there is nothing to update".to_owned()),
+                Some(current) => match document_node(argument) {
+                    Ok(next) => {
+                        match current.nodes.iter_mut().find(|held| held.node == next.node) {
+                            Some(held) => *held = next,
+                            None => current.nodes.push(next),
+                        }
+                        let factory = WidgetFactory::new_with_defaults();
+                        let make = creator(&factory);
+                        match preview.update_view(current, &make) {
+                            Ok(report) => Ok(vec![format!(
+                                "updated: {} patch(es), generation {}, {} update(s)",
+                                report.patches, report.generation, report.updates
+                            )]),
+                            Err(reason) => Err(reason),
+                        }
+                    }
+                    Err(reason) => Err(reason),
+                },
+            },
+            "from" => {
+                edit_source = argument.to_owned();
+                Ok(vec![format!("edit source: {argument}")])
+            }
+            "edit" => match argument.split_once(':') {
+                Some((kind, subject)) => match edit_from(kind, subject) {
+                    Ok(edit) => {
+                        let edit_kind = edit.kind();
+                        let taken = updater.push(edit_source.clone(), edit);
+                        Ok(vec![format!(
+                            "edit {subject} -> {}{}",
+                            edit_kind.name(),
+                            if taken {
+                                String::new()
+                            } else {
+                                " (ignored: our own write)".to_owned()
+                            }
+                        )])
+                    }
+                    Err(reason) => Err(reason),
+                },
+                None => Err(format!(
+                    "edit needs <kind>:<node>:<property>=<value>, got {argument:?}"
+                )),
+            },
+            "apply" => match updater.flush() {
+                None => Ok(vec!["nothing pending".to_owned()]),
+                Some(update) => match document.as_mut() {
+                    None => Err("no document is mounted, so no edit can be applied".to_owned()),
+                    Some(current) => {
+                        let factory = WidgetFactory::new_with_defaults();
+                        let make = creator(&factory);
+                        match preview.apply_update(&update, current, &make) {
+                            Ok(decision) => Ok(vec![decision.render()]),
+                            Err(reason) => Err(reason),
+                        }
+                    }
+                },
+            },
+            "edits" => Ok(vec![
+                format!("pending: {}", updater.pending()),
+                format!("updates: {}", updater.history().len()),
+                format!("edit source: {edit_source}"),
+            ]),
+            "capture" => {
+                capture = preview.capture_state();
+                let lines = capture.render();
+                if lines.is_empty() {
+                    Ok(vec!["nothing focused".to_owned()])
+                } else {
+                    Ok(lines)
+                }
+            }
+            "restore" => match preview.restore_state(&capture) {
+                Ok(outcomes) => Ok(outcomes.iter().map(|outcome| outcome.render()).collect()),
+                Err(reason) => Err(reason),
+            },
+            "gap" => Ok(vec![Preview::scroll_gap().to_owned()]),
             "install" => match node(argument) {
                 Ok(node) => match preview.install(node) {
                     Ok(instance) => Ok(vec![format!(
@@ -70,7 +222,19 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                 "clean: {}",
                 if preview.is_clean() { "yes" } else { "no" }
             )]),
-            "state" => Ok(preview.render()),
+            "state" => {
+                let mut lines = preview.render();
+                lines.push(format!(
+                    "document: {}",
+                    document
+                        .as_ref()
+                        .map(|document| {
+                            format!("{} with {} node(s)", document.root, document.nodes.len())
+                        })
+                        .unwrap_or_else(|| "(none)".to_owned())
+                ));
+                Ok(lines)
+            }
             "show" => Ok(Vec::new()),
             other => Err(format!("{other:?} is not a preview operation")),
         };
@@ -86,8 +250,28 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
     true
 }
 
+/// One edit from `<kind>:<subject>`, as both the preview and hot-update commands spell it.
+///
+/// The subject is passed through verbatim: a subject that does not address a document property is
+/// a fact the live-session path reports, not something this parser guesses at.
+fn edit_from(kind: &str, subject: &str) -> Result<crate::app::preview::hot_update::Edit, String> {
+    use crate::app::preview::hot_update::Edit;
+
+    Ok(match kind {
+        "property" => Edit::Property(subject.to_owned()),
+        "style" => Edit::Style(subject.to_owned()),
+        "existing" => Edit::ExistingBinding(subject.to_owned()),
+        "add-binding" => Edit::AddBinding(subject.to_owned()),
+        "remove-binding" => Edit::RemoveBinding(subject.to_owned()),
+        "add-node" => Edit::AddNode(subject.to_owned()),
+        "remove-node" => Edit::RemoveNode(subject.to_owned()),
+        "text" => Edit::Text(subject.to_owned()),
+        other => return Err(format!("{other:?} is not an edit kind")),
+    })
+}
+
 pub(super) fn hot_update(options: &crate::cli::HotUpdateOptions) -> bool {
-    use crate::app::preview::hot_update::{Edit, Updater};
+    use crate::app::preview::hot_update::Updater;
 
     let mut updater = Updater::new("preview");
     let mut source = "editor".to_owned();
@@ -103,30 +287,23 @@ pub(super) fn hot_update(options: &crate::cli::HotUpdateOptions) -> bool {
                 Ok(vec![format!("from: {argument}")])
             }
             "property" | "style" | "existing" | "add-binding" | "remove-binding" | "add-node"
-            | "remove-node" | "text" => {
-                let edit = match verb {
-                    "property" => Edit::Property(argument.to_owned()),
-                    "style" => Edit::Style(argument.to_owned()),
-                    "existing" => Edit::ExistingBinding(argument.to_owned()),
-                    "add-binding" => Edit::AddBinding(argument.to_owned()),
-                    "remove-binding" => Edit::RemoveBinding(argument.to_owned()),
-                    "add-node" => Edit::AddNode(argument.to_owned()),
-                    "remove-node" => Edit::RemoveNode(argument.to_owned()),
-                    _ => Edit::Text(argument.to_owned()),
-                };
-                let kind = edit.kind();
-                let taken = updater.push(source.clone(), edit);
-                Ok(vec![format!(
-                    "{} {argument} -> {}{}",
-                    verb,
-                    kind.name(),
-                    if taken {
-                        String::new()
-                    } else {
-                        " (ignored: our own write)".to_owned()
-                    }
-                )])
-            }
+            | "remove-node" | "text" => match edit_from(verb, argument) {
+                Ok(edit) => {
+                    let kind = edit.kind();
+                    let taken = updater.push(source.clone(), edit);
+                    Ok(vec![format!(
+                        "{} {argument} -> {}{}",
+                        verb,
+                        kind.name(),
+                        if taken {
+                            String::new()
+                        } else {
+                            " (ignored: our own write)".to_owned()
+                        }
+                    )])
+                }
+                Err(reason) => Err(reason),
+            },
             "flush" => match updater.flush() {
                 Some(update) => Ok(vec![update.render()]),
                 None => Ok(vec!["nothing pending".to_owned()]),
@@ -747,6 +924,8 @@ pub(super) fn preview_recovery(options: &crate::cli::PreviewRecoveryOptions) -> 
 
 pub(super) fn load(options: &crate::cli::LoadOptions) -> bool {
     use crate::app::preview::load::Load;
+    use crate::app::preview::preview_service::{Document, DocumentNode};
+    use crate::contracts::identity::NodeId;
 
     let mut load = Load::new();
     for op in &options.ops {
@@ -759,71 +938,108 @@ pub(super) fn load(options: &crate::cli::LoadOptions) -> bool {
                 }
                 Err(_) => Err(format!("{argument:?} is not a millisecond budget")),
             },
+            // `cycle`, `repeat` and `leak` carry counts the caller declares. They model a driver so
+            // the checker can be exercised; they are not measurements, and a run made only of them
+            // cannot pass. `drive` is the run that reads a real session.
             "cycle" => match argument.splitn(4, ':').collect::<Vec<_>>().as_slice() {
-                [viewport, subscriptions, nodes] => match load_counts(subscriptions, nodes, None) {
-                    Ok((subscriptions, nodes, latency)) => {
-                        load.cycle(viewport, subscriptions, nodes, latency);
+                [viewport, controls, nodes] => match load_counts(controls, nodes, None) {
+                    Ok((controls, nodes, latency)) => {
+                        load.declared_cycle(viewport, controls, nodes, latency);
                         Ok(vec![format!(
-                            "cycle {viewport}: {subscriptions} subscription(s)"
+                            "declared cycle {viewport}: {controls} control(s) (not measured)"
                         )])
                     }
                     Err(reason) => Err(reason),
                 },
-                [viewport, subscriptions, nodes, latency] => {
-                    match load_counts(subscriptions, nodes, Some(latency)) {
-                        Ok((subscriptions, nodes, latency)) => {
-                            load.cycle(viewport, subscriptions, nodes, latency);
+                [viewport, controls, nodes, latency] => {
+                    match load_counts(controls, nodes, Some(latency)) {
+                        Ok((controls, nodes, latency)) => {
+                            load.declared_cycle(viewport, controls, nodes, latency);
                             Ok(vec![format!(
-                                "cycle {viewport}: {subscriptions} subscription(s)"
+                                "declared cycle {viewport}: {controls} control(s) (not measured)"
                             )])
                         }
                         Err(reason) => Err(reason),
                     }
                 }
                 _ => Err(format!(
-                    "cycle needs <viewport>:<subscriptions>:<nodes>[:<latency>], got {argument:?}"
+                    "cycle needs <viewport>:<controls>:<nodes>[:<latency>], got {argument:?}"
                 )),
             },
             "repeat" => match argument.splitn(5, ':').collect::<Vec<_>>().as_slice() {
-                [viewport, cycles, subscriptions, nodes] => match load_cycles(cycles) {
-                    Ok(cycles) => match load_counts(subscriptions, nodes, None) {
-                        Ok((subscriptions, nodes, latency)) => {
-                            load.repeat(viewport, cycles, subscriptions, nodes, latency);
-                            Ok(vec![format!("repeated {cycles} cycle(s) in {viewport}")])
+                [viewport, cycles, controls, nodes] => match load_cycles(cycles) {
+                    Ok(cycles) => match load_counts(controls, nodes, None) {
+                        Ok((controls, nodes, latency)) => {
+                            load.repeat(viewport, cycles, controls, nodes, latency);
+                            Ok(vec![format!(
+                                "declared {cycles} cycle(s) in {viewport} (not measured)"
+                            )])
                         }
                         Err(reason) => Err(reason),
                     },
                     Err(reason) => Err(reason),
                 },
-                [viewport, cycles, subscriptions, nodes, latency] => match load_cycles(cycles) {
-                    Ok(cycles) => match load_counts(subscriptions, nodes, Some(latency)) {
-                        Ok((subscriptions, nodes, latency)) => {
-                            load.repeat(viewport, cycles, subscriptions, nodes, latency);
-                            Ok(vec![format!("repeated {cycles} cycle(s) in {viewport}")])
+                [viewport, cycles, controls, nodes, latency] => match load_cycles(cycles) {
+                    Ok(cycles) => match load_counts(controls, nodes, Some(latency)) {
+                        Ok((controls, nodes, latency)) => {
+                            load.repeat(viewport, cycles, controls, nodes, latency);
+                            Ok(vec![format!(
+                                "declared {cycles} cycle(s) in {viewport} (not measured)"
+                            )])
                         }
                         Err(reason) => Err(reason),
                     },
                     Err(reason) => Err(reason),
                 },
                 _ => Err(format!(
-                    "repeat needs <viewport>:<cycles>:<subscriptions>:<nodes>[:<latency>], got {argument:?}"
+                    "repeat needs <viewport>:<cycles>:<controls>:<nodes>[:<latency>], got \
+                     {argument:?}"
                 )),
             },
             "leak" => match argument.splitn(4, ':').collect::<Vec<_>>().as_slice() {
-                [viewport, cycles, subscriptions, nodes] => match load_cycles(cycles) {
-                    Ok(cycles) => match (subscriptions.parse::<u32>(), nodes.parse::<u32>()) {
-                        (Ok(subscriptions), Ok(nodes)) => {
-                            load.leak(viewport, cycles, subscriptions, nodes);
-                            Ok(vec![format!("leaked {cycles} cycle(s) in {viewport}")])
+                [viewport, cycles, controls, nodes] => match load_cycles(cycles) {
+                    Ok(cycles) => match (controls.parse::<u32>(), nodes.parse::<u32>()) {
+                        (Ok(controls), Ok(nodes)) => {
+                            load.leak(viewport, cycles, controls, nodes);
+                            Ok(vec![format!(
+                                "declared leak of {cycles} cycle(s) in {viewport}"
+                            )])
                         }
-                        _ => Err(format!(
-                            "{subscriptions:?}:{nodes:?} is not <subscriptions>:<nodes>"
-                        )),
+                        _ => Err(format!("{controls:?}:{nodes:?} is not <controls>:<nodes>")),
                     },
                     Err(reason) => Err(reason),
                 },
                 _ => Err(format!(
-                    "leak needs <viewport>:<cycles>:<subscriptions>:<nodes>, got {argument:?}"
+                    "leak needs <viewport>:<cycles>:<controls>:<nodes>, got {argument:?}"
+                )),
+            },
+            "drive" => match argument.splitn(6, ':').collect::<Vec<_>>().as_slice() {
+                [viewport, cycles, root, node, kind, text] => {
+                    match (load_cycles(cycles), node.parse::<u64>()) {
+                        (Ok(cycles), Ok(node)) if !root.is_empty() && !kind.is_empty() => {
+                            let document = Document::new(*root).with(DocumentNode::new(
+                                NodeId::from_raw(node),
+                                *kind,
+                                *text,
+                            ));
+                            match load.drive(viewport, cycles, &document) {
+                                Ok(()) => {
+                                    Ok(vec![format!("drove {cycles} real cycle(s) in {viewport}")])
+                                }
+                                Err(reason) => Err(reason),
+                            }
+                        }
+                        (Err(reason), _) => Err(reason),
+                        (_, Err(_)) => Err(format!("{node:?} is not a node id")),
+                        _ => Err(format!(
+                            "drive needs <viewport>:<cycles>:<root>:<node>:<kind>:<text>, got \
+                         {argument:?}"
+                        )),
+                    }
+                }
+                _ => Err(format!(
+                    "drive needs <viewport>:<cycles>:<root>:<node>:<kind>:<text>, got \
+                     {argument:?}"
                 )),
             },
             "invalid" => {
@@ -838,18 +1054,7 @@ pub(super) fn load(options: &crate::cli::LoadOptions) -> bool {
                     for line in load.render() {
                         println!("{line}");
                     }
-                    Err(if load.steady() {
-                        format!(
-                            "{} cycle(s) took longer than the {}-ms budget",
-                            load.over_budget().len(),
-                            load.budget_ms()
-                        )
-                    } else {
-                        format!(
-                            "{} subscription count(s) grew, so the run does not end where it started",
-                            load.growth().len()
-                        )
-                    })
+                    Err(load.verdict())
                 }
             }
             "show" => Ok(Vec::new()),
@@ -876,13 +1081,13 @@ fn load_cycles(argument: &str) -> Result<u32, String> {
 
 /// A cycle's counts, and the latency the driver observed if it gave one.
 fn load_counts(
-    subscriptions: &str,
+    controls: &str,
     nodes: &str,
     latency: Option<&str>,
 ) -> Result<(u32, u32, Option<u32>), String> {
-    let subscriptions = subscriptions
+    let controls = controls
         .parse::<u32>()
-        .map_err(|_| format!("{subscriptions:?} is not a subscription count"))?;
+        .map_err(|_| format!("{controls:?} is not a control count"))?;
     let nodes = nodes
         .parse::<u32>()
         .map_err(|_| format!("{nodes:?} is not a node count"))?;
@@ -894,5 +1099,5 @@ fn load_counts(
                 .map_err(|_| format!("{latency:?} is not a millisecond latency"))?,
         ),
     };
-    Ok((subscriptions, nodes, latency))
+    Ok((controls, nodes, latency))
 }

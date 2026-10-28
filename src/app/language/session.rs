@@ -32,6 +32,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::app::language::features::{CompletionItem, Completions, Delivery, Request, Response};
+use crate::app::language::protocol::{
+    Document, DocumentChange, Notification, Operation, Sync, SyncError,
+};
+
 /// Something a language service can do, as negotiated at startup.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Capability {
@@ -441,6 +446,180 @@ pub fn capabilities_from_lsp(capabilities: &crate::project::record::json::Json) 
     Capabilities::of(found)
 }
 
+/// The documents one project's service has open, and the requests made against them.
+///
+/// This is the typed half of [T07.02](crate::app::language::protocol): an operation updates the
+/// [`Sync`] model and queues exactly the notification the transport must send. The completion
+/// session is the freshness rule from [T07.03](crate::app::language::features), so a reply computed
+/// against an older version cannot replace the list for a newer buffer.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocumentSession {
+    sync: Sync,
+    completions: BTreeMap<String, Completions>,
+    notifications: Vec<Notification>,
+}
+
+impl DocumentSession {
+    /// A session with no document open.
+    pub fn new() -> Self {
+        Self {
+            sync: Sync::new(),
+            completions: BTreeMap::new(),
+            notifications: Vec::new(),
+        }
+    }
+
+    /// Opens a document at version 1 with its language id.
+    pub fn open(
+        &mut self,
+        uri: impl Into<String>,
+        language_id: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Result<u64, SyncError> {
+        let uri = uri.into();
+        let notification = self.sync.apply(Operation::Open {
+            uri: uri.clone(),
+            language_id: language_id.into(),
+            text: text.into(),
+        })?;
+        let version = notification.version().unwrap_or(1);
+        self.completions.insert(uri, Completions::new(version));
+        self.notifications.push(notification);
+        Ok(version)
+    }
+
+    /// Applies a full or incremental change, advancing the version by one.
+    pub fn change(&mut self, uri: &str, change: DocumentChange) -> Result<u64, SyncError> {
+        let notification = self.sync.apply(Operation::Change {
+            uri: uri.to_owned(),
+            change,
+        })?;
+        let version = notification.version().unwrap_or(0);
+        self.completions
+            .entry(uri.to_owned())
+            .or_insert_with(|| Completions::new(version))
+            .advance(version);
+        self.notifications.push(notification);
+        Ok(version)
+    }
+
+    /// Records a save. The version does not change, and one `didSave` is queued.
+    pub fn save(&mut self, uri: &str) -> Result<u64, SyncError> {
+        let notification = self.sync.apply(Operation::Save {
+            uri: uri.to_owned(),
+        })?;
+        let version = notification.version().unwrap_or(0);
+        self.notifications.push(notification);
+        Ok(version)
+    }
+
+    /// Closes a document and queues one `didClose`.
+    pub fn close(&mut self, uri: &str) -> Result<(), SyncError> {
+        let notification = self.sync.apply(Operation::Close {
+            uri: uri.to_owned(),
+        })?;
+        self.completions.remove(uri);
+        self.notifications.push(notification);
+        Ok(())
+    }
+
+    /// Closes every open document, returning the queued notifications (one `didClose` each).
+    pub fn close_all(&mut self) -> Vec<Notification> {
+        let uris: Vec<String> = self
+            .sync
+            .open_documents()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        for uri in uris {
+            if let Ok(notification) = self.sync.apply(Operation::Close { uri }) {
+                self.notifications.push(notification);
+            }
+        }
+        self.completions.clear();
+        std::mem::take(&mut self.notifications)
+    }
+
+    /// Forgets the model and any queued notification without sending a `didClose`. A restarted or
+    /// replaced server has nothing open, so the next edit must open the document again.
+    pub fn clear(&mut self) {
+        self.sync = Sync::new();
+        self.completions.clear();
+        self.notifications.clear();
+    }
+
+    /// A document, when it is open.
+    pub fn document(&self, uri: &str) -> Option<&Document> {
+        self.sync.document(uri)
+    }
+
+    /// The synchronisation model.
+    pub fn sync(&self) -> &Sync {
+        &self.sync
+    }
+
+    /// The document version a completion request is made against, when it is open.
+    pub fn version(&self, uri: &str) -> Option<u64> {
+        self.completions
+            .get(uri)
+            .map(Completions::version)
+            .or_else(|| self.sync.document(uri).map(Document::version))
+    }
+
+    /// Asks for completions against the document's current version.
+    pub fn request(&mut self, uri: &str) -> Result<Request, SyncError> {
+        let version = self
+            .sync
+            .document(uri)
+            .ok_or_else(|| SyncError::NotOpen {
+                uri: uri.to_owned(),
+            })?
+            .version();
+        let completions = self
+            .completions
+            .entry(uri.to_owned())
+            .or_insert_with(|| Completions::new(version));
+        completions.advance(version);
+        Ok(completions.request())
+    }
+
+    /// Takes a completion reply through the freshness rule.
+    pub fn accept(
+        &mut self,
+        uri: &str,
+        response: Response<Vec<CompletionItem>>,
+    ) -> Result<Delivery<usize>, SyncError> {
+        let completions = self
+            .completions
+            .get_mut(uri)
+            .ok_or_else(|| SyncError::NotOpen {
+                uri: uri.to_owned(),
+            })?;
+        Ok(completions.accept(response))
+    }
+
+    /// The completion list currently shown for a document, when there is one.
+    pub fn items(&self, uri: &str) -> Option<&[CompletionItem]> {
+        self.completions.get(uri).and_then(Completions::items)
+    }
+
+    /// The notifications queued since the last drain.
+    pub fn notifications(&self) -> &[Notification] {
+        &self.notifications
+    }
+
+    /// Takes the queued notifications, leaving the model as it is.
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        std::mem::take(&mut self.notifications)
+    }
+}
+
+impl Default for DocumentSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<L: Launcher> Drop for Services<L> {
     fn drop(&mut self) {
         // A session that is still open owns a process. Dropping the registry without telling the
@@ -455,7 +634,11 @@ impl<L: Launcher> Drop for Services<L> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Capabilities, Capability, Launcher, Services, StartupFailure, State};
+    use super::{
+        Capabilities, Capability, DocumentSession, Launcher, Services, StartupFailure, State,
+    };
+    use crate::app::language::features::{CompletionItem, Delivery, Response};
+    use crate::app::language::protocol::{Change, DocumentChange, Notification, Position, Range};
 
     /// A launcher that answers from a script and records what it did.
     struct Fake {
@@ -607,5 +790,147 @@ mod tests {
     fn a_missing_or_non_object_capability_answer_is_empty() {
         let json = crate::project::record::json::parse("null").expect("json");
         assert_eq!(super::capabilities_from_lsp(&json), Capabilities::none());
+    }
+
+    #[test]
+    fn save_and_close_are_each_emitted_once() {
+        let mut session = DocumentSession::new();
+        session
+            .open("file:///a.rs", "rust", "one\n")
+            .expect("an open");
+        let opened = session.take_notifications();
+        assert_eq!(opened.len(), 1);
+        assert!(matches!(
+            opened[0],
+            Notification::Open {
+                version: 1,
+                ref language_id,
+                ..
+            } if language_id == "rust"
+        ));
+
+        session.save("file:///a.rs").expect("a save");
+        let saved = session.take_notifications();
+        assert_eq!(saved.len(), 1);
+        assert!(matches!(saved[0], Notification::Save { version: 1, .. }));
+
+        session.close("file:///a.rs").expect("a close");
+        let closed = session.take_notifications();
+        assert_eq!(closed.len(), 1);
+        assert!(matches!(closed[0], Notification::Close { .. }));
+
+        // A second close is refused and emits nothing.
+        assert!(session.close("file:///a.rs").is_err());
+        assert!(session.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn every_change_advances_the_version_by_one() {
+        let mut session = DocumentSession::new();
+        session
+            .open("file:///a.rs", "rust", "one\n")
+            .expect("an open");
+        session.take_notifications();
+        assert_eq!(session.version("file:///a.rs"), Some(1));
+        let version = session
+            .change(
+                "file:///a.rs",
+                DocumentChange::Incremental {
+                    changes: vec![Change::new(
+                        Range::new(Position::new(0, 0), Position::new(0, 0)),
+                        "x",
+                    )],
+                },
+            )
+            .expect("a change");
+        assert_eq!(version, 2);
+        assert_eq!(session.version("file:///a.rs"), Some(2));
+        let version = session
+            .change(
+                "file:///a.rs",
+                DocumentChange::Full {
+                    text: "two\n".to_owned(),
+                },
+            )
+            .expect("a full change");
+        assert_eq!(version, 3);
+        assert_eq!(session.version("file:///a.rs"), Some(3));
+
+        let changes: Vec<Notification> = session.take_notifications();
+        assert_eq!(changes.len(), 2);
+        let versions: Vec<Option<u64>> = changes.iter().map(Notification::version).collect();
+        assert_eq!(versions, vec![Some(2), Some(3)]);
+    }
+
+    #[test]
+    fn a_stale_completion_does_not_overwrite_the_newer_buffer() {
+        let mut session = DocumentSession::new();
+        session
+            .open("file:///a.rs", "rust", "one\n")
+            .expect("an open");
+        session.take_notifications();
+        // The request is made at version 1.
+        let request = session.request("file:///a.rs").expect("a request");
+        assert_eq!(request.version, 1);
+        // The buffer moves on before the reply arrives.
+        session
+            .change(
+                "file:///a.rs",
+                DocumentChange::Incremental {
+                    changes: vec![Change::new(
+                        Range::new(Position::new(0, 0), Position::new(0, 0)),
+                        "x",
+                    )],
+                },
+            )
+            .expect("a change");
+        let delivery = session
+            .accept(
+                "file:///a.rs",
+                Response::new(request, vec![CompletionItem::text("old")]),
+            )
+            .expect("a reply");
+        assert_eq!(
+            delivery,
+            Delivery::Stale {
+                computed: 1,
+                current: 2
+            }
+        );
+        // The stale reply did not become the shown list.
+        assert!(session.items("file:///a.rs").is_none());
+
+        // A request made at the newer version is shown.
+        let request = session.request("file:///a.rs").expect("a request");
+        assert_eq!(request.version, 2);
+        let delivery = session
+            .accept(
+                "file:///a.rs",
+                Response::new(request, vec![CompletionItem::text("new")]),
+            )
+            .expect("a reply");
+        assert_eq!(delivery, Delivery::Fresh(1));
+        assert_eq!(
+            session.items("file:///a.rs").expect("shown")[0].label,
+            "new"
+        );
+    }
+
+    #[test]
+    fn closing_every_document_queues_one_did_close_each() {
+        let mut session = DocumentSession::new();
+        session.open("file:///a.rs", "rust", "a\n").expect("a");
+        session.open("file:///b.rs", "rust", "b\n").expect("b");
+        session.take_notifications();
+        let notifications = session.close_all();
+        assert_eq!(notifications.len(), 2);
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| matches!(notification, Notification::Close { .. }))
+        );
+        assert!(session.sync().open_documents().is_empty());
+        // Nothing is queued twice.
+        assert!(session.close_all().is_empty());
     }
 }

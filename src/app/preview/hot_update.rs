@@ -15,6 +15,11 @@
 //!   so a structural edit hidden in a burst is not absorbed live by accident.
 //! * **Our own write is not somebody else's edit.** [`Updater::push`] answers whether the source is an
 //!   echo of what this process wrote, so a file watcher seeing our own output cannot loop.
+//!
+//! The classification stops at [`Kind`]; what the live session does with it is
+//! [`Preview::apply_update`](crate::app::preview::preview_service::Preview::apply_update), which
+//! answers `Applied`, `RestartRequired` or `Noop` — including for a live-classified edit the library
+//! still refuses.
 
 #![allow(dead_code)]
 

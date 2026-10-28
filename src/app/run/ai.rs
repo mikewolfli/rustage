@@ -88,11 +88,15 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
             "authorize" => {
                 let mut selected = Context::select(files.clone(), &ignored);
                 selected.authorize();
+                let payload = selected
+                    .sendable_payload()
+                    .map(|payload| payload.len())
+                    .unwrap_or(0);
                 let lines = vec![
                     format!("authorized {} file(s)", selected.files.len()),
                     format!("ignored: {}", selected.ignored.join(", ")),
                     format!("redacted: {}", selected.redacted.join(", ")),
-                    format!("payload {} byte(s)", selected.payload().len()),
+                    format!("payload {payload} byte(s)"),
                 ];
                 context = Some(selected);
                 Ok(lines)
@@ -102,10 +106,15 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                     Some(selected) => selected,
                     None => return super::report("authorize the context first".to_owned()),
                 };
+                let sendable = match selected.sendable_payload() {
+                    Ok(payload) => format!("sendable {} byte(s)", payload.len()),
+                    Err(error) => format!("not sendable: {error}"),
+                };
                 Ok(vec![
                     format!("files: {}", selected.files.len()),
                     format!("authorized: {}", selected.authorized),
-                    format!("payload {} byte(s)", selected.payload().len()),
+                    format!("payload {} byte(s)", selected.payload_len()),
+                    sendable,
                     format!("fits budget: {}", session.fits(selected)),
                 ])
             }
@@ -136,7 +145,7 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                         base_revision,
                         changes: changes.clone(),
                     };
-                    let built = match Candidate::new(id, set) {
+                    let built = match Candidate::new_at(id, set, base_revision) {
                         Ok(built) => built,
                         Err(reason) => return super::report(reason),
                     };

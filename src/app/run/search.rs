@@ -549,6 +549,7 @@ pub(super) fn batch(options: &crate::cli::BatchOptions) -> bool {
     let mut documents: BTreeMap<String, OpenDocument> = BTreeMap::new();
     let mut guards: BTreeMap<String, WriteGuard> = BTreeMap::new();
     let mut batch: Option<Batch> = None;
+    let mut disk_ok = true;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -593,10 +594,31 @@ pub(super) fn batch(options: &crate::cli::BatchOptions) -> bool {
                 batch = Some(running);
                 Ok(notes)
             }
+            "commit" => match batch.as_mut() {
+                Some(running) => {
+                    if argument.is_empty() {
+                        return report("commit needs a root, as commit:<root>".to_owned());
+                    }
+                    let written = running.commit(std::path::Path::new(argument));
+                    let mut notes = written.render();
+                    // A partial write is a failure of the command, not something to call done.
+                    disk_ok &= written.is_complete();
+                    notes.push(format!("committed {} file(s)", running.committed().len()));
+                    Ok(notes)
+                }
+                None => Err("no batch to commit".to_owned()),
+            },
             "undo" => match batch.as_mut() {
                 Some(running) => {
+                    let mut notes = Vec::new();
+                    if !argument.is_empty() {
+                        let rolled_back = running.rollback(std::path::Path::new(argument));
+                        notes.extend(rolled_back.render_for("rollback"));
+                        disk_ok &= rolled_back.is_complete();
+                    }
                     let restored = running.undo(&mut documents);
-                    Ok(vec![format!("undo: {restored} file(s) restored")])
+                    notes.push(format!("undo: {restored} file(s) restored"));
+                    Ok(notes)
                 }
                 None => Err("no batch to undo".to_owned()),
             },
@@ -615,7 +637,7 @@ pub(super) fn batch(options: &crate::cli::BatchOptions) -> bool {
     for (uri, document) in &documents {
         println!("  {uri}: {:?} (v{})", document.text, document.version);
     }
-    true
+    disk_ok
 }
 
 /// Walks the navigation history and corrects moved files (task T08.06).

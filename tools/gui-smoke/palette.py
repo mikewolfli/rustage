@@ -220,7 +220,7 @@ def main() -> int:
         checks.append(("the palette closed after activation", output.wait_for("palette closed; focus", 5.0)))
 
         # Enter in the query field runs the selected command; Escape closes without running.
-        # Both are real key events through the GTK backend (2.8.12 normalises GDK keyvals).
+        # Both are real key events through the GTK backend (normalised since 2.8.12).
         if not open_palette():
             print(output.text(), file=sys.stderr)
             return 1

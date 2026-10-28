@@ -129,14 +129,14 @@ pub(super) fn language(options: &crate::cli::LanguageOptions) -> bool {
 /// `exec:<program>`, `arg:<value>` and `root:<path>` selecting the process. Capability negotiation is
 /// the server's own `initialize` result; nothing here fills a capability set in by hand.
 fn language_real(options: &crate::cli::LanguageOptions) -> bool {
-    use crate::app::language::features::completions_from_lsp;
-    use crate::app::language::protocol::to_units;
+    use crate::app::language::features::{Delivery, Response, completions_from_lsp};
+    use crate::app::language::protocol::{DocumentChange, to_units};
     use crate::app::language::session::{
-        Capabilities, Launcher, Services, StartupFailure, capabilities_from_lsp,
+        Capabilities, DocumentSession, Launcher, Services, StartupFailure, capabilities_from_lsp,
     };
     use crate::host::lsp::{Client, Clients, file_uri};
     use crate::project::record::json::{Json, JsonObject};
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -218,7 +218,8 @@ fn language_real(options: &crate::cli::LanguageOptions) -> bool {
         pids: Arc::clone(&pids),
     });
 
-    let mut opened: BTreeSet<String> = BTreeSet::new();
+    // One document session per project, like the service sessions themselves.
+    let mut documents: BTreeMap<String, DocumentSession> = BTreeMap::new();
     let mut current_project = String::from(".");
     for operation in &options.ops {
         let (verb, argument) = operation
@@ -249,6 +250,8 @@ fn language_real(options: &crate::cli::LanguageOptions) -> bool {
                 }])
             }
             "restart" => {
+                // The old server is gone; its documents must be opened on the new one.
+                documents.remove(project);
                 let session = services.restart(project);
                 if !session.state().is_running() {
                     let reason = session
@@ -262,6 +265,19 @@ fn language_real(options: &crate::cli::LanguageOptions) -> bool {
                 Ok(vec![format!("restart: {line} (restarts {restarts})")])
             }
             "close" => {
+                // Tell the server about the documents it still holds before the session ends.
+                if let Some(mut session) = documents.remove(project) {
+                    let notifications = session.close_all();
+                    if !notifications.is_empty()
+                        && let Some(client) = services.launcher_mut().clients.client_mut(project)
+                    {
+                        for notification in &notifications {
+                            if let Err(reason) = send_notification(client, notification) {
+                                return report(reason);
+                            }
+                        }
+                    }
+                }
                 let released = services.close(project);
                 Ok(vec![format!("close {project}: released={released}")])
             }
@@ -289,21 +305,38 @@ fn language_real(options: &crate::cli::LanguageOptions) -> bool {
                         "complete needs a running view; no server is running for {current_project:?}"
                     ));
                 };
-                if opened.insert(uri.clone()) {
-                    let mut document = JsonObject::new();
-                    document.insert("uri", Json::string(uri.clone()));
-                    document.insert("languageId", Json::string(language_id(path)));
-                    document.insert("version", Json::number(1));
-                    document.insert("text", Json::string(text.clone()));
-                    let mut params = JsonObject::new();
-                    params.insert("textDocument", Json::Object(document));
-                    if let Err(reason) = client.notify("textDocument/didOpen", Json::Object(params))
+                let session = documents.entry(current_project.clone()).or_default();
+                // Open once, then send the difference as an incremental change at the next version.
+                if session.document(&uri).is_none() {
+                    if let Err(error) = session.open(uri.clone(), language_id(path), text.clone()) {
+                        return report(error.message());
+                    }
+                } else {
+                    let current = session
+                        .document(&uri)
+                        .expect("a document that was just checked")
+                        .text()
+                        .to_owned();
+                    if let Some(change) = incremental_change(&current, &text)
+                        && let Err(error) = session.change(
+                            &uri,
+                            DocumentChange::Incremental {
+                                changes: vec![change],
+                            },
+                        )
                     {
-                        return report(reason);
+                        return report(error.message());
                     }
                 }
+                if let Err(reason) = flush_notifications(client, session) {
+                    return report(reason);
+                }
+                let request = match session.request(&uri) {
+                    Ok(request) => request,
+                    Err(error) => return report(error.message()),
+                };
                 let mut document = JsonObject::new();
-                document.insert("uri", Json::string(uri));
+                document.insert("uri", Json::string(&uri));
                 let mut at = JsonObject::new();
                 at.insert("line", Json::number(u64::from(position.line)));
                 at.insert("character", Json::number(u64::from(position.character)));
@@ -320,17 +353,74 @@ fn language_real(options: &crate::cli::LanguageOptions) -> bool {
                 ) {
                     Ok(result) => {
                         let items = completions_from_lsp(&result);
-                        if items.is_empty() {
-                            Ok(vec![format!("completion at {}: none", position.render())])
-                        } else {
-                            Ok(items
+                        // A reply is only shown when it was computed against the current version.
+                        let delivery = match session.accept(&uri, Response::new(request, items)) {
+                            Ok(delivery) => delivery,
+                            Err(error) => return report(error.message()),
+                        };
+                        match delivery {
+                            Delivery::Fresh(0) => {
+                                Ok(vec![format!("completion at {}: none", position.render())])
+                            }
+                            Delivery::Fresh(_) => Ok(session
+                                .items(&uri)
+                                .unwrap_or_default()
                                 .iter()
                                 .map(|item| format!("completion: {}", item.render()))
-                                .collect())
+                                .collect()),
+                            Delivery::Stale { computed, current } => Ok(vec![format!(
+                                "completion: stale (computed {computed}, current {current})"
+                            )]),
+                            Delivery::Cancelled => Ok(vec!["completion: cancelled".to_owned()]),
                         }
                     }
                     Err(reason) => Err(reason),
                 }
+            }
+            "save" => {
+                let uri = file_uri(Path::new(argument));
+                let Some(session) = documents.get_mut(&current_project) else {
+                    return report(format!("{uri} is not open"));
+                };
+                if session.document(&uri).is_none() {
+                    return report(format!("{uri} is not open"));
+                }
+                let Some(client) = services.launcher_mut().clients.client_mut(&current_project)
+                else {
+                    return report(format!(
+                        "save needs a running view; no server is running for {current_project:?}"
+                    ));
+                };
+                let version = match session.save(&uri) {
+                    Ok(version) => version,
+                    Err(error) => return report(error.message()),
+                };
+                if let Err(reason) = flush_notifications(client, session) {
+                    return report(reason);
+                }
+                Ok(vec![format!("save {uri}: version {version}")])
+            }
+            "close-document" => {
+                let uri = file_uri(Path::new(argument));
+                let Some(session) = documents.get_mut(&current_project) else {
+                    return report(format!("{uri} is not open"));
+                };
+                if session.document(&uri).is_none() {
+                    return report(format!("{uri} is not open"));
+                }
+                let Some(client) = services.launcher_mut().clients.client_mut(&current_project)
+                else {
+                    return report(format!(
+                        "close-document needs a running view; no server is running for {current_project:?}"
+                    ));
+                };
+                if let Err(error) = session.close(&uri) {
+                    return report(error.message());
+                }
+                if let Err(reason) = flush_notifications(client, session) {
+                    return report(reason);
+                }
+                Ok(vec![format!("close-document {uri}")])
             }
             "show" => Ok(Vec::new()),
             "wait" => {
@@ -360,6 +450,105 @@ fn language_real(options: &crate::cli::LanguageOptions) -> bool {
         println!("{line}");
     }
     true
+}
+
+/// Sends one typed document notification through the real transport.
+fn send_notification(
+    client: &mut crate::host::lsp::Client,
+    notification: &crate::app::language::protocol::Notification,
+) -> Result<(), String> {
+    use crate::app::language::protocol::{DocumentChange, Notification};
+    use crate::host::lsp::{Position, TextEdit};
+
+    match notification {
+        Notification::Open {
+            uri,
+            language_id,
+            version,
+            text,
+        } => client.did_open(uri, language_id, *version, text),
+        Notification::Change {
+            uri,
+            version,
+            change,
+        } => match change {
+            DocumentChange::Full { text } => client.did_change_full(uri, *version, text),
+            DocumentChange::Incremental { changes } => {
+                let edits: Vec<TextEdit> = changes
+                    .iter()
+                    .map(|change| TextEdit {
+                        start: Position {
+                            line: change.range.start.line,
+                            character: change.range.start.character,
+                        },
+                        end: Position {
+                            line: change.range.end.line,
+                            character: change.range.end.character,
+                        },
+                        text: change.text.clone(),
+                    })
+                    .collect();
+                client.did_change_incremental(uri, *version, &edits)
+            }
+        },
+        Notification::Save { uri, text, .. } => client.did_save(uri, text),
+        Notification::Close { uri } => client.did_close(uri),
+    }
+}
+
+/// Sends and clears every notification a session queued.
+fn flush_notifications(
+    client: &mut crate::host::lsp::Client,
+    documents: &mut crate::app::language::session::DocumentSession,
+) -> Result<(), String> {
+    for notification in documents.take_notifications() {
+        send_notification(client, &notification)?;
+    }
+    Ok(())
+}
+
+/// The smallest change that turns `old` into `new`, in protocol positions.
+///
+/// The common prefix and suffix are found in bytes but cut on character boundaries, and the result
+/// is expressed through [`to_units`](crate::app::language::protocol::to_units), so a Chinese
+/// character or an emoji never splits in the middle.
+fn incremental_change(old: &str, new: &str) -> Option<crate::app::language::protocol::Change> {
+    use crate::app::language::protocol::{Change, Range, to_units};
+
+    if old == new {
+        return None;
+    }
+    let old_bytes = old.as_bytes();
+    let new_bytes = new.as_bytes();
+
+    let mut prefix = 0;
+    while prefix < old_bytes.len()
+        && prefix < new_bytes.len()
+        && old_bytes[prefix] == new_bytes[prefix]
+    {
+        prefix += 1;
+    }
+    while prefix > 0 && !old.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+
+    let mut suffix = 0;
+    while suffix < old_bytes.len() - prefix
+        && suffix < new_bytes.len() - prefix
+        && old_bytes[old_bytes.len() - 1 - suffix] == new_bytes[new_bytes.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    while suffix > 0
+        && (!old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix))
+    {
+        suffix -= 1;
+    }
+
+    Some(Change::new(
+        Range::new(to_units(old, prefix), to_units(old, old.len() - suffix)),
+        new[prefix..new.len() - suffix].to_owned(),
+    ))
 }
 
 /// The language id an editor would send for a path's extension.
@@ -1257,4 +1446,36 @@ pub(super) fn analysis(options: &crate::cli::AnalysisOptions) -> bool {
         println!("{line}");
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::incremental_change;
+    use crate::app::language::protocol::{Position, to_offset};
+
+    #[test]
+    fn an_unchanged_buffer_needs_no_did_change() {
+        assert!(incremental_change("one\n", "one\n").is_none());
+    }
+
+    #[test]
+    fn an_edit_between_chinese_and_emoji_uses_utf16_positions() {
+        // "a" is 1 unit, the emoji is 2 units; replacing it with one Chinese character is the
+        // range 1..3 in UTF-16, which is bytes 1..5 in UTF-8.
+        let change = incremental_change("a🎉中\n", "a字中\n").expect("a change");
+        assert_eq!(change.range.start, Position::new(0, 1));
+        assert_eq!(change.range.end, Position::new(0, 3));
+        assert_eq!(change.text, "字");
+        // Applying the same range to the old text lands on the old emoji's boundaries.
+        assert_eq!(to_offset("a🎉中\n", change.range.start), Some(1));
+        assert_eq!(to_offset("a🎉中\n", change.range.end), Some(5));
+    }
+
+    #[test]
+    fn an_insertion_at_the_end_names_the_end_of_the_old_text() {
+        let change = incremental_change("中\n", "中🎉\n").expect("a change");
+        assert_eq!(change.range.start, Position::new(0, 1));
+        assert_eq!(change.range.end, Position::new(0, 1));
+        assert_eq!(change.text, "🎉");
+    }
 }

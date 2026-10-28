@@ -17,12 +17,31 @@
 //! * **Determinism is tested, not assumed.** [`run_twice`] generates twice and refuses to return a
 //!   result the two runs disagree about, so "byte-identical" is something the pipeline checks rather
 //!   than something its documentation claims.
+//! * **One project has two products.** [`run_dual`] runs the same document through both targets and
+//!   stamps each file beneath the library's marker with this build's format and generator versions.
+//!   [`Finding`]s carry the five T15.02 causes, so a node the target cannot express is reported
+//!   rather than dropped; [`Cause::CrossProfile`] is a caveat, every other cause blocks.
 
 #![allow(dead_code)]
 
+use crate::contracts::revision::{FormatVersion, GeneratorVersion};
 use rust_widgets::designer::{
-    Availability, GenerationReport, GenerationRequest, TargetProfile, availability, generate,
+    ArtifactPaths, Availability, GenerationGapReason, GenerationReport, GenerationRequest,
+    TargetProfile, availability, generate,
 };
+
+/// The header line the dual products carry beneath the library's marker (task T15.02).
+///
+/// The library's marker says *that* a file was generated; this line says *by which build*, which is
+/// what lets a reader tell a stale artifact from a current one without regenerating it. The two
+/// versions come from [`crate::contracts::revision`], the one place this build defines them.
+pub fn version_header() -> String {
+    format!(
+        "// rustage {generator} ({format})",
+        generator = GeneratorVersion::CURRENT,
+        format = FormatVersion::CURRENT,
+    )
+}
 
 /// One thing that stops generation, with the node and the reason.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -124,6 +143,172 @@ impl Precheck {
     }
 }
 
+/// One cause of a generation gap, in the five categories T15.02 names.
+///
+/// The library already classifies its gaps ([`GenerationGapReason`]); this is that vocabulary with
+/// the report's separate `cross_profile_caveats` list folded in, so a caller can name the cause
+/// without knowing which of the report's three lists a gap arrived in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Cause {
+    /// The document asked for something the generator cannot express.
+    Unsupported,
+    /// A container holds more children than the target accepts.
+    CapacityOverflow,
+    /// Availability could not be settled under the running profile.
+    CrossProfile,
+    /// An event name is not one the control publishes.
+    UnresolvableEvent,
+    /// A wire carries a value into a channel that cannot receive it.
+    IncompatibleWire,
+}
+
+impl Cause {
+    /// Every cause, in the order a report renders them.
+    pub const ALL: [Self; 5] = [
+        Self::Unsupported,
+        Self::CapacityOverflow,
+        Self::CrossProfile,
+        Self::UnresolvableEvent,
+        Self::IncompatibleWire,
+    ];
+
+    /// The stable token the library writes at the front of a gap's reason.
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Unsupported => GenerationGapReason::Unsupported.token(),
+            Self::CapacityOverflow => GenerationGapReason::CapacityOverflow.token(),
+            Self::CrossProfile => GenerationGapReason::CrossProfile.token(),
+            Self::UnresolvableEvent => GenerationGapReason::UnresolvableEvent.token(),
+            Self::IncompatibleWire => GenerationGapReason::IncompatibleWire.token(),
+        }
+    }
+
+    /// Whether this cause stops a product being written.
+    ///
+    /// A cross-profile caveat is reported but does not block: the designer runs on a desktop host,
+    /// so refusing it would make generating for `mini` impossible (T15.02's "present the warning"
+    /// rather than "refuse"). Every other cause means a node or wire would be missing from the
+    /// file, which is the silent drop the task forbids.
+    pub const fn blocks(self) -> bool {
+        !matches!(self, Self::CrossProfile)
+    }
+}
+
+/// One reported gap, with the cause and the node it is about.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Finding {
+    /// Why the node is a gap.
+    pub cause: Cause,
+    /// The library's tree path (`[]` is the root).
+    pub path: Vec<usize>,
+    /// The control name, or the node a caller-supplied diagnostic names.
+    pub node: String,
+    /// The library's or caller's explanation.
+    pub reason: String,
+}
+
+impl Finding {
+    /// Whether this finding blocks a product.
+    pub fn blocks(&self) -> bool {
+        self.cause.blocks()
+    }
+
+    /// The finding in one line, with its cause token first so it is greppable.
+    pub fn render(&self) -> String {
+        format!(
+            "{} path {:?} `{}`: {}",
+            self.cause.token(),
+            self.path,
+            self.node,
+            self.reason
+        )
+    }
+}
+
+/// Maps a library gap reason to the task's vocabulary.
+///
+/// A gap recorded before reasons were tokenised has no category; calling it `unsupported` is the
+/// honest answer because the library uses that category for everything it cannot express.
+fn cause_of(reason: Option<GenerationGapReason>) -> Cause {
+    match reason {
+        Some(GenerationGapReason::CapacityOverflow) => Cause::CapacityOverflow,
+        Some(GenerationGapReason::CrossProfile) => Cause::CrossProfile,
+        Some(GenerationGapReason::UnresolvableEvent) => Cause::UnresolvableEvent,
+        Some(GenerationGapReason::IncompatibleWire) => Cause::IncompatibleWire,
+        Some(GenerationGapReason::Unsupported) | None => Cause::Unsupported,
+    }
+}
+
+/// Every gap a report carries, in the library's own order.
+fn report_findings(report: &GenerationReport) -> Vec<Finding> {
+    let mut out: Vec<Finding> = report
+        .unsupported
+        .iter()
+        .map(|gap| Finding {
+            cause: cause_of(gap.reason_kind()),
+            path: gap.path.clone(),
+            node: gap.widget.clone(),
+            reason: gap.reason.clone(),
+        })
+        .collect();
+    out.extend(report.capacity_overflow.iter().map(|gap| Finding {
+        cause: Cause::CapacityOverflow,
+        path: gap.path.clone(),
+        node: gap.widget.clone(),
+        reason: gap.reason.clone(),
+    }));
+    out.extend(report.cross_profile_caveats.iter().map(|gap| Finding {
+        cause: Cause::CrossProfile,
+        path: gap.path.clone(),
+        node: gap.widget.clone(),
+        reason: gap.reason.clone(),
+    }));
+    out
+}
+
+/// The precheck's findings, classified into the same vocabulary.
+///
+/// Style and layout diagnostics arrive from other domains (T11.07, T10.08) and have no library
+/// category; they are `unsupported` because they stop the same way: the emitted file would not
+/// match the document.
+fn precheck_findings(precheck: &Precheck) -> Vec<Finding> {
+    let mut out: Vec<Finding> = precheck
+        .unsupported
+        .iter()
+        .map(|gap| Finding {
+            cause: Cause::Unsupported,
+            path: Vec::new(),
+            node: gap.node.clone(),
+            reason: gap.reason.clone(),
+        })
+        .collect();
+    out.extend(precheck.capacity.iter().map(|gap| Finding {
+        cause: Cause::CapacityOverflow,
+        path: Vec::new(),
+        node: gap.node.clone(),
+        reason: gap.reason.clone(),
+    }));
+    out.extend(precheck.caveats.iter().map(|gap| Finding {
+        cause: Cause::CrossProfile,
+        path: Vec::new(),
+        node: gap.node.clone(),
+        reason: gap.reason.clone(),
+    }));
+    out.extend(precheck.style.iter().map(|gap| Finding {
+        cause: Cause::Unsupported,
+        path: Vec::new(),
+        node: gap.node.clone(),
+        reason: gap.reason.clone(),
+    }));
+    out.extend(precheck.layout.iter().map(|gap| Finding {
+        cause: Cause::Unsupported,
+        path: Vec::new(),
+        node: gap.node.clone(),
+        reason: gap.reason.clone(),
+    }));
+    out
+}
+
 /// A generated file, with the report the library returned.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Outcome {
@@ -139,6 +324,13 @@ impl Outcome {
     /// Whether the run needs nobody's attention: a clean precheck and a clean report.
     pub fn is_clean(&self) -> bool {
         !self.precheck.is_blocked() && self.report.is_clean()
+    }
+
+    /// Every gap the precheck and the report name, classified (T15.02).
+    pub fn findings(&self) -> Vec<Finding> {
+        let mut out = precheck_findings(&self.precheck);
+        out.extend(report_findings(&self.report));
+        out
     }
 
     /// The outcome in one line per fact.
@@ -179,6 +371,181 @@ pub fn run(input: &Input) -> Result<Outcome, Vec<Gap>> {
             node: "(document)".to_owned(),
             reason,
         }]),
+    }
+}
+
+/// Everything a dual run is asked to generate: one project, two products.
+///
+/// There is deliberately no `target` here. T15.02's product contract is *both* files from one
+/// project, because a designer that generated only the previewed profile would leave the other
+/// committed file stale (the same reason the library's `plan_artifacts` always emits both).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DualInput {
+    /// The generator's document, already translated ([`super::document`]).
+    pub json: String,
+    /// The client width the layout is solved against.
+    pub width: u32,
+    /// The client height.
+    pub height: u32,
+    /// The name of the generated function.
+    pub function_name: String,
+    /// The page's nodes, for the capability and capacity checks.
+    pub nodes: Vec<Node>,
+    /// Style diagnostics the caller computed (task T11.07).
+    pub style: Vec<Gap>,
+    /// Layout diagnostics the caller computed (task T10.08).
+    pub layout: Vec<Gap>,
+}
+
+impl DualInput {
+    /// The same document, sized, named and diagnosed, for both targets.
+    pub fn from_single(input: &Input) -> Self {
+        Self {
+            json: input.json.clone(),
+            width: input.width,
+            height: input.height,
+            function_name: input.function_name.clone(),
+            nodes: input.nodes.clone(),
+            style: input.style.clone(),
+            layout: input.layout.clone(),
+        }
+    }
+}
+
+/// One of the two products: where it goes, its bytes, and what it could not express.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Product {
+    /// The profile this file is compiled for.
+    pub target: TargetProfile,
+    /// The project-relative path, `src/generated/ui_default.rs` or `ui_stripped.rs`.
+    pub path: String,
+    /// The Rust source, marker first and version second.
+    pub source: String,
+    /// What the library emitted and what it refused.
+    pub report: GenerationReport,
+    /// The precheck the run started from.
+    pub precheck: Precheck,
+}
+
+impl Product {
+    /// Every gap this product's precheck and report name, deduplicated and classified.
+    ///
+    /// The same gap can be found twice when a caller supplies `node:` counts *and* the library
+    /// inspects the same tree; reporting it once keeps the problem panel from showing duplicates
+    /// without hiding either source.
+    pub fn findings(&self) -> Vec<Finding> {
+        let mut out = precheck_findings(&self.precheck);
+        out.extend(report_findings(&self.report));
+        let mut seen = std::collections::BTreeSet::new();
+        out.retain(|finding| {
+            seen.insert((
+                finding.cause.token(),
+                finding.node.clone(),
+                finding.reason.clone(),
+            ))
+        });
+        out
+    }
+
+    /// Whether this product must not be written.
+    pub fn is_blocked(&self) -> bool {
+        self.findings().iter().any(Finding::blocks)
+    }
+}
+
+/// Both products from one project, in a stable order (default first, stripped second).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DualOutcome {
+    /// The two products.
+    pub products: Vec<Product>,
+}
+
+impl DualOutcome {
+    /// The product for `target`, when the run produced one.
+    pub fn product(&self, target: TargetProfile) -> Option<&Product> {
+        self.products
+            .iter()
+            .find(|product| product.target == target)
+    }
+
+    /// Whether any product has a blocking finding.
+    pub fn is_blocked(&self) -> bool {
+        self.products.iter().any(Product::is_blocked)
+    }
+
+    /// Whether the run has no findings at all, caveats included.
+    pub fn is_clean(&self) -> bool {
+        self.products
+            .iter()
+            .all(|product| product.findings().is_empty())
+    }
+
+    /// Both products in one line each, with every finding named by cause.
+    pub fn render(&self) -> Vec<String> {
+        let mut out = vec![version_header()];
+        for product in &self.products {
+            out.push(format!(
+                "{} ({}) {} bytes",
+                product.path,
+                product.target.feature_hint(),
+                product.source.len()
+            ));
+            out.push(format!("  report: {}", product.report.summary()));
+            for finding in product.findings() {
+                let mark = if finding.blocks() {
+                    "blocked"
+                } else {
+                    "caveat "
+                };
+                out.push(format!("  {mark} {}", finding.render()));
+            }
+        }
+        out
+    }
+}
+
+/// Generates both products from one input.
+///
+/// Each target goes through [`run`], so the prechecks, determinism and refusal rules are the same
+/// single-target path's rather than a second set. The only addition is the version header, which
+/// records the build that produced the file beneath the library's marker.
+pub fn run_dual(input: &DualInput) -> Result<DualOutcome, Vec<Gap>> {
+    let mut products = Vec::with_capacity(2);
+    for target in [TargetProfile::Default, TargetProfile::Stripped] {
+        let single = Input {
+            json: input.json.clone(),
+            target,
+            width: input.width,
+            height: input.height,
+            function_name: input.function_name.clone(),
+            nodes: input.nodes.clone(),
+            style: input.style.clone(),
+            layout: input.layout.clone(),
+        };
+        let outcome = run(&single)?;
+        products.push(Product {
+            target,
+            path: ArtifactPaths::path_for(target),
+            source: stamped_source(&outcome.source),
+            report: outcome.report,
+            precheck: outcome.precheck,
+        });
+    }
+    Ok(DualOutcome { products })
+}
+
+/// Inserts the version header immediately after the source's first line.
+///
+/// The first line is the library's marker (or, for an empty source, the library's own reason); the
+/// header goes second so [`super::artifact::is_generated`] keeps recognising the file.
+fn stamped_source(source: &str) -> String {
+    if source.is_empty() {
+        return format!("{}\n", version_header());
+    }
+    let header = version_header();
+    match source.split_once('\n') {
+        Some((first, rest)) => format!("{first}\n{header}\n{rest}"),
+        None => format!("{source}\n{header}\n"),
     }
 }
 
@@ -239,7 +606,10 @@ pub fn precheck(input: &Input) -> Precheck {
 
 #[cfg(test)]
 mod tests {
-    use super::{Gap, Input, Node, Outcome, precheck, run, run_twice};
+    use super::{
+        Cause, DualInput, Gap, Input, Node, Outcome, precheck, run, run_dual, run_twice,
+        version_header,
+    };
     use rust_widgets::designer::TargetProfile;
 
     fn document() -> String {
@@ -336,6 +706,140 @@ mod tests {
         });
         let gaps = run(&bad).expect_err("a blocked run");
         assert!(gaps.iter().any(|gap| gap.reason.contains("--missing")));
+    }
+
+    fn dual_input() -> DualInput {
+        let single = input();
+        DualInput::from_single(&single)
+    }
+
+    #[test]
+    fn a_dual_run_produces_two_distinct_stamped_products() {
+        let outcome = run_dual(&dual_input()).expect("both products");
+        assert_eq!(outcome.products.len(), 2, "{:?}", outcome.render());
+        assert_eq!(
+            outcome.products[0].path, "src/generated/ui_default.rs",
+            "the default product keeps the library's committed path"
+        );
+        assert_eq!(
+            outcome.products[1].path, "src/generated/ui_stripped.rs",
+            "the stripped product keeps the library's committed path"
+        );
+        assert_ne!(
+            outcome.products[0].source, outcome.products[1].source,
+            "the two templates must not collapse to one file"
+        );
+        for product in &outcome.products {
+            let first = product.source.lines().next().unwrap_or_default();
+            assert_eq!(
+                first,
+                rust_widgets::designer::GENERATED_MARKER,
+                "{}",
+                product.path
+            );
+            assert!(
+                product.source.contains(&version_header()),
+                "{} must carry the generator/format versions: {}",
+                product.path,
+                product.source
+            );
+            assert!(product.source.contains("fn build_ui"), "{}", product.path);
+        }
+    }
+
+    #[test]
+    fn a_dual_run_over_one_input_is_byte_identical_twice() {
+        let first = run_dual(&dual_input()).expect("both products");
+        let second = run_dual(&dual_input()).expect("both products");
+        assert_eq!(first, second, "generation must be deterministic");
+    }
+
+    #[test]
+    fn a_cross_profile_gap_is_named_in_the_dual_report() {
+        let outcome = run_dual(&dual_input()).expect("both products");
+        let stripped = outcome
+            .product(TargetProfile::Stripped)
+            .expect("a stripped product");
+        assert!(
+            stripped
+                .findings()
+                .iter()
+                .any(|finding| finding.cause == Cause::CrossProfile),
+            "a desktop host generating for mini is the cross-profile case: {:?}",
+            stripped.findings()
+        );
+        let lines = outcome.render();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(Cause::CrossProfile.token())),
+            "the cause has to be named in the report: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_unsupported_document_is_named_and_blocks_the_dual_run() {
+        let mut bad = dual_input();
+        bad.json = r#"{"definitely_not_a_widget":{"id":"x"}}"#.to_owned();
+        let outcome = run_dual(&bad).expect("a report, not a silent success");
+        assert!(outcome.is_blocked(), "{:?}", outcome.render());
+        assert!(
+            outcome.render().iter().any(|line| {
+                line.contains(Cause::Unsupported.token()) && line.contains("definitely")
+            }),
+            "the unsupported control has to be named: {:?}",
+            outcome.render()
+        );
+    }
+
+    #[test]
+    fn every_report_list_and_reason_token_is_classified() {
+        use rust_widgets::designer::{GenerationGap, GenerationReport};
+
+        let gap = |reason: &str| GenerationGap {
+            path: vec![0],
+            widget: "button".to_owned(),
+            reason: reason.to_owned(),
+        };
+        let report = GenerationReport {
+            unsupported: vec![
+                gap("unsupported: a control this generator cannot express"),
+                gap("unresolvable-event: no published event"),
+                gap("incompatible-wire: no channel for the payload"),
+                // A gap from before reasons were tokenised is uncategorised, not invisible.
+                gap("a reason with no token"),
+            ],
+            capacity_overflow: vec![gap("too many children")],
+            cross_profile_caveats: vec![gap("settled under another profile")],
+            ..GenerationReport::default()
+        };
+
+        let causes: Vec<Cause> = super::report_findings(&report)
+            .iter()
+            .map(|finding| finding.cause)
+            .collect();
+        assert_eq!(
+            causes,
+            vec![
+                Cause::Unsupported,
+                Cause::UnresolvableEvent,
+                Cause::IncompatibleWire,
+                Cause::Unsupported,
+                Cause::CapacityOverflow,
+                Cause::CrossProfile,
+            ]
+        );
+    }
+
+    #[test]
+    fn every_cause_uses_the_library_s_stable_token() {
+        assert_eq!(Cause::Unsupported.token(), "unsupported");
+        assert_eq!(Cause::CapacityOverflow.token(), "capacity-overflow");
+        assert_eq!(Cause::CrossProfile.token(), "cross-profile");
+        assert_eq!(Cause::UnresolvableEvent.token(), "unresolvable-event");
+        assert_eq!(Cause::IncompatibleWire.token(), "incompatible-wire");
+        assert!(!Cause::CrossProfile.blocks());
+        assert!(Cause::ALL.iter().filter(|cause| cause.blocks()).count() == 4);
     }
 
     #[test]

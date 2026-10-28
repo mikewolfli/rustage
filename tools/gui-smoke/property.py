@@ -98,24 +98,16 @@ def main() -> int:
 
         checks: list[tuple[str, bool]] = []
 
+        # The Inspector reads the library contract, not a hand-built 40-character field:
+        # the initially selected root is `window.title`.
+        checks.append((
+            "the Inspector reads the window.title contract",
+            "inspector rows: title: agreed: Demo [contract window.title]" in output.text(),
+        ))
+
         # The entry path is the visible value field; double-click activation is wired through
         # the library's item_activated signal but the pinned GTK backend does not synthesise
         # MouseDoubleClick, so the probe uses the always-visible field instead of pretending.
-        # "Demo" plus 81 characters is over the schema's 40-character limit.
-        click(*field)
-        time.sleep(1.0)
-        for _ in range(45):
-            key("x")
-        time.sleep(0.3)
-        click(*apply_button)
-        checks.append((
-            "an over-limit value is refused at revision 0",
-            output.wait_for("inspector refused title", 5.0),
-        ))
-        checks.append((
-            "the refusal names the unchanged revision",
-            "revision 0 unchanged" in output.text(),
-        ))
         click(*clear_button)
         checks.append((
             "Clear empties the field without changing the value",

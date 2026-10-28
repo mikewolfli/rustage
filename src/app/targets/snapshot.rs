@@ -31,6 +31,7 @@ use std::collections::BTreeMap;
 use rust_widgets::designer::generator::availability_with;
 use rust_widgets::designer::{Availability, TargetProfile};
 use rust_widgets::widget::WidgetFactory;
+use rust_widgets::widget::capability::designer_manifest;
 
 use super::configuration::{PROFILES, is_profile};
 
@@ -110,6 +111,10 @@ pub fn capacity(profile: &str) -> Option<usize> {
 pub struct Snapshot {
     generator: String,
     built_for: String,
+    protocol: u32,
+    library: String,
+    build_profile: String,
+    triple: String,
     rows: BTreeMap<String, BTreeMap<String, Level>>,
 }
 
@@ -119,6 +124,10 @@ impl Snapshot {
         Self {
             generator: generator.into(),
             built_for: built_for.into(),
+            protocol: 0,
+            library: String::new(),
+            build_profile: String::new(),
+            triple: String::new(),
             rows: BTreeMap::new(),
         }
     }
@@ -134,6 +143,18 @@ impl Snapshot {
     ) -> Self {
         let factory = WidgetFactory::new_with_defaults();
         let mut snapshot = Self::new(generator, built_for);
+        // The manifest is the library's own declaration of which protocol, library build and
+        // target triple these answers describe. The snapshot records it verbatim rather than
+        // letting a caller supply a second, drifting set of strings.
+        if let Some(manifest) = names
+            .iter()
+            .find_map(|name| designer_manifest(&factory, name).ok())
+        {
+            snapshot.protocol = manifest.protocol;
+            snapshot.library = manifest.library;
+            snapshot.build_profile = manifest.profile;
+            snapshot.triple = manifest.triple;
+        }
         for profile in PROFILES {
             let Some(target) = target_profile(profile) else {
                 continue;
@@ -175,6 +196,26 @@ impl Snapshot {
         &self.built_for
     }
 
+    /// The capability-manifest protocol the header came from.
+    pub fn protocol(&self) -> u32 {
+        self.protocol
+    }
+
+    /// The library build named by the manifest.
+    pub fn library(&self) -> &str {
+        &self.library
+    }
+
+    /// The build profile named by the manifest.
+    pub fn build_profile(&self) -> &str {
+        &self.build_profile
+    }
+
+    /// The target triple named by the manifest.
+    pub fn triple(&self) -> &str {
+        &self.triple
+    }
+
     /// Records one answer.
     pub fn insert(&mut self, profile: &str, name: &str, level: Level) {
         self.rows
@@ -214,6 +255,10 @@ impl Snapshot {
         text.push('\n');
         text.push_str(&format!("generator {}\n", escape(&self.generator)));
         text.push_str(&format!("built-for {}\n", self.built_for));
+        text.push_str(&format!("protocol {}\n", self.protocol));
+        text.push_str(&format!("library {}\n", escape(&self.library)));
+        text.push_str(&format!("build-profile {}\n", escape(&self.build_profile)));
+        text.push_str(&format!("triple {}\n", escape(&self.triple)));
         for (profile, row) in &self.rows {
             for (name, level) in row {
                 text.push_str(profile);
@@ -251,6 +296,24 @@ impl Snapshot {
         let mut snapshot = Self::new(unescape(generator), built_for);
         for line in lines {
             if line.is_empty() {
+                continue;
+            }
+            if let Some(protocol) = line.trim().strip_prefix("protocol ") {
+                snapshot.protocol = protocol.parse().map_err(|_| Fault::BadHeader {
+                    line: line.to_owned(),
+                })?;
+                continue;
+            }
+            if let Some(library) = line.trim().strip_prefix("library ") {
+                snapshot.library = unescape(library);
+                continue;
+            }
+            if let Some(profile) = line.trim().strip_prefix("build-profile ") {
+                snapshot.build_profile = unescape(profile);
+                continue;
+            }
+            if let Some(triple) = line.trim().strip_prefix("triple ") {
+                snapshot.triple = unescape(triple);
                 continue;
             }
             let parts: Vec<&str> = line.split('\t').collect();
@@ -665,6 +728,13 @@ mod tests {
         let snapshot = Snapshot::capture("0.1.0", "desktop", &["button", "label"]);
         assert_eq!(snapshot.generator(), "0.1.0");
         assert_eq!(snapshot.built_for(), "desktop");
+        assert!(
+            snapshot.protocol() > 0,
+            "the manifest header was not captured"
+        );
+        assert!(!snapshot.library().is_empty());
+        assert!(!snapshot.build_profile().is_empty());
+        assert!(!snapshot.triple().is_empty());
         for profile in super::PROFILES {
             for name in ["button", "label"] {
                 assert!(

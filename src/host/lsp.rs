@@ -9,9 +9,11 @@
 //! ids, and a bounded shutdown.
 //!
 //! Deliberately small. It implements the part every language server speaks and the designer needs
-//! before any completion can be real: spawn, negotiate, ask, stop. It does **not** interpret
-//! `textDocument/*` results; those stay in the typed model modules until a front end consumes them.
-//! That boundary is what keeps this file from becoming a second language-service implementation.
+//! before any completion can be real: spawn, negotiate, ask, stop, and the four document
+//! notifications (`didOpen`, `didChange`, `didSave`, `didClose`). It does **not** interpret
+//! `textDocument/*` results or track document versions; those stay in the typed model modules until
+//! a front end consumes them. That boundary is what keeps this file from becoming a second
+//! language-service implementation.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -44,6 +46,26 @@ impl Message {
     fn answers(&self, id: i64) -> bool {
         self.id == Some(id)
     }
+}
+
+/// A position in the protocol's terms: a zero-based line and a UTF-16 code-unit character.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Position {
+    /// The zero-based line.
+    pub line: u32,
+    /// The zero-based character, in UTF-16 code units.
+    pub character: u32,
+}
+
+/// One range replacement of an incremental `textDocument/didChange`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TextEdit {
+    /// Where the replaced range starts.
+    pub start: Position,
+    /// Where it ends.
+    pub end: Position,
+    /// The text replacing it.
+    pub text: String,
 }
 
 /// A running language server.
@@ -205,6 +227,51 @@ impl Client {
         self.send(Json::Object(message))
     }
 
+    /// Sends `textDocument/didOpen` with the language id, version and whole text.
+    pub fn did_open(
+        &mut self,
+        uri: &str,
+        language_id: &str,
+        version: u64,
+        text: &str,
+    ) -> Result<(), String> {
+        self.notify(
+            "textDocument/didOpen",
+            open_params(uri, language_id, version, text),
+        )
+    }
+
+    /// Sends `textDocument/didChange` with the whole (new) text.
+    pub fn did_change_full(&mut self, uri: &str, version: u64, text: &str) -> Result<(), String> {
+        self.notify(
+            "textDocument/didChange",
+            change_params(uri, version, vec![full_change(text)]),
+        )
+    }
+
+    /// Sends `textDocument/didChange` with ranges, which the caller resolved in UTF-16 units.
+    pub fn did_change_incremental(
+        &mut self,
+        uri: &str,
+        version: u64,
+        edits: &[TextEdit],
+    ) -> Result<(), String> {
+        self.notify(
+            "textDocument/didChange",
+            change_params(uri, version, edits.iter().map(incremental_change).collect()),
+        )
+    }
+
+    /// Sends `textDocument/didSave` with the saved text.
+    pub fn did_save(&mut self, uri: &str, text: &str) -> Result<(), String> {
+        self.notify("textDocument/didSave", save_params(uri, text))
+    }
+
+    /// Sends `textDocument/didClose`.
+    pub fn did_close(&mut self, uri: &str) -> Result<(), String> {
+        self.notify("textDocument/didClose", close_params(uri))
+    }
+
     /// Sends `shutdown`, then `exit`, then waits briefly and kills if the server remains.
     pub fn shutdown(&mut self) {
         let _ = self.request("shutdown", Json::Null, Duration::from_secs(2));
@@ -258,6 +325,73 @@ fn info(name: &str, version: &str) -> Json {
     object.insert("name", Json::string(name));
     object.insert("version", Json::string(version));
     Json::Object(object)
+}
+
+fn text_document(uri: &str) -> Json {
+    let mut document = JsonObject::new();
+    document.insert("uri", Json::string(uri));
+    Json::Object(document)
+}
+
+fn position_json(position: Position) -> Json {
+    let mut at = JsonObject::new();
+    at.insert("line", Json::number(u64::from(position.line)));
+    at.insert("character", Json::number(u64::from(position.character)));
+    Json::Object(at)
+}
+
+fn range_json(start: Position, end: Position) -> Json {
+    let mut range = JsonObject::new();
+    range.insert("start", position_json(start));
+    range.insert("end", position_json(end));
+    Json::Object(range)
+}
+
+fn open_params(uri: &str, language_id: &str, version: u64, text: &str) -> Json {
+    let mut document = JsonObject::new();
+    document.insert("uri", Json::string(uri));
+    document.insert("languageId", Json::string(language_id));
+    document.insert("version", Json::number(version));
+    document.insert("text", Json::string(text));
+    let mut params = JsonObject::new();
+    params.insert("textDocument", Json::Object(document));
+    Json::Object(params)
+}
+
+fn change_params(uri: &str, version: u64, changes: Vec<Json>) -> Json {
+    let mut document = JsonObject::new();
+    document.insert("uri", Json::string(uri));
+    document.insert("version", Json::number(version));
+    let mut params = JsonObject::new();
+    params.insert("textDocument", Json::Object(document));
+    params.insert("contentChanges", Json::Array(changes));
+    Json::Object(params)
+}
+
+fn full_change(text: &str) -> Json {
+    let mut change = JsonObject::new();
+    change.insert("text", Json::string(text));
+    Json::Object(change)
+}
+
+fn incremental_change(edit: &TextEdit) -> Json {
+    let mut change = JsonObject::new();
+    change.insert("range", range_json(edit.start, edit.end));
+    change.insert("text", Json::string(&edit.text));
+    Json::Object(change)
+}
+
+fn save_params(uri: &str, text: &str) -> Json {
+    let mut params = JsonObject::new();
+    params.insert("textDocument", text_document(uri));
+    params.insert("text", Json::string(text));
+    Json::Object(params)
+}
+
+fn close_params(uri: &str) -> Json {
+    let mut params = JsonObject::new();
+    params.insert("textDocument", text_document(uri));
+    Json::Object(params)
 }
 
 fn request_message(id: i64, method: &str, params: Json) -> Json {
@@ -409,7 +543,10 @@ impl Clients {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_uri, read_message, response_body};
+    use super::{
+        Position, TextEdit, change_params, close_params, file_uri, full_change, incremental_change,
+        open_params, read_message, response_body, save_params,
+    };
     use crate::project::record::json::parse;
     use std::path::Path;
 
@@ -459,5 +596,52 @@ mod tests {
         let mut reader = std::io::Cursor::new(b"X-Thing: 1\r\n\r\n".to_vec());
         let error = read_message(&mut reader).expect_err("a refusal");
         assert!(error.contains("Content-Length"), "{error}");
+    }
+
+    #[test]
+    fn did_open_carries_the_language_id_version_and_text() {
+        let params = open_params("file:///a.rs", "rust", 3, "中🎉").render_compact();
+        assert_eq!(
+            params,
+            "{\"textDocument\":{\"uri\":\"file:///a.rs\",\"languageId\":\"rust\",\"version\":3,\"text\":\"中🎉\"}}"
+        );
+    }
+
+    #[test]
+    fn an_incremental_change_carries_utf16_ranges_but_a_full_change_does_not() {
+        let edit = TextEdit {
+            start: Position {
+                line: 0,
+                character: 1,
+            },
+            end: Position {
+                line: 0,
+                character: 3,
+            },
+            text: "字".to_owned(),
+        };
+        let incremental =
+            change_params("file:///a.rs", 2, vec![incremental_change(&edit)]).render_compact();
+        assert_eq!(
+            incremental,
+            "{\"textDocument\":{\"uri\":\"file:///a.rs\",\"version\":2},\"contentChanges\":[{\"range\":{\"start\":{\"line\":0,\"character\":1},\"end\":{\"line\":0,\"character\":3}},\"text\":\"字\"}]}"
+        );
+        let full = change_params("file:///a.rs", 2, vec![full_change("a字中\n")]).render_compact();
+        assert_eq!(
+            full,
+            "{\"textDocument\":{\"uri\":\"file:///a.rs\",\"version\":2},\"contentChanges\":[{\"text\":\"a字中\\n\"}]}"
+        );
+        assert!(!full.contains("range"));
+    }
+
+    #[test]
+    fn did_save_carries_the_text_and_did_close_only_references_the_document() {
+        let saved = save_params("file:///a.rs", "one\n").render_compact();
+        assert_eq!(
+            saved,
+            "{\"textDocument\":{\"uri\":\"file:///a.rs\"},\"text\":\"one\\n\"}"
+        );
+        let closed = close_params("file:///a.rs").render_compact();
+        assert_eq!(closed, "{\"textDocument\":{\"uri\":\"file:///a.rs\"}}");
     }
 }

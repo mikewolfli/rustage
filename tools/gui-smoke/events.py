@@ -87,9 +87,11 @@ def main() -> int:
             for character in text:
                 key(character, gap=0.12)
 
-        # Events panel at 1280x800: (0,358) 260x280. Rows start at y=388; the handler
-        # field is at y=542..568, the Bind/Unbind/Fire row at y=572..598.
-        first_event = (x + 130, y + 404)
+        # Events panel at 1280x800: (0,358) 260x280. Rows are 20 px high and start at
+        # y=388, so the button's `pressed` row (index 3 in the library's declaration order)
+        # is centred near y+464. The handler field is at y=542..568, the Bind/Unbind/Fire row
+        # at y=572..598.
+        pressed_event = (x + 130, y + 464)
         field = (x + 130, y + 555)
         bind = (x + 48, y + 585)
         unbind = (x + 126, y + 585)
@@ -97,10 +99,10 @@ def main() -> int:
 
         checks: list[tuple[str, bool]] = []
 
-        click(*first_event)
+        click(*pressed_event)
         checks.append((
             "selecting a declared event row is reported",
-            output.wait_for("events row 0 -> pressed", 4.0),
+            output.wait_for("events row 3 -> pressed", 4.0),
         ))
         click(*field)
         key_text("count")

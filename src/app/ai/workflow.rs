@@ -100,12 +100,44 @@ impl Context {
     }
 
     /// The bytes that would be sent.
-    pub fn payload(&self) -> String {
+    fn payload(&self) -> String {
         self.files
             .iter()
             .map(|file| format!("--- {}\n{}", file.path, file.text))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The payload size, without requiring the caller to authorize an export.
+    pub fn payload_len(&self) -> usize {
+        self.payload().len()
+    }
+
+    /// The bytes a model call may send.
+    ///
+    /// This is the only public way to obtain the payload: a selection that was not explicitly
+    /// authorized by a person refuses with [`SendError::Unauthorized`], so a caller cannot send
+    /// material merely by holding a [`Context`].
+    pub fn sendable_payload(&self) -> Result<String, SendError> {
+        if !self.authorized {
+            return Err(SendError::Unauthorized);
+        }
+        Ok(self.payload())
+    }
+}
+
+/// Why a context cannot be sent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SendError {
+    /// No person authorized this selection.
+    Unauthorized,
+}
+
+impl core::fmt::Display for SendError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unauthorized => formatter.write_str("the context was not authorized"),
+        }
     }
 }
 
@@ -176,12 +208,43 @@ impl ChangeSet {
             if change.path.starts_with('/') || change.path.split('/').any(|part| part == "..") {
                 return Err(format!("{} escapes the project root", change.path));
             }
+            if is_generated_zone(&change.path) {
+                return Err(format!(
+                    "{} is in the generated zone; an agent may not write it",
+                    change.path
+                ));
+            }
             if !seen.insert(change.path.clone()) {
                 return Err(format!("{} appears twice in the change set", change.path));
             }
         }
         Ok(())
     }
+
+    /// Validates the set against the model revision it claims to be based on.
+    ///
+    /// A candidate produced from an older model must not be applied to a newer one, even when its
+    /// paths are valid: the `before` text guard in [`Workspace::apply`] catches a changed file, but
+    /// the revision check catches the same mistake before any change is offered for acceptance.
+    pub fn validate_against(&self, current_revision: u64) -> Result<(), String> {
+        self.validate()?;
+        if self.base_revision != current_revision {
+            return Err(format!(
+                "the change set is based on revision {}, but the document is at {}",
+                self.base_revision, current_revision
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The directories the generator owns; an agent change may not name them.
+fn is_generated_zone(path: &str) -> bool {
+    let path = path.strip_prefix("./").unwrap_or(path);
+    path == "src/generated"
+        || path.starts_with("src/generated/")
+        || path == "target"
+        || path.starts_with("target/")
 }
 
 /// Why a candidate cannot be accepted.
@@ -213,9 +276,13 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// Creates a candidate and freezes its digest.
-    pub fn new(id: u64, changes: ChangeSet) -> Result<Self, String> {
-        changes.validate()?;
+    /// Creates a candidate only when its base matches the current model revision.
+    pub fn new_at(id: u64, changes: ChangeSet, current_revision: u64) -> Result<Self, String> {
+        changes.validate_against(current_revision)?;
+        Self::seal(id, changes)
+    }
+
+    fn seal(id: u64, changes: ChangeSet) -> Result<Self, String> {
         let mut hasher = Sha256::new();
         hasher.update(changes.version.to_le_bytes());
         hasher.update(changes.base_revision.to_le_bytes());
@@ -352,7 +419,7 @@ pub struct Session {
 impl Session {
     /// Whether the context fits the budget.
     pub fn fits(&self, context: &Context) -> bool {
-        context.payload().len() <= self.budget
+        context.payload_len() <= self.budget
     }
 
     /// Whether a tool is allowed.
@@ -377,13 +444,14 @@ mod tests {
     }
 
     fn candidate() -> Candidate {
-        Candidate::new(
+        Candidate::new_at(
             1,
             ChangeSet {
                 version: 1,
                 base_revision: 4,
                 changes: vec![change("a.rs", "one", "two"), change("b.rs", "", "new")],
             },
+            4,
         )
         .expect("a candidate")
     }
@@ -422,6 +490,43 @@ mod tests {
         assert!(set.validate().is_err());
         set.changes = vec![change("a.rs", "", "x"), change("a.rs", "", "y")];
         assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn an_unauthorized_context_cannot_be_sent() {
+        let mut context = Context::select(
+            vec![ContextFile {
+                path: "a".to_owned(),
+                text: "hello".to_owned(),
+            }],
+            &[],
+        );
+        assert!(context.sendable_payload().is_err());
+        context.authorize();
+        assert!(context.sendable_payload().is_ok());
+    }
+
+    #[test]
+    fn a_change_set_refuses_the_generated_zone_and_a_stale_base() {
+        let generated = ChangeSet {
+            version: 1,
+            base_revision: 4,
+            changes: vec![change("src/generated/ui.rs", "old", "new")],
+        };
+        assert!(generated.validate().is_err());
+        let target = ChangeSet {
+            version: 1,
+            base_revision: 4,
+            changes: vec![change("target/debug/log", "old", "new")],
+        };
+        assert!(target.validate().is_err());
+        let current = ChangeSet {
+            version: 1,
+            base_revision: 4,
+            changes: vec![change("src/handwritten/app.rs", "old", "new")],
+        };
+        assert!(current.validate_against(5).is_err());
+        assert!(current.validate_against(4).is_ok());
     }
 
     #[test]

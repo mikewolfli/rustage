@@ -28,9 +28,14 @@ impl ArtifactOptions {
 /// How to run the generation pipeline (task T15.02).
 #[derive(Debug, PartialEq, Eq)]
 pub struct GenerateOptions {
-    /// The operations: `document:<file>`, `node:<kind>:<children>` (repeatable), `target:<default|stripped>`,
-    /// `size:<w>x<h>`, `fn:<name>`, `style:<node>:<reason>`, `layout:<node>:<reason>`, `check`, `run`,
-    /// `twice`, `show`.
+    /// The operations: `document:<file>`/`project:<file>`, `node:<kind>:<children>` (repeatable),
+    /// `target:<default|stripped>`, `size:<w>x<h>`, `fn:<name>`, `style:<node>:<reason>`,
+    /// `layout:<node>:<reason>`, `check`, `run`, `twice`, `show`.
+    ///
+    /// A dual run adds `dual`, `root:<dir>` and reuses `project:<file>`: the one project input
+    /// produces both `src/generated/ui_default.rs` and `ui_stripped.rs`. In that mode `check`
+    /// means "compare, write nothing" and the command exits 0 (unchanged), 1 (stale) or 2 (a gap
+    /// blocks). Without `dual` the single-target behaviour is unchanged.
     pub ops: Vec<String>,
 }
 

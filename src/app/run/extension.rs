@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::app::extension::supervisor::{Access, Limits, LocalBehavior, LocalHarness, Supervisor};
 use crate::app::extension::{
     Host, Manifest, Package, Param, ParamKind, Registry, Template, Version,
 };
@@ -29,6 +30,9 @@ pub(super) fn extension(options: &crate::cli::ExtensionOptions) -> bool {
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut registry = Registry::new();
     let mut template: Option<Template> = None;
+    let harness = LocalHarness::new();
+    let mut supervisor: Option<Supervisor> = None;
+    let mut supervised_failed = false;
     let host = Host {
         version: Version {
             major: 0,
@@ -47,6 +51,24 @@ pub(super) fn extension(options: &crate::cli::ExtensionOptions) -> bool {
 
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
+        if let Some(step) = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut supervised_failed,
+            verb,
+            argument,
+            &id,
+        ) {
+            match step {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                }
+                Err(reason) => return super::report(reason),
+            }
+            continue;
+        }
         let step: Result<Vec<String>, String> = match verb {
             "id" => {
                 id = argument.to_owned();
@@ -289,7 +311,171 @@ pub(super) fn extension(options: &crate::cli::ExtensionOptions) -> bool {
             Err(reason) => return super::report(reason),
         }
     }
+    if supervised_failed {
+        return false;
+    }
     true
+}
+
+/// Routes the `supervise` operations to the typed supervisor.
+///
+/// The returned `Option` is `None` when `verb` is not a supervision operation, so the caller can
+/// fall through to the package/template operations unchanged.
+fn supervise_op(
+    harness: &LocalHarness,
+    supervisor: &mut Option<Supervisor>,
+    failed: &mut bool,
+    verb: &str,
+    argument: &str,
+    package_id: &str,
+) -> Option<Result<Vec<String>, String>> {
+    match verb {
+        "supervise" | "supervise-denied" => {
+            let name = if verb == "supervise" {
+                supervised_id(argument, package_id)
+            } else {
+                supervised_id("", package_id)
+            };
+            let access = if verb == "supervise-denied" {
+                let reason = if argument.is_empty() {
+                    crate::contracts::permission::DenialReason::ScopeNotAuthorized
+                        .explanation()
+                        .to_owned()
+                } else {
+                    argument.to_owned()
+                };
+                Access::Denied { reason }
+            } else {
+                supervise_access()
+            };
+            match harness.supervisor(name, Limits::default(), access) {
+                Ok(value) => {
+                    let line = value.render();
+                    *supervisor = Some(value);
+                    Some(Ok(vec![line]))
+                }
+                Err(error) => Some(Err(error.render())),
+            }
+        }
+        "supervise-call" => {
+            let Some(value) = supervisor.as_mut() else {
+                return Some(Err("declare supervise[:<id>] first".to_owned()));
+            };
+            match value.call(argument.as_bytes()) {
+                Ok(answer) => Some(Ok(vec![format!(
+                    "answer ({} byte(s)): {}",
+                    answer.len(),
+                    String::from_utf8_lossy(&answer)
+                )])),
+                Err(error) => {
+                    *failed = true;
+                    Some(Ok(vec![format!("supervisor error: {}", error.render())]))
+                }
+            }
+        }
+        "supervise-status" => {
+            let Some(value) = supervisor.as_ref() else {
+                return Some(Err("declare supervise[:<id>] first".to_owned()));
+            };
+            Some(Ok(vec![
+                value.render(),
+                value.health().render(),
+                format!("handler starts: {}", harness.starts()),
+            ]))
+        }
+        "supervise-stop" => {
+            let Some(value) = supervisor.as_mut() else {
+                return Some(Err("declare supervise[:<id>] first".to_owned()));
+            };
+            value.stop();
+            Some(Ok(vec![value.render()]))
+        }
+        "supervise-echo" => {
+            harness.set_behavior(LocalBehavior::Echo);
+            Some(Ok(vec![behavior_line(harness)]))
+        }
+        "supervise-crash" => {
+            let reason = if argument.is_empty() {
+                "the extension process stopped".to_owned()
+            } else {
+                argument.to_owned()
+            };
+            harness.set_behavior(LocalBehavior::crash(reason));
+            Some(Ok(vec![behavior_line(harness)]))
+        }
+        "supervise-protocol" => {
+            let reason = if argument.is_empty() {
+                "the answer is not a frame".to_owned()
+            } else {
+                argument.to_owned()
+            };
+            harness.set_behavior(LocalBehavior::protocol(reason));
+            Some(Ok(vec![behavior_line(harness)]))
+        }
+        "supervise-empty" => {
+            harness.set_behavior(LocalBehavior::Empty);
+            Some(Ok(vec![behavior_line(harness)]))
+        }
+        "supervise-timeout" => {
+            let millis = if argument.is_empty() {
+                3_000
+            } else {
+                match argument.parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return Some(Err(format!("{argument:?} is not a number of milliseconds")));
+                    }
+                }
+            };
+            harness.set_behavior(LocalBehavior::sleep(millis));
+            Some(Ok(vec![format!(
+                "supervisor behaviour: sleep ({millis} ms)"
+            )]))
+        }
+        "supervise-oversize" => {
+            let bytes = match argument.parse::<usize>() {
+                Ok(value) => value,
+                Err(_) => {
+                    return Some(Err(format!("{argument:?} is not a number of bytes")));
+                }
+            };
+            harness.set_behavior(LocalBehavior::oversize(bytes));
+            Some(Ok(vec![format!(
+                "supervisor behaviour: oversize ({bytes} byte(s))"
+            )]))
+        }
+        _ => None,
+    }
+}
+
+fn supervised_id(argument: &str, package_id: &str) -> String {
+    if !argument.is_empty() {
+        argument.to_owned()
+    } else if package_id.is_empty() {
+        "extension".to_owned()
+    } else {
+        package_id.to_owned()
+    }
+}
+
+fn behavior_line(harness: &LocalHarness) -> String {
+    format!("supervisor behaviour: {}", harness.behavior().name())
+}
+
+/// The permission check an extension call is created under.
+///
+/// The host's own session may run the extension; a refusal is carried into the supervisor as a
+/// typed denial rather than being flattened into an empty answer.
+fn supervise_access() -> Access {
+    use crate::contracts::permission::{EffectClass, Principal};
+    use crate::host::permission::{PermissionService, Scope};
+
+    match PermissionService::new().permit(EffectClass::Command, Scope::Session, Principal::Human) {
+        Ok(_) => Access::Granted,
+        Err(refusal) => Access::Denied {
+            reason: refusal.message(),
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -321,4 +507,156 @@ fn build_package(
         package.manifest.digest = package.digest();
     }
     package
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supervise_op;
+    use crate::app::extension::supervisor::LocalHarness;
+
+    #[test]
+    fn the_supervise_path_starts_calls_reports_and_stops() {
+        let harness = LocalHarness::new();
+        let mut supervisor = None;
+        let mut failed = false;
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise",
+            "",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a supervisor");
+        assert!(lines[0].contains("stopped"), "{lines:?}");
+        assert!(!failed);
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-call",
+            "ping",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a call");
+        assert!(lines[0].contains("ping"), "{lines:?}");
+        assert!(!failed);
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-status",
+            "",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a status");
+        assert!(lines[0].contains("running"), "{lines:?}");
+        assert!(lines[1].contains("extension: on"), "{lines:?}");
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-stop",
+            "",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a stop");
+        assert!(lines[0].contains("stopped"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_denied_supervisor_reports_the_refusal_instead_of_success() {
+        let harness = LocalHarness::new();
+        let mut supervisor = None;
+        let mut failed = false;
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-denied",
+            "the extension is not permitted",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a supervisor");
+        assert!(lines[0].contains("denied"), "{lines:?}");
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-call",
+            "ping",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a reported refusal");
+        assert!(lines[0].contains("denied"), "{lines:?}");
+        assert!(failed, "the denial must not be reported as success");
+    }
+
+    #[test]
+    fn a_supervised_crash_is_visible_and_the_host_stays_available() {
+        let harness = LocalHarness::new();
+        let mut supervisor = None;
+        let mut failed = false;
+
+        supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise",
+            "",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a supervisor");
+        supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-crash",
+            "the extension process exited",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a behaviour");
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-call",
+            "one",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a reported crash");
+        assert!(lines[0].contains("stopped"), "{lines:?}");
+        assert!(failed);
+
+        let lines = supervise_op(
+            &harness,
+            &mut supervisor,
+            &mut failed,
+            "supervise-status",
+            "",
+            "demo",
+        )
+        .expect("a supervise operation")
+        .expect("a status");
+        assert!(lines[0].contains("failed"), "{lines:?}");
+        assert!(lines[1].contains("design: on"), "{lines:?}");
+        assert!(lines[1].contains("preview: on"), "{lines:?}");
+        assert!(lines[1].contains("extension: off"), "{lines:?}");
+    }
 }

@@ -141,8 +141,8 @@ def main() -> int:
             output.wait_for("selected node 3 (label) from canvas", 4.0),
         ))
         checks.append((
-            "the Inspector retargets at the selected node's title",
-            output.wait_for("inspector rows: title: agreed: label", 4.0),
+            "the Inspector retargets at the selected node's text contract",
+            output.wait_for("inspector rows: text: agreed: label", 4.0),
         ))
 
         # Outside the label but inside the button.

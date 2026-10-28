@@ -332,7 +332,7 @@
     {
       "id": "P-DEP",
       "name": "依赖修订",
-      "current": "cee6b22367244527aa407bb9ae67305751f61c26",
+      "current": "177716410bc714cb0b1131d0c8f7065076f10583",
       "owner": "T00.01",
       "meaning": "固定 git 修订；升级流程见决策登记 U1"
     }

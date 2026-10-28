@@ -19,7 +19,25 @@
 
 #![allow(dead_code)]
 
+use rust_widgets::core::ObjectId;
+use rust_widgets::view::TreeIndex;
+
 use crate::contracts::identity::NodeId;
+
+/// The scroll half of this model has no library-wide accessor in the pinned revision.
+///
+/// The library exposes focus globally (`widget::runtime::focused_widget` / `focus_widget`), and that
+/// is what [`capture_focus`] and [`restore_focus`] use. Scroll is not exposed the same way: it is a
+/// property of individual controls (`list_view::scroll_row`, `properties_panel::scroll_offset`,
+/// `query_builder::scroll_offset`, ...), and neither `ViewEngine` nor `widget::runtime` publishes a
+/// generic read or write for it. A `ViewEngine::update` preserves scroll only for a control it did
+/// not recreate — that is patch preservation, not a `state_keep` restore. This constant is the exact
+/// gap, reported by the preview instead of pretending the scroll field was restored.
+pub const SCROLL_GAP: &str = "rust_widgets has no generic scroll accessor: focus is exposed by \
+     widget::runtime::{focused_widget, focus_widget}, but scroll is widget-specific \
+     (list_view::scroll_row, properties_panel::scroll_offset, query_builder::scroll_offset) and \
+     ViewEngine neither reads nor writes it. An unchanged control keeps its scroll because the \
+     diff emits no patch for it; that is patch preservation, not a state_keep restore.";
 
 /// The live state kept for one node.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -142,6 +160,94 @@ impl Restore {
             ),
         }
     }
+}
+
+/// One planned focus restore: what happened and, when it may be restored, the live control.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FocusRestore {
+    /// What became of the captured node.
+    pub outcome: Restore,
+    /// The live control to focus, only for a [`Restore::Restored`] outcome.
+    pub target: Option<ObjectId>,
+}
+
+impl FocusRestore {
+    /// Whether the focus restore happened.
+    pub fn is_restored(&self) -> bool {
+        self.outcome.is_restored()
+    }
+
+    /// The restore in one line, naming focus only.
+    ///
+    /// The scroll field is never restored (see [`SCROLL_GAP`]), so this renderer does not repeat the
+    /// capture's default scroll value as though it had been applied.
+    pub fn render(&self) -> String {
+        match &self.outcome {
+            Restore::Restored(kept) if kept.focus => {
+                format!("node {}: focus restored", kept.node.get())
+            }
+            other => other.render(),
+        }
+    }
+}
+
+/// Captures the focused control from a mounted view, keyed by the document's `NodeId`.
+///
+/// The node convention is the same one [`crate::app::preview::preview_service::Document`] uses: a
+/// node's key is the decimal spelling of its `NodeId`. A focused control that the caller cannot map
+/// to a node (the root, an anonymous control, or a key that is not a number) contributes nothing,
+/// rather than inventing an entry.
+pub fn capture_focus(index: &TreeIndex, focused: Option<ObjectId>) -> Capture {
+    let Some(id) = focused else {
+        return Capture::new();
+    };
+    let node = index
+        .key_of(id)
+        .and_then(|key| key.parse::<u64>().ok())
+        .map(NodeId::from_raw);
+    let (Some(node), Some(kind)) = (node, index.widget_of(id)) else {
+        return Capture::new();
+    };
+    Capture::new().with(Kept {
+        node,
+        kind: kind.to_owned(),
+        focus: true,
+        input: String::new(),
+        scroll: 0,
+        selection: None,
+    })
+}
+
+/// Plans which focus restores are compatible with the tree currently mounted.
+///
+/// The decision is the ordinary [`restore`] one — node and kind must both match — and the answer is
+/// annotated with the live control to focus so a caller can carry it out without repeating the key
+/// lookup. Scroll is deliberately not part of the plan; see [`SCROLL_GAP`].
+pub fn restore_focus(capture: &Capture, index: &TreeIndex) -> Vec<FocusRestore> {
+    let present: Vec<Present> = index
+        .keys()
+        .into_iter()
+        .filter_map(|(_, key, id)| {
+            let node = key.parse::<u64>().ok().map(NodeId::from_raw)?;
+            Some(Present::new(node, index.widget_of(id).unwrap_or_default()))
+        })
+        .collect();
+    let keys = index.keys();
+    restore(capture, &present)
+        .into_iter()
+        .map(|outcome| {
+            let target = match &outcome {
+                Restore::Restored(kept) => {
+                    let key = kept.node.get().to_string();
+                    keys.iter()
+                        .find(|(_, candidate, _)| *candidate == key)
+                        .map(|(_, _, id)| *id)
+                }
+                Restore::Gone { .. } | Restore::Incompatible { .. } => None,
+            };
+            FocusRestore { outcome, target }
+        })
+        .collect()
 }
 
 /// Decides, per captured node, whether its state may be restored.

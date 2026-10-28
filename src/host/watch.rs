@@ -146,6 +146,13 @@ impl DirectoryWatch {
         for event in self.watcher.poll_events() {
             match event {
                 AssetEvent::FileChanged { path, kind, .. } => {
+                    // The observed directory is the container, not a document. macOS FSEvents
+                    // reports the root itself as `Created` once the watch starts, which would look
+                    // like a second changed path for a single save. The adapter's contract is one
+                    // event per *file* path; the root has no content a consumer can reload.
+                    if path == self.root {
+                        continue;
+                    }
                     changes.insert(path, kind);
                 }
                 AssetEvent::WatchError { error, path } => {

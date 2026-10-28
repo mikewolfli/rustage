@@ -11,20 +11,24 @@
 //!    produces what *would* happen: the files that move, the references that would be rewritten, and
 //!    the reasons it cannot be done. It writes nothing — a caller can show it, print it or throw it
 //!    away. [`FilePlan::execute`] is the only thing that touches anything.
-//! 2. **Blocker before edit.** A design reference this build cannot rewrite *blocks* the operation
-//!    instead of being dropped: an asset property in a page document names the resource, the page
-//!    document is what the design holds, and this task does not rewrite it (that edit belongs with
-//!    the page editor). The blocker names the page and the property, so the person knows what to
-//!    change rather than being told "it failed".
-//! 3. **A failure rolls the moves back.** Files move first and the document is written second; if the
-//!    write fails (somebody edited the project meanwhile, the disk refuses), every move that was made
-//!    is undone and the failure says so. What could not be undone is reported file by file, so a
-//!    half-done state is never described as a clean one.
+//! 2. **Blocker before a destructive edit.** A move or rename rewrites the page documents that name
+//!    the file, in the same operation, and refuses to run before touching anything if any declared
+//!    page document cannot be read, parsed or rewritten. A delete has no new path to write, so a page
+//!    document that still names the file blocks it rather than having its reference silently
+//!    dropped; the blocker names the page and the property, so the person knows what to change
+//!    rather than being told "it failed". Excluding a file leaves it where it is, so the references
+//!    that name it are still valid and are reported without blocking.
+//! 3. **A failure rolls everything back.** Files move first, the page documents are written next, and
+//!    the project document last; if any write fails (somebody edited the project or a page meanwhile,
+//!    the disk refuses), the page documents that were already written are put back, every move that
+//!    was made is undone, and the failure says so. What could not be undone is reported file by file,
+//!    so a half-done state is never described as a clean one.
 //!
-//! What a plan can rewrite today is the project document's own references: a page's document and
-//! stylesheet, a resource, a generated file and the entry it comes from, and the startup entry.
-//! Undoing a *successful* operation is a separate feature (it needs a change log), and so is
-//! importing a file from outside the project: this task moves files that are already inside the root.
+//! A plan rewrites the project document's own references — a page's document and stylesheet, a
+//! resource, a generated file and the entry it comes from, and the startup entry — and the asset
+//! references inside the page documents the project declares. Undoing a *successful* operation is a
+//! separate feature (it needs a change log), and so is importing a file from outside the project:
+//! this task moves files that are already inside the root.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -155,6 +159,40 @@ impl DesignReference {
     }
 }
 
+/// A page document as it was read, with the text that was read.
+#[derive(Clone, PartialEq, Debug)]
+struct PageOnDisk {
+    written: String,
+    original: String,
+    document: PageDocument,
+}
+
+/// A page document this plan would rewrite, and what it would write.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct PageRewrite {
+    /// The page document's path as the project declares it.
+    written: String,
+    /// Where the rewritten document is written after the moves have happened.
+    target: String,
+    /// The asset path the references are changed to.
+    new_path: String,
+    /// The text the plan read, so an edit made after planning is not overwritten silently.
+    original: String,
+    /// The text the plan would write.
+    rewritten: String,
+    /// How many asset references the rewrite changes.
+    references: usize,
+}
+
+impl PageRewrite {
+    fn render(&self) -> String {
+        format!(
+            "{} asset reference(s) in {} now name `{}`",
+            self.references, self.written, self.new_path
+        )
+    }
+}
+
 /// What a plan would do, and what stops it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FilePlan {
@@ -165,6 +203,7 @@ pub struct FilePlan {
     declared: Vec<String>,
     undeclared: Vec<String>,
     design: Vec<DesignReference>,
+    page_rewrites: Vec<PageRewrite>,
     blockers: Vec<String>,
 }
 
@@ -182,6 +221,7 @@ impl FilePlan {
             declared: Vec::new(),
             undeclared: Vec::new(),
             design: Vec::new(),
+            page_rewrites: Vec::new(),
             blockers: Vec::new(),
         };
         let destination = match &operation {
@@ -234,7 +274,10 @@ impl FilePlan {
                          exclude"
                     ));
                 }
-                plan.design = plan.find_design_references(document, root, path);
+                // Excluding leaves the file where it is, so a reference that names it is still
+                // valid. It is reported for diagnostics, not treated as a blocker.
+                let (pages, _) = plan.read_page_documents(document, root);
+                plan.design = plan.find_design_references(&pages, path);
             }
             FileOperation::Move { from, to } => {
                 let source = root.resolve(from).ok();
@@ -267,8 +310,14 @@ impl FilePlan {
                 // instead, so the project has not lost a resource. Reporting "stops being a resource"
                 // here would say the resource list shrank when it did not.
                 let declared_before = plan.declared_resource(document, from);
-                plan.design = plan.find_design_references(document, root, from);
-                if plan.rewrites.is_empty() && declared_before.is_empty() {
+                let (pages, failures) = plan.read_page_documents(document, root);
+                plan.design = plan.find_design_references(&pages, from);
+                plan.blockers.extend(failures);
+                plan.plan_page_rewrites(&pages, from, to);
+                if plan.rewrites.is_empty()
+                    && plan.page_rewrites.is_empty()
+                    && declared_before.is_empty()
+                {
                     plan.blockers.push(format!(
                         "nothing in the project names `{from}`, so moving it would leave the file \
                          where the design does not look for it"
@@ -289,7 +338,9 @@ impl FilePlan {
                     to: trash_path(path),
                 });
                 plan.undeclared = plan.declared_resource(document, path);
-                plan.design = plan.find_design_references(document, root, path);
+                let (pages, failures) = plan.read_page_documents(document, root);
+                plan.design = plan.find_design_references(&pages, path);
+                plan.blockers.extend(failures);
                 // A move can rewrite what names a file; a delete has no new path to write, so every
                 // member that would end up naming a file that is gone is a blocker instead.
                 plan.blockers
@@ -315,10 +366,12 @@ impl FilePlan {
             }
         }
 
-        if !plan.design.is_empty() {
+        // A delete has no new path to put in the reference: refusing is the only way not to drop
+        // it. A move rewrites the same references instead, and an exclude leaves them valid.
+        if matches!(operation, FileOperation::Delete { .. }) && !plan.design.is_empty() {
             plan.blockers.push(format!(
-                "{} design reference(s) name this file, and a page document is not rewritten by this \
-                 build yet",
+                "{} design reference(s) still name this file; deleting it would leave them pointing \
+                 at nothing. Move the file instead, or change the reference first",
                 plan.design.len()
             ));
         }
@@ -355,9 +408,14 @@ impl FilePlan {
         &self.undeclared
     }
 
-    /// The design references that stop it.
+    /// The design references the plan found, for diagnostics.
     pub fn design_references(&self) -> &[DesignReference] {
         &self.design
+    }
+
+    /// The page documents whose asset references would be rewritten, one line each.
+    pub fn page_rewrites(&self) -> Vec<String> {
+        self.page_rewrites.iter().map(PageRewrite::render).collect()
     }
 
     /// Why it cannot be done.
@@ -409,6 +467,9 @@ impl FilePlan {
         for reference in &self.design {
             lines.push(format!("  a design reference: {}", reference.render()));
         }
+        for rewrite in &self.page_rewrites {
+            lines.push(format!("  {}", rewrite.render()));
+        }
         for blocker in &self.blockers {
             lines.push(format!("  blocked: {blocker}"));
         }
@@ -439,6 +500,16 @@ impl FilePlan {
             });
         };
         let root = file.root();
+
+        // A page document edited after the plan was made is not silently overwritten: the plan
+        // belongs to the text it read, and a different page is replanned rather than guessed at.
+        for rewrite in &self.page_rewrites {
+            verify_page(root, rewrite).map_err(|reason| FileFailure {
+                reason,
+                undone: Vec::new(),
+                left_behind: Vec::new(),
+            })?;
+        }
 
         let mut moved: Vec<Move> = Vec::new();
         for movement in &self.moves {
@@ -483,6 +554,28 @@ impl FilePlan {
                 });
             }
         };
+
+        // The page documents are written before the project document. If one cannot be written, the
+        // pages already written are put back and the moves are undone, so no page is left naming a
+        // path the project does not have.
+        let mut written_pages: Vec<&PageRewrite> = Vec::new();
+        for rewrite in &self.page_rewrites {
+            if let Err(error) = write_page(root, rewrite) {
+                let mut left_behind = restore_pages(root, &written_pages);
+                if let Err(reason) = restore_page(root, rewrite) {
+                    left_behind.push(reason);
+                }
+                let undone = undo(root, &moved);
+                left_behind.extend(moves_not_undone(&moved, &undone));
+                return Err(FileFailure {
+                    reason: format!("`{}` could not be rewritten: {error}", rewrite.written),
+                    undone,
+                    left_behind,
+                });
+            }
+            written_pages.push(rewrite);
+        }
+
         match file.write_document(&edited) {
             Ok(written) => {
                 // The project no longer names what was deleted, so the held copy can go. A failure
@@ -504,10 +597,12 @@ impl FilePlan {
                         left_behind,
                     });
                 }
+                let mut rewrites = self.rewrites.clone();
+                rewrites.extend(self.page_rewrites.iter().map(PageRewrite::render));
                 Ok(Executed {
                     operation: self.operation.clone(),
                     moves: moved,
-                    rewrites: self.rewrites.clone(),
+                    rewrites,
                     declared: self.declared.clone(),
                     undeclared: self.undeclared.clone(),
                     written: written.target().to_path_buf(),
@@ -515,20 +610,11 @@ impl FilePlan {
                 })
             }
             Err(error) => {
-                // The files moved but the project was not written: put them back, and say exactly
-                // what is where when even that fails.
+                // The pages and files were written but the project was not: put the pages and the
+                // moves back, and say exactly what is where when even that fails.
+                let mut left_behind = restore_pages(root, &written_pages);
                 let undone = undo(root, &moved);
-                let mut left_behind = Vec::new();
-                if undone.len() != moved.len() {
-                    for movement in &moved {
-                        if !undone.contains(movement) {
-                            left_behind.push(format!(
-                                "{} is at {} and could not be moved back",
-                                movement.from, movement.to
-                            ));
-                        }
-                    }
-                }
+                left_behind.extend(moves_not_undone(&moved, &undone));
                 Err(FileFailure {
                     reason: error.message(),
                     undone,
@@ -589,37 +675,132 @@ impl FilePlan {
             .collect()
     }
 
-    /// The design references in the page documents that name a path.
+    /// Reads every declared page document once, so its references can be reported and rewritten.
     ///
-    /// A page document is where a design holds what it points at; this build reads it and says so,
-    /// and does not rewrite it (the page editor owns that edit).
-    fn find_design_references(
+    /// A page document that is not there holds no reference, so it is skipped: a missing page is
+    /// validation's report, not a reason a file operation cannot be planned. A page document that
+    /// is there but cannot be read or parsed is different: this build cannot know whether it names
+    /// the file, so the caller is given a reason it cannot be planned.
+    fn read_page_documents(
         &self,
         document: &ProjectDocument,
         root: &ProjectRoot,
-        path: &str,
-    ) -> Vec<DesignReference> {
-        let mut found = Vec::new();
+    ) -> (Vec<PageOnDisk>, Vec<String>) {
+        let mut pages = Vec::new();
+        let mut failures = Vec::new();
         for page in document.pages() {
-            if page.document().written() == path {
+            let written = page.document().written();
+            // A declared page document may name a directory nobody has made yet; resolution must
+            // not turn "not there" into "cannot be planned" before `exists` has its say.
+            let path = match root.resolve_for_creation(written) {
+                Ok(path) => path,
+                Err(error) => {
+                    failures.push(format!(
+                        "`{written}` cannot be read as a page document, so its asset references \
+                         cannot be checked: {}",
+                        error.message()
+                    ));
+                    continue;
+                }
+            };
+            if !path.exists() {
+                continue;
+            }
+            let original = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(error) => {
+                    failures.push(format!(
+                        "`{written}` cannot be read as a page document, so its asset references \
+                         cannot be checked: {error}"
+                    ));
+                    continue;
+                }
+            };
+            match PageDocument::parse(root, path, &original) {
+                Ok(document) => pages.push(PageOnDisk {
+                    written: written.to_owned(),
+                    original,
+                    document,
+                }),
+                Err(error) => failures.push(format!(
+                    "`{written}` cannot be read as a page document, so its asset references cannot \
+                     be checked: {}",
+                    error.message()
+                )),
+            }
+        }
+        (pages, failures)
+    }
+
+    /// The design references in the page documents that name a path.
+    ///
+    /// A page document is where a design holds what it points at; this is the diagnostic half of
+    /// the rewrite below, and it is kept so a caller can name every site that a move changes or a
+    /// delete would leave dangling.
+    fn find_design_references(&self, pages: &[PageOnDisk], path: &str) -> Vec<DesignReference> {
+        let mut found = Vec::new();
+        for page in pages {
+            if page.written == path {
                 // The page's own document naming itself is the entry, not an asset reference.
                 continue;
             }
-            let Ok(page_document) = PageDocument::read(root, page.document().written()) else {
-                continue;
-            };
-            for reference in page_document.references() {
+            for reference in page.document.references() {
                 if reference.written() != path {
                     continue;
                 }
                 found.push(DesignReference {
-                    page: page.document().written().to_owned(),
+                    page: page.written.clone(),
                     property: "an asset property".to_owned(),
                     written: reference.written().to_owned(),
                 });
             }
         }
         found
+    }
+
+    /// Works out what each page document would look like with its asset references rewired.
+    ///
+    /// The rewritten text is kept rather than written: [`Self::execute`] writes it only after the
+    /// files have moved, and only if the page still holds the text that was planned against.
+    fn plan_page_rewrites(&mut self, pages: &[PageOnDisk], from: &str, to: &str) {
+        for page in pages {
+            let mut document = page.document.clone();
+            let references = match document.rewire_asset(from, to) {
+                Ok(count) => count,
+                Err(reason) => {
+                    self.blockers
+                        .push(format!("`{}` cannot be rewritten: {reason}", page.written));
+                    continue;
+                }
+            };
+            if references == 0 {
+                continue;
+            }
+            let rewritten = match document.render() {
+                Ok(text) => text,
+                Err(error) => {
+                    self.blockers.push(format!(
+                        "`{}` cannot be rewritten: {}",
+                        page.written,
+                        error.message()
+                    ));
+                    continue;
+                }
+            };
+            self.page_rewrites.push(PageRewrite {
+                written: page.written.clone(),
+                // A page document that is itself moving is written at its new path.
+                target: if page.written == from {
+                    to.to_owned()
+                } else {
+                    page.written.clone()
+                },
+                new_path: to.to_owned(),
+                original: page.original.clone(),
+                rewritten,
+                references,
+            });
+        }
     }
 
     /// The document this operation produces.
@@ -774,6 +955,91 @@ impl fmt::Display for FileFailure {
     }
 }
 
+/// A page document is still the text the plan read, or the reason it is not.
+fn verify_page(root: &ProjectRoot, rewrite: &PageRewrite) -> Result<(), String> {
+    let source = root.resolve(&rewrite.written).map_err(|error| {
+        format!(
+            "`{}` cannot be read after this plan was made: {}",
+            rewrite.written,
+            error.message()
+        )
+    })?;
+    let current = std::fs::read_to_string(&source).map_err(|error| {
+        format!(
+            "`{}` cannot be read after this plan was made: {error}",
+            rewrite.written
+        )
+    })?;
+    if current != rewrite.original {
+        return Err(format!(
+            "`{}` changed on disk after this plan was made; nothing was changed",
+            rewrite.written
+        ));
+    }
+    Ok(())
+}
+
+/// Writes a rewritten page document.
+fn write_page(root: &ProjectRoot, rewrite: &PageRewrite) -> Result<(), String> {
+    let target = root
+        .resolve_for_creation(&rewrite.target)
+        .map_err(|error| {
+            format!(
+                "`{}` cannot be written: {}",
+                rewrite.target,
+                error.message()
+            )
+        })?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?;
+    }
+    std::fs::write(&target, &rewrite.rewritten)
+        .map_err(|error| format!("{}: {error}", target.display()))
+}
+
+/// Puts a page document back to the text the plan read.
+fn restore_page(root: &ProjectRoot, rewrite: &PageRewrite) -> Result<(), String> {
+    let target = root
+        .resolve_for_creation(&rewrite.target)
+        .map_err(|error| {
+            format!(
+                "`{}` could not be put back: {}",
+                rewrite.target,
+                error.message()
+            )
+        })?;
+    std::fs::write(&target, &rewrite.original)
+        .map_err(|error| format!("`{}` could not be put back: {error}", rewrite.target))
+}
+
+/// Puts every page document that was written back, newest first, and reports the ones that failed.
+fn restore_pages(root: &ProjectRoot, pages: &[&PageRewrite]) -> Vec<String> {
+    let mut left_behind = Vec::new();
+    for rewrite in pages.iter().rev() {
+        if let Err(reason) = restore_page(root, rewrite) {
+            left_behind.push(reason);
+        }
+    }
+    left_behind
+}
+
+/// The moves that did not make it back, described for a report.
+fn moves_not_undone(moved: &[Move], undone: &[Move]) -> Vec<String> {
+    let mut left_behind = Vec::new();
+    if undone.len() != moved.len() {
+        for movement in moved {
+            if !undone.contains(movement) {
+                left_behind.push(format!(
+                    "{} is at {} and could not be moved back",
+                    movement.from, movement.to
+                ));
+            }
+        }
+    }
+    left_behind
+}
+
 /// Moves back the files that were moved, and returns the ones that made it back.
 ///
 /// Undoing is done in reverse order, so a chain of moves ends where it started. A move that cannot be
@@ -844,6 +1110,7 @@ mod tests {
     use super::{FileOperation, FilePlan};
     use crate::host::paths::ProjectRoot;
     use crate::project::record::format::ProjectFile;
+    use crate::project::record::page::PageDocument;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -879,6 +1146,10 @@ mod tests {
 
     /// A page document that points at a resource through an asset property.
     const PAGE_WITH_ASSET: &str = "{\n  \"format\": 1,\n  \"page\": {\n    \"id\": 1,\n    \"name\": \"Main\",\n    \"root\": 1\n  },\n  \"nodes\": [\n    {\n      \"id\": 1,\n      \"type\": \"page\",\n      \"children\": [],\n      \"properties\": [\n        {\n          \"name\": \"icon\",\n          \"value\": {\n            \"asset\": \"resources/icon.svg\"\n          }\n        }\n      ]\n    }\n  ]\n}\n";
+
+    /// A page document with no asset references.
+    const EMPTY_PAGE: &str = "{\"format\": 1, \"page\": {\"id\": 1, \"name\": \"Main\", \"root\": 1}, \
+         \"nodes\": [{\"id\": 1, \"type\": \"page\", \"children\": [], \"properties\": []}]}";
 
     impl Sandbox {
         fn root(&self) -> ProjectRoot {
@@ -949,57 +1220,75 @@ mod tests {
     }
 
     #[test]
-    fn a_design_reference_blocks_the_operation_instead_of_being_dropped() {
+    fn a_design_reference_blocks_a_delete_instead_of_being_dropped() {
         let sandbox = sandbox();
         sandbox.write("resources/icon.svg", "<svg/>");
         let file = sandbox.project(Some(PAGE_WITH_ASSET));
         let root = sandbox.root();
         let document = file.document().expect("a document");
 
-        for operation in [
+        let plan = FilePlan::plan(
+            document,
+            &root,
             FileOperation::Delete {
                 path: "resources/icon.svg".to_owned(),
             },
+        );
+        assert!(!plan.is_executable(), "the delete should be blocked");
+        assert_eq!(plan.design_references().len(), 1);
+        let reference = &plan.design_references()[0];
+        assert_eq!(reference.page(), "pages/main.json");
+        assert_eq!(reference.written(), "resources/icon.svg");
+        assert!(reference.render().contains("pages/main.json"));
+        assert!(
+            plan.blockers()
+                .iter()
+                .any(|blocker| blocker.contains("design reference")),
+            "{:?}",
+            plan.blockers()
+        );
+        assert!(
+            plan.render()
+                .iter()
+                .any(|line| line.contains("a design reference:"))
+        );
+
+        // Executing it changes nothing at all.
+        let failure = plan
+            .execute(&file)
+            .expect_err("a blocked plan does not run");
+        assert!(failure.is_recovered());
+        assert!(failure.message().contains("nothing was changed"));
+        assert!(sandbox.root.join("resources/icon.svg").is_file());
+        assert_eq!(
+            std::fs::read_to_string(sandbox.root.join("project.json")).unwrap(),
+            PROJECT
+        );
+
+        // Excluding leaves the file where it is, so the reference is still valid: it is reported
+        // but does not block.
+        let exclude = FilePlan::plan(
+            document,
+            &root,
             FileOperation::Exclude {
                 path: "resources/icon.svg".to_owned(),
             },
+        );
+        assert!(exclude.is_executable(), "{:?}", exclude.blockers());
+        assert_eq!(exclude.design_references().len(), 1);
+
+        // A move rewrites the same reference instead of blocking.
+        let move_plan = FilePlan::plan(
+            document,
+            &root,
             FileOperation::Move {
                 from: "resources/icon.svg".to_owned(),
                 to: "resources/other.svg".to_owned(),
             },
-        ] {
-            let plan = FilePlan::plan(document, &root, operation.clone());
-            assert!(!plan.is_executable(), "{operation} should be blocked");
-            assert_eq!(plan.design_references().len(), 1);
-            let reference = &plan.design_references()[0];
-            assert_eq!(reference.page(), "pages/main.json");
-            assert_eq!(reference.written(), "resources/icon.svg");
-            assert!(reference.render().contains("pages/main.json"));
-            assert!(
-                plan.blockers()
-                    .iter()
-                    .any(|blocker| blocker.contains("design reference")),
-                "{:?}",
-                plan.blockers()
-            );
-            assert!(
-                plan.render()
-                    .iter()
-                    .any(|line| line.contains("a design reference:"))
-            );
-
-            // Executing it changes nothing at all.
-            let failure = plan
-                .execute(&file)
-                .expect_err("a blocked plan does not run");
-            assert!(failure.is_recovered());
-            assert!(failure.message().contains("nothing was changed"));
-            assert!(sandbox.root.join("resources/icon.svg").is_file());
-            assert_eq!(
-                std::fs::read_to_string(sandbox.root.join("project.json")).unwrap(),
-                PROJECT
-            );
-        }
+        );
+        assert!(move_plan.is_executable(), "{:?}", move_plan.blockers());
+        assert_eq!(move_plan.design_references().len(), 1);
+        assert_eq!(move_plan.page_rewrites().len(), 1);
     }
 
     #[test]
@@ -1046,9 +1335,170 @@ mod tests {
     }
 
     #[test]
+    fn moving_a_resource_rewrites_the_page_reference_and_reports_the_count() {
+        let sandbox = sandbox();
+        sandbox.write("resources/icon.svg", "<svg/>");
+        let file = sandbox.project(Some(PAGE_WITH_ASSET));
+        let root = sandbox.root();
+        let document = file.document().expect("a document");
+
+        let plan = FilePlan::plan(
+            document,
+            &root,
+            FileOperation::Move {
+                from: "resources/icon.svg".to_owned(),
+                to: "resources/icons/app.svg".to_owned(),
+            },
+        );
+        assert!(plan.is_executable(), "{:?}", plan.blockers());
+        // The reference is still reported for diagnostics, and the plan names the page rewrite.
+        assert_eq!(plan.design_references().len(), 1);
+        assert_eq!(plan.page_rewrites().len(), 1);
+        assert!(
+            plan.page_rewrites()[0].contains("1 asset reference(s) in pages/main.json"),
+            "{:?}",
+            plan.page_rewrites()
+        );
+        assert!(
+            plan.render()
+                .iter()
+                .any(|line| line.contains("1 asset reference(s)"))
+        );
+
+        let executed = plan.execute(&file).expect("the move happens");
+        assert!(
+            executed
+                .rewrites()
+                .iter()
+                .any(|line| line.contains("1 asset reference(s)")),
+            "{:?}",
+            executed.rewrites()
+        );
+        assert!(sandbox.root.join("resources/icons/app.svg").is_file());
+
+        // The page document on disk names the new path, and reads back through the reader.
+        let page = PageDocument::read(&root, "pages/main.json").expect("the page reads back");
+        assert_eq!(page.references().len(), 1);
+        assert_eq!(page.references()[0].written(), "resources/icons/app.svg");
+        let text = std::fs::read_to_string(sandbox.root.join("pages/main.json")).unwrap();
+        assert!(text.contains("resources/icons/app.svg"));
+        assert!(!text.contains("resources/icon.svg"));
+    }
+
+    #[test]
+    fn a_page_document_that_cannot_be_parsed_stops_the_move_atomically() {
+        let sandbox = sandbox();
+        sandbox.write("resources/icon.svg", "<svg/>");
+        sandbox.write("pages/main.json", "{\"format\": 1}");
+        let file = sandbox.project(None);
+        let root = sandbox.root();
+        let document = file.document().expect("a document");
+
+        let plan = FilePlan::plan(
+            document,
+            &root,
+            FileOperation::Move {
+                from: "resources/icon.svg".to_owned(),
+                to: "resources/icons/app.svg".to_owned(),
+            },
+        );
+        assert!(!plan.is_executable());
+        assert!(
+            plan.blockers()
+                .iter()
+                .any(|blocker| blocker.contains("cannot be read as a page document")),
+            "{:?}",
+            plan.blockers()
+        );
+
+        // A blocked plan changes nothing: the resource is where it was and the broken page is not
+        // rewritten into something it never was.
+        let failure = plan
+            .execute(&file)
+            .expect_err("the page cannot be rewritten");
+        assert!(failure.is_recovered());
+        assert!(failure.message().contains("nothing was changed"));
+        assert!(sandbox.root.join("resources/icon.svg").is_file());
+        assert!(!sandbox.root.join("resources/icons/app.svg").exists());
+        assert_eq!(
+            std::fs::read_to_string(sandbox.root.join("pages/main.json")).unwrap(),
+            "{\"format\": 1}"
+        );
+    }
+
+    #[test]
+    fn a_page_edited_after_the_plan_makes_the_move_change_nothing() {
+        let sandbox = sandbox();
+        sandbox.write("resources/icon.svg", "<svg/>");
+        let file = sandbox.project(Some(PAGE_WITH_ASSET));
+        let root = sandbox.root();
+        let document = file.document().expect("a document");
+
+        let plan = FilePlan::plan(
+            document,
+            &root,
+            FileOperation::Move {
+                from: "resources/icon.svg".to_owned(),
+                to: "resources/icons/app.svg".to_owned(),
+            },
+        );
+        assert!(plan.is_executable(), "{:?}", plan.blockers());
+
+        // Somebody edits the page between planning and executing: the plan was made against the old
+        // text, so it refuses before moving anything rather than overwriting the edit.
+        sandbox.write("pages/main.json", "not a page any more");
+        let failure = plan.execute(&file).expect_err("the page changed");
+        assert!(failure.is_recovered());
+        assert!(failure.reason().contains("changed on disk"));
+        assert!(failure.message().contains("nothing was changed"));
+        assert!(sandbox.root.join("resources/icon.svg").is_file());
+        assert!(!sandbox.root.join("resources/icons/app.svg").exists());
+        assert_eq!(
+            std::fs::read_to_string(sandbox.root.join("pages/main.json")).unwrap(),
+            "not a page any more"
+        );
+    }
+
+    #[test]
+    fn a_failed_project_write_puts_the_page_reference_and_the_file_back() {
+        let sandbox = sandbox();
+        sandbox.write("resources/icon.svg", "<svg/>");
+        let file = sandbox.project(Some(PAGE_WITH_ASSET));
+        let root = sandbox.root();
+        let document = file.document().expect("a document");
+
+        let plan = FilePlan::plan(
+            document,
+            &root,
+            FileOperation::Move {
+                from: "resources/icon.svg".to_owned(),
+                to: "resources/icons/app.svg".to_owned(),
+            },
+        );
+        assert!(plan.is_executable(), "{:?}", plan.blockers());
+
+        // The page is written, then the project write is refused because the project changed on
+        // disk: the page rewrite has to be put back and the move undone.
+        std::fs::write(
+            sandbox.root.join("project.json"),
+            PROJECT.replace("\"Demo\"", "\"Edited\""),
+        )
+        .expect("an edit");
+        let failure = plan.execute(&file).expect_err("the write is refused");
+        assert!(failure.reason().contains("changed on disk"));
+        assert_eq!(failure.undone().len(), 1);
+        assert!(failure.is_recovered());
+        assert!(sandbox.root.join("resources/icon.svg").is_file());
+        assert!(!sandbox.root.join("resources/icons/app.svg").exists());
+        let text = std::fs::read_to_string(sandbox.root.join("pages/main.json")).unwrap();
+        assert!(text.contains("resources/icon.svg"));
+        assert!(!text.contains("resources/icons/app.svg"));
+    }
+
+    #[test]
     fn moving_a_page_document_rewrites_every_reference_that_named_it() {
         let sandbox = sandbox();
-        sandbox.write("pages/main.json", "{}");
+        sandbox.write("pages/main.json", EMPTY_PAGE);
         let file = sandbox.project(None);
         let root = sandbox.root();
         let document = file.document().expect("a document");
@@ -1285,7 +1735,7 @@ mod tests {
     #[test]
     fn what_names_a_file_is_the_same_list_that_a_move_rewrites() {
         let sandbox = sandbox();
-        sandbox.write("pages/main.json", "{}");
+        sandbox.write("pages/main.json", EMPTY_PAGE);
         sandbox.write("resources/icon.svg", "<svg/>");
         let file = sandbox.project(None);
         let root = sandbox.root();
@@ -1399,7 +1849,7 @@ mod tests {
         assert!(outside.blockers()[0].contains("cannot be resolved"));
         assert!(outside.blockers()[0].contains("climbs above the project root"));
 
-        sandbox.write("pages/main.json", "{}");
+        sandbox.write("pages/main.json", EMPTY_PAGE);
         let named = FilePlan::plan(
             document,
             &root,

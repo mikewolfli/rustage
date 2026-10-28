@@ -25,7 +25,7 @@
 use std::any::Any;
 
 use rust_widgets::core::{ObjectId, Rect};
-use rust_widgets::layout::{BorderLayout, BorderRegion, Layout};
+use rust_widgets::layout::{BorderLayout, BorderRegion, ChildInfo, Layout, LayoutContext};
 
 /// The gap between regions, and the window's outer margin.
 const GAP: u32 = 8;
@@ -320,6 +320,34 @@ impl Layout for WorkbenchLayout {
         for (id, placed) in self.geometry(rect) {
             widgets(id, placed);
         }
+    }
+
+    // The workbench chrome is placed from the host's own `Area` table, not from the library's
+    // child hints: a menu bar or status bar has no intrinsic size the way a document control
+    // does, and `WorkbenchLayout::place` is the single authority for which widget belongs where.
+    // The hint channel is therefore deliberately ignored rather than silently replacing the
+    // host's arrangement with a guess.
+    fn arrange(&self, rect: Rect, _children: &[ChildInfo], out: &mut dyn FnMut(ObjectId, Rect)) {
+        self.update(rect, out);
+    }
+
+    fn arrange_with_context(
+        &self,
+        rect: Rect,
+        _children: &[ChildInfo],
+        _context: &LayoutContext,
+        out: &mut dyn FnMut(ObjectId, Rect),
+    ) {
+        self.update(rect, out);
+    }
+
+    fn update_with_context(
+        &self,
+        rect: Rect,
+        _context: &LayoutContext,
+        widgets: &mut dyn FnMut(ObjectId, Rect),
+    ) {
+        self.update(rect, widgets);
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -9,9 +9,10 @@
 //! button, so a tree click and a canvas click cannot disagree about what is selected.
 
 use std::any::Any;
+use std::collections::BTreeMap;
 
 use rust_widgets::core::{ObjectId, Rect as WidgetRect};
-use rust_widgets::layout::Layout;
+use rust_widgets::layout::{ChildInfo, Layout, LayoutContext};
 
 #[cfg(test)]
 use crate::app::canvas::scene::{Handle, Stale};
@@ -32,12 +33,40 @@ pub(super) struct Node {
     pub rect: Rect,
 }
 
+/// The library control and property one demo node is edited through.
+///
+/// This is stored next to the node rather than derived from its display name at lookup time: the
+/// tree shows names a person chose, and a renamed "button" must keep editing `button.text` rather
+/// than silently changing which contract the Inspector reads.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) struct NodeContract {
+    /// The library's canonical control name.
+    pub control: String,
+    /// The property name that control publishes.
+    pub property: String,
+}
+
+impl NodeContract {
+    pub(super) fn new(control: impl Into<String>, property: impl Into<String>) -> Self {
+        Self {
+            control: control.into(),
+            property: property.into(),
+        }
+    }
+
+    /// The contract in one line, `control.property`.
+    pub(super) fn render(&self) -> String {
+        format!("{}.{}", self.control, self.property)
+    }
+}
+
 /// The object tree, scene and selection.
 pub(super) struct CanvasState {
     tree: Tree,
     scene: Scene,
     selected: Vec<NodeId>,
     nodes: Vec<Node>,
+    contracts: BTreeMap<NodeId, NodeContract>,
 }
 
 impl CanvasState {
@@ -83,11 +112,23 @@ impl CanvasState {
         scene.set_hidden(note, true);
         scene.set_locked(footer, true);
 
+        // The demo mapping is explicit: a container edits its title, a button/label edits its text.
+        // `panel` is the library's plain-container spelling for the control the demo calls `Demo`.
+        let contracts = BTreeMap::from([
+            (root, NodeContract::new("window", "title")),
+            (panel, NodeContract::new("panel", "title")),
+            (button, NodeContract::new("button", "text")),
+            (label, NodeContract::new("label", "text")),
+            (note, NodeContract::new("label", "text")),
+            (footer, NodeContract::new("button", "text")),
+        ]);
+
         Self {
             tree,
             scene,
             selected: Vec::new(),
             nodes,
+            contracts,
         }
     }
 
@@ -153,6 +194,19 @@ impl CanvasState {
     /// A node's kind, when the tree still holds it.
     pub(super) fn kind(&self, node: NodeId) -> Option<Kind> {
         self.tree.get(node).map(|entry| entry.kind)
+    }
+
+    /// The contract this node was mapped to, or why it has none.
+    ///
+    /// The mapping is stored per node when the scene is built; a missing entry is reported rather
+    /// than guessed from the node's name or kind.
+    pub(super) fn contract(&self, node: NodeId) -> Result<NodeContract, String> {
+        self.contracts.get(&node).cloned().ok_or_else(|| {
+            format!(
+                "node {} has no contract mapping; the Inspector will not guess one",
+                node.get()
+            )
+        })
     }
 
     /// A node's parent in the structural tree, or `None` for a root.
@@ -280,6 +334,7 @@ impl CanvasState {
         for removed in &report.removed {
             self.scene.remove(*removed);
             self.nodes.retain(|entry| entry.node != *removed);
+            self.contracts.remove(removed);
             self.selected.retain(|selected| selected != removed);
         }
         Ok(report.render())
@@ -391,6 +446,39 @@ impl Layout for CanvasLayout {
         }
     }
 
+    // Canvas node rectangles are design-space facts owned by `CanvasState`, and the canvas
+    // transform is the one place that maps them into widget space. Child hints from the library
+    // describe preferred sizes, which an absolutely-positioned design canvas does not use; feeding
+    // them in would turn an explicit design position into a layout guess. The context is likewise
+    // not applied here because the viewport transform owns scaling.
+    fn arrange(
+        &self,
+        rect: WidgetRect,
+        _children: &[ChildInfo],
+        out: &mut dyn FnMut(ObjectId, WidgetRect),
+    ) {
+        self.update(rect, out);
+    }
+
+    fn arrange_with_context(
+        &self,
+        rect: WidgetRect,
+        _children: &[ChildInfo],
+        _context: &LayoutContext,
+        out: &mut dyn FnMut(ObjectId, WidgetRect),
+    ) {
+        self.update(rect, out);
+    }
+
+    fn update_with_context(
+        &self,
+        rect: WidgetRect,
+        _context: &LayoutContext,
+        widgets: &mut dyn FnMut(ObjectId, WidgetRect),
+    ) {
+        self.update(rect, widgets);
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -404,6 +492,7 @@ impl Layout for CanvasLayout {
 mod tests {
     use super::CanvasState;
     use crate::app::canvas::scene::Rect;
+    use crate::contracts::identity::NodeId;
 
     #[test]
     fn the_topmost_overlapping_node_is_the_hit_and_the_tree_still_reaches_the_one_below() {
@@ -464,6 +553,49 @@ mod tests {
         assert!(state.selected().is_empty());
         assert!(!state.row_nodes().contains(&panel));
         assert_eq!(state.hit(150, 155), Some(rows[0]), "the window remains");
+    }
+
+    #[test]
+    fn the_demo_mapping_is_stored_per_node_not_guessed_from_the_display_name() {
+        let mut state = CanvasState::demo();
+        let rows = state.row_nodes();
+        let contracts: Vec<String> = rows
+            .iter()
+            .map(|node| state.contract(*node).expect("a mapped node").render())
+            .collect();
+        assert_eq!(
+            contracts,
+            vec![
+                "window.title",
+                "panel.title",
+                "button.text",
+                "label.text",
+                "label.text",
+                "button.text",
+            ]
+        );
+
+        // Renaming the node changes what the tree shows, never which contract the node edits.
+        let button = rows[2];
+        state.rename(button, "primary action").expect("rename");
+        assert_eq!(
+            state.contract(button).expect("still mapped").render(),
+            "button.text"
+        );
+
+        let unknown = state
+            .contract(NodeId::from_raw(999))
+            .expect_err("no mapping");
+        assert!(unknown.contains("no contract mapping"), "{unknown}");
+    }
+
+    #[test]
+    fn deleting_a_node_removes_its_contract_mapping() {
+        let mut state = CanvasState::demo();
+        let panel = state.row_nodes()[1];
+        state.delete(panel).expect("delete");
+        let reason = state.contract(panel).expect_err("the mapping is gone");
+        assert!(reason.contains("no contract mapping"), "{reason}");
     }
 
     #[test]

@@ -156,15 +156,32 @@ impl PageNode {
 }
 
 /// A page's document: the page, its tree of nodes, and what resolved against the project root.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub struct PageDocument {
     path: PathBuf,
+    /// The root its asset references resolve against, when it was read from a project.
+    root: Option<ProjectRoot>,
     page: Page,
     page_preserved: Preserved,
     nodes: Vec<PageNode>,
     references: Vec<Reference>,
     preserved: Preserved,
     unknown: Vec<UnknownField>,
+}
+
+// The root is where the references were resolved, not part of what the document says: two reads
+// of the same bytes describe the same document even when they were resolved against different
+// roots, and the resolved paths in `references` already show any difference that matters.
+impl PartialEq for PageDocument {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.page == other.page
+            && self.page_preserved == other.page_preserved
+            && self.nodes == other.nodes
+            && self.references == other.references
+            && self.preserved == other.preserved
+            && self.unknown == other.unknown
+    }
 }
 
 impl PageDocument {
@@ -187,6 +204,7 @@ impl PageDocument {
         let page = Page::new(page, name, root)?;
         Some(Self {
             path: path.into(),
+            root: None,
             page,
             page_preserved: Preserved::default(),
             nodes: vec![PageNode::new(root, root_kind)],
@@ -258,6 +276,70 @@ impl PageDocument {
     /// Every project-relative path a property holds, with what resolving it found.
     pub fn references(&self) -> &[Reference] {
         &self.references
+    }
+
+    /// Rewrites every asset property that names `from` so that it names `to`.
+    ///
+    /// This is the page-document half of moving or renaming a resource: only values of the
+    /// [`PropertyValue::Asset`] family are touched, every other property, child and member this
+    /// build does not know is left exactly as it was, and the number of references changed is
+    /// returned so a caller can report it rather than claim a rewrite it did not make.
+    ///
+    /// A reference that names another path is not rewritten, and `from == to` is a no-op that
+    /// returns `0`. The document is written back through the same writer a read document
+    /// round-trips with, so the result can be checked by reading it again.
+    pub fn rewire_asset(&mut self, from: &str, to: &str) -> Result<usize, String> {
+        if from.is_empty() || to.is_empty() {
+            return Err(
+                "an asset reference needs both the path it names and the path to write".to_owned(),
+            );
+        }
+        if from == to {
+            return Ok(0);
+        }
+        if let Some(root) = &self.root {
+            // The target may live in a directory that does not exist yet, so this is the same rule
+            // a file about to be created follows: stay inside the root, and do not require the
+            // path's own directory to exist.
+            root.resolve_for_creation(to).map_err(|error| {
+                format!(
+                    "`{to}` cannot be a page asset reference: {}",
+                    error.message()
+                )
+            })?;
+        }
+
+        let mut rewritten = 0usize;
+        for node in &mut self.nodes {
+            for value in node.properties.values_mut() {
+                if let PropertyValue::Asset(written) = value
+                    && written == from
+                {
+                    *written = to.to_owned();
+                    rewritten += 1;
+                }
+            }
+        }
+        if rewritten == 0 {
+            return Ok(0);
+        }
+
+        // The reference list is a diagnostic of what the document names. Rebuilding it here keeps
+        // a caller that asks "what does this page point at?" from being told about the old path.
+        if let Some(root) = &self.root {
+            let context = Context { root };
+            let mut references = Vec::new();
+            for node in &self.nodes {
+                for value in node.properties().values() {
+                    if let PropertyValue::Asset(written) = value {
+                        references
+                            .push(context.reference(ReferenceKind::Resource, written.clone()));
+                    }
+                }
+            }
+            self.references = references;
+        }
+        Ok(rewritten)
     }
 
     /// The references that would leave the project root.
@@ -510,6 +592,7 @@ fn interpret(
 
     Ok(PageDocument {
         path,
+        root: Some(root.clone()),
         page,
         page_preserved,
         nodes,
@@ -943,6 +1026,81 @@ mod tests {
         assert!(saved.contains("Save \u{4e2d}"));
         assert!(saved.contains("\"asset\": \"resources/icon.svg\""));
         assert_eq!(sandbox.document(&saved), document);
+    }
+
+    #[test]
+    fn rewiring_asset_references_reports_the_count_and_keeps_unknown_members() {
+        let sandbox = sandbox();
+        let text = "{\"format\": 1, \"future\": {\"note\": \"keep\"}, \
+             \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1, \"gridSize\": 8}, \
+             \"nodes\": [ \
+               {\"id\": 1, \"type\": \"page\", \"children\": [2], \"properties\": [ \
+                 {\"name\": \"icon\", \"value\": {\"asset\": \"resources/icon.svg\"}}]}, \
+               {\"id\": 2, \"type\": \"image\", \"locked\": true, \"properties\": [ \
+                 {\"name\": \"source\", \"value\": {\"asset\": \"resources/icon.svg\"}}, \
+                 {\"name\": \"label\", \"value\": {\"text\": \"Save\"}}]}]}";
+        let mut document = sandbox.document(text);
+        assert_eq!(document.references().len(), 2);
+
+        let rewired = document
+            .rewire_asset("resources/icon.svg", "resources/icons/app.svg")
+            .expect("the asset references are rewritable");
+        assert_eq!(rewired, 2);
+        assert!(
+            document
+                .references()
+                .iter()
+                .all(|reference| reference.written() == "resources/icons/app.svg")
+        );
+
+        let saved = document.render().expect("writable");
+        assert!(saved.contains("resources/icons/app.svg"));
+        assert!(!saved.contains("resources/icon.svg"));
+        assert!(saved.contains("\"gridSize\": 8"));
+        assert!(saved.contains("\"locked\": true"));
+        assert!(saved.contains("\"future\""));
+        assert!(saved.contains("\"keep\""));
+
+        // The members this build does not know are still reported after the rewrite.
+        let again = sandbox.document(&saved);
+        assert_eq!(again.unknown_fields().len(), 3);
+
+        // Nothing names the old path any more, and a blank path is refused rather than written.
+        assert_eq!(
+            document
+                .rewire_asset("resources/icon.svg", "elsewhere.svg")
+                .expect("the asset references are rewritable"),
+            0
+        );
+        assert!(document.rewire_asset("", "elsewhere.svg").is_err());
+    }
+
+    #[test]
+    fn an_asset_reference_to_another_path_is_not_rewritten() {
+        let sandbox = sandbox();
+        let text = "{\"format\": 1, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
+             \"nodes\": [{\"id\": 1, \"type\": \"page\", \"properties\": [ \
+               {\"name\": \"icon\", \"value\": {\"asset\": \"resources/icon.svg\"}}]}]}";
+        let mut document = sandbox.document(text);
+        let before = document.render().expect("writable");
+
+        assert_eq!(
+            document
+                .rewire_asset("resources/other.svg", "resources/new.svg")
+                .expect("the asset references are rewritable"),
+            0
+        );
+        assert_eq!(document.render().expect("writable"), before);
+        assert_eq!(document.references()[0].written(), "resources/icon.svg");
+
+        // Rewriting a path to itself changes nothing either.
+        assert_eq!(
+            document
+                .rewire_asset("resources/icon.svg", "resources/icon.svg")
+                .expect("the asset references are rewritable"),
+            0
+        );
+        assert_eq!(document.render().expect("writable"), before);
     }
 
     #[test]

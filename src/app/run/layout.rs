@@ -8,42 +8,19 @@
 
 use super::*;
 
-/// Exercises the layout contract and its diagnostics (task T10.01).
+/// Exercises the layout contract and its diagnostics through the library engine (task T10.01).
 pub(super) fn layout_plan(options: &crate::cli::LayoutPlanOptions) -> bool {
+    use crate::app::layout::layout_choice::LayoutKind;
     use crate::app::layout::layout_plan::{
-        Computed, Diagnostic, Engine, LayoutInput, Role, Size, layout,
+        Computed, LayoutInput, LibraryEngine, Role, Size, layout,
     };
 
-    /// The headless stand-in for the library engine: it answers the boxes the operator supplied
-    /// (`box:` ops) and diagnoses a node it was given none for. The real engine arrives with the
-    /// library probe (task T10.08).
-    struct Supplied {
-        boxes: Vec<Computed>,
-    }
-
-    impl Engine for Supplied {
-        fn layout(&self, inputs: &[LayoutInput]) -> Result<Vec<Computed>, Vec<Diagnostic>> {
-            let mut computed = Vec::new();
-            let mut diagnostics = Vec::new();
-            for input in inputs {
-                match self.boxes.iter().find(|box_| box_.node == input.node) {
-                    Some(box_) => computed.push(*box_),
-                    None => diagnostics.push(Diagnostic::new(
-                        input.node,
-                        "the headless stand-in has no box for this node",
-                    )),
-                }
-            }
-            if diagnostics.is_empty() {
-                Ok(computed)
-            } else {
-                Err(diagnostics)
-            }
-        }
-    }
-
+    let mut kind = LayoutKind::Row;
+    let mut container: Option<Size> = None;
+    let mut gap = 0u32;
+    let mut padding = 0u32;
     let mut inputs: Vec<LayoutInput> = Vec::new();
-    let mut boxes: Vec<Computed> = Vec::new();
+    let mut caller_boxes: Vec<Computed> = Vec::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -72,20 +49,59 @@ pub(super) fn layout_plan(options: &crate::cli::LayoutPlanOptions) -> bool {
                 }
                 Err(reason) => Err(reason),
             },
+            "layout" => match LayoutKind::from_name(argument) {
+                Some(selected) => {
+                    kind = selected;
+                    let engine = LibraryEngine::new(selected);
+                    Ok(vec![format!(
+                        "layout: {} ({})",
+                        selected.name(),
+                        engine.selection().name()
+                    )])
+                }
+                None => Err(format!("{argument:?} is not a layout kind")),
+            },
+            "container" => match parse_floats(argument).as_deref() {
+                Ok([width, height]) => {
+                    container = Some(Size::new(*width, *height));
+                    Ok(vec![format!("container: {width},{height}")])
+                }
+                _ => Err(format!("{argument:?} is not <w>,<h>")),
+            },
+            "gap" | "padding" => match argument.parse::<u32>() {
+                Ok(value) => {
+                    if verb == "gap" {
+                        gap = value;
+                    } else {
+                        padding = value;
+                    }
+                    Ok(vec![format!("{verb}: {value}")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a non-negative pixel count")),
+            },
+            // The boxes a caller used to hand the stand-in are kept only so an old
+            // command still parses; the plan is the library's, and this list is not it.
             "box" => match parse_box(argument) {
                 Ok(box_) => {
-                    boxes.retain(|existing| existing.node != box_.node);
-                    boxes.push(box_);
-                    Ok(vec![format!("box {}", box_.render())])
+                    caller_boxes.retain(|existing| existing.node != box_.node);
+                    caller_boxes.push(box_);
+                    Ok(vec![format!(
+                        "box: caller-supplied boxes are not used by the library engine (kept {})",
+                        box_.render()
+                    )])
                 }
                 Err(reason) => Err(reason),
             },
             "run" => match Role::from_name(argument) {
                 Some(role) => {
-                    let engine = Supplied {
-                        boxes: boxes.clone(),
-                    };
-                    Ok(layout(&engine, role, &inputs).render())
+                    let mut engine = LibraryEngine::new(kind).with_gap(gap).with_padding(padding);
+                    if let Some(container) = container {
+                        engine = engine.with_container(container);
+                    }
+                    let plan = layout(&engine, role, &inputs);
+                    let mut lines = vec![format!("engine: {}", engine.selection().name())];
+                    lines.extend(plan.render());
+                    Ok(lines)
                 }
                 None => Err(format!("{argument:?} is not preview or generation")),
             },
@@ -109,7 +125,7 @@ pub(super) fn layout_plan(options: &crate::cli::LayoutPlanOptions) -> bool {
                 },
                 Err(reason) => Err(reason),
             },
-            "state" => Ok(render_layout_state(&inputs, &boxes)),
+            "state" => Ok(render_layout_state(&inputs, kind, &caller_boxes)),
             "show" => Ok(Vec::new()),
             other => Err(format!("{other:?} is not a layout-plan operation")),
         };
@@ -122,17 +138,19 @@ pub(super) fn layout_plan(options: &crate::cli::LayoutPlanOptions) -> bool {
             Err(reason) => return report(reason),
         }
     }
-    for line in render_layout_state(&inputs, &boxes) {
+    for line in render_layout_state(&inputs, kind, &caller_boxes) {
         println!("{line}");
     }
     true
 }
 
-/// The inputs and supplied boxes in a report.
+/// The inputs, the selected library layout and any caller-supplied boxes in a report.
 pub(super) fn render_layout_state(
     inputs: &[crate::app::layout::layout_plan::LayoutInput],
-    boxes: &[crate::app::layout::layout_plan::Computed],
+    kind: crate::app::layout::layout_choice::LayoutKind,
+    caller_boxes: &[crate::app::layout::layout_plan::Computed],
 ) -> Vec<String> {
+    let selection = crate::app::layout::layout_plan::LibraryEngine::new(kind).selection();
     let mut lines = vec![format!("inputs: {}", inputs.len())];
     for input in inputs {
         lines.push(format!(
@@ -142,30 +160,87 @@ pub(super) fn render_layout_state(
             input.available.height,
             input.constraints.len()
         ));
+        for constraint in &input.constraints {
+            let value = constraint
+                .value
+                .as_ref()
+                .map_or_else(|| "(no value)".to_owned(), |value| value.render());
+            lines.push(format!("    {} = {value}", constraint.property.as_str()));
+        }
     }
-    lines.push(format!("boxes: {}", boxes.len()));
-    for box_ in boxes {
+    lines.push(format!("layout: {} ({})", kind.name(), selection.name()));
+    lines.push(format!(
+        "caller boxes: {} (not used by the library engine)",
+        caller_boxes.len()
+    ));
+    for box_ in caller_boxes {
         lines.push(format!("  {}", box_.render()));
     }
     lines
 }
 
-/// A constraint from `<node>:<property>:<origin>`.
+/// A constraint from `<node>:<property>:<origin>[:<value>]`.
 pub(super) fn parse_constraint(
     argument: &str,
 ) -> Result<crate::app::layout::layout_plan::Constraint, String> {
-    let fields: Vec<&str> = argument.splitn(3, ':').collect();
-    let [node, property, origin] = fields.as_slice() else {
-        return Err(format!("{argument:?} is not <node>:<property>:<origin>"));
+    let fields: Vec<&str> = argument.splitn(4, ':').collect();
+    let (node, property, origin, value) = match fields.as_slice() {
+        [node, property, origin] => (*node, *property, *origin, None),
+        [node, property, origin, value] => (*node, *property, *origin, Some(*value)),
+        _ => {
+            return Err(format!(
+                "{argument:?} is not <node>:<property>:<origin>[:<value>]"
+            ));
+        }
     };
     let node = parse_scene_node(node)?;
     let property = crate::contracts::model::PropertyName::new(property)
         .ok_or_else(|| format!("{property:?} is not a property name"))?;
     let origin = crate::app::layout::layout_plan::Origin::from_name(origin)
         .ok_or_else(|| format!("{origin:?} is not an origin"))?;
-    Ok(crate::app::layout::layout_plan::Constraint::new(
-        node, property, origin,
-    ))
+    let constraint = crate::app::layout::layout_plan::Constraint::new(node, property, origin);
+    match value {
+        Some(value) => {
+            let typed = parse_constraint_value(constraint.property.as_str(), value)?;
+            Ok(constraint.with_value(typed))
+        }
+        None => Ok(constraint),
+    }
+}
+
+/// The typed value a constraint property carries, from its written form.
+pub(super) fn parse_constraint_value(
+    property: &str,
+    raw: &str,
+) -> Result<crate::app::layout::layout_plan::Value, String> {
+    use crate::app::layout::layout_plan::Value;
+    match property {
+        "min" | "max" | "preferred" => match parse_floats(raw).as_deref() {
+            Ok([width, height]) => Ok(Value::Size {
+                width: *width,
+                height: *height,
+            }),
+            _ => Err(format!("{raw:?} is not <width>,<height>")),
+        },
+        "cell" => match raw.split_once(',') {
+            Some((row, column)) => {
+                let row = row
+                    .parse::<u32>()
+                    .map_err(|_| format!("{row:?} is not a row"))?;
+                let column = column
+                    .parse::<u32>()
+                    .map_err(|_| format!("{column:?} is not a column"))?;
+                Ok(Value::Cell { row, column })
+            }
+            None => Err(format!("{raw:?} is not <row>,<column>")),
+        },
+        "align" | "overflow" => Ok(Value::Word(raw.to_owned())),
+        "width" | "height" | "gap" | "margin" | "padding" | "grow" | "x" | "y" | "order" => raw
+            .parse::<f64>()
+            .map(Value::Scalar)
+            .map_err(|_| format!("{raw:?} is not a number")),
+        other => Err(format!("{other:?} has no value form")),
+    }
 }
 
 /// A computed box from `<node>:<x>,<y>,<w>,<h>`.
@@ -405,12 +480,13 @@ pub(super) fn parse_node_scalar(
 
 /// Aligns, distributes and nudges a selection as constraint writes (task T10.04).
 pub(super) fn arrange(options: &crate::cli::ArrangeOptions) -> bool {
-    use crate::app::layout::arrange::{Axis, Operation};
+    use crate::app::layout::arrange::{Axis, Document, Operation};
     use crate::app::layout::layout_choice::LayoutKind;
     use crate::contracts::identity::NodeId;
 
     let mut kind = LayoutKind::Row;
     let mut selected: Vec<NodeId> = Vec::new();
+    let mut document = Document::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -430,27 +506,56 @@ pub(super) fn arrange(options: &crate::cli::ArrangeOptions) -> bool {
                 }
                 Err(reason) => Err(reason),
             },
+            // The box and container are the geometry an alignment, distribution or size match
+            // reads. Without them the operation is refused rather than guessed.
+            "frame" => match parse_box(argument) {
+                Ok(box_) => {
+                    document = document.with_bounds(box_);
+                    Ok(vec![format!("frame: {argument}")])
+                }
+                Err(reason) => Err(reason),
+            },
+            "container" => match parse_floats(argument).as_deref() {
+                Ok([width, height]) => {
+                    document = document.with_container(crate::app::layout::layout_plan::Size::new(
+                        *width, *height,
+                    ));
+                    Ok(vec![format!("container: {width},{height}")])
+                }
+                _ => Err(format!("{argument:?} is not <w>,<h>")),
+            },
             "align" => match parse_axis_mode(argument) {
                 Ok((axis, mode)) => Ok(run_arrange(
                     kind,
+                    &mut document,
                     &selected,
                     Operation::Align { axis, mode },
                 )),
                 Err(reason) => Err(reason),
             },
             "distribute" => match Axis::from_name(argument) {
-                Some(axis) => Ok(run_arrange(kind, &selected, Operation::Distribute { axis })),
+                Some(axis) => Ok(run_arrange(
+                    kind,
+                    &mut document,
+                    &selected,
+                    Operation::Distribute { axis },
+                )),
                 None => Err(format!("{argument:?} is not an axis")),
             },
             "match" => match Axis::from_name(argument) {
-                Some(axis) => Ok(run_arrange(kind, &selected, Operation::MatchSize { axis })),
+                Some(axis) => Ok(run_arrange(
+                    kind,
+                    &mut document,
+                    &selected,
+                    Operation::MatchSize { axis },
+                )),
                 None => Err(format!("{argument:?} is not an axis")),
             },
             "nudge" => match parse_nudge(argument) {
-                Ok(operation) => Ok(run_arrange(kind, &selected, operation)),
+                Ok(operation) => Ok(run_arrange(kind, &mut document, &selected, operation)),
                 Err(reason) => Err(reason),
             },
-            "state" => Ok(render_arrange(kind, &selected)),
+            "state" => Ok(render_arrange(kind, &selected, &document)),
             "show" => Ok(Vec::new()),
             other => Err(format!("{other:?} is not an arrange operation")),
         };
@@ -463,34 +568,42 @@ pub(super) fn arrange(options: &crate::cli::ArrangeOptions) -> bool {
             Err(reason) => return report(reason),
         }
     }
-    for line in render_arrange(kind, &selected) {
+    for line in render_arrange(kind, &selected, &document) {
         println!("{line}");
     }
     true
 }
 
-/// Runs one arrangement and renders either it or its refusal.
+/// Runs one arrangement against the document, keeping the new document on success.
 pub(super) fn run_arrange(
     kind: crate::app::layout::layout_choice::LayoutKind,
+    document: &mut crate::app::layout::arrange::Document,
     selected: &[crate::contracts::identity::NodeId],
     operation: crate::app::layout::arrange::Operation,
 ) -> Vec<String> {
-    match crate::app::layout::arrange::apply(kind, selected, operation) {
-        Ok(arrangement) => arrangement.render(),
+    match crate::app::layout::arrange::apply_to(kind, document, selected, operation) {
+        Ok(arrangement) => {
+            let lines = arrangement.render();
+            *document = arrangement.document;
+            lines
+        }
         Err(refusal) => refusal.render(),
     }
 }
 
-/// The layout and the selection in a report.
+/// The layout, the selection and the constraint document in a report.
 pub(super) fn render_arrange(
     kind: crate::app::layout::layout_choice::LayoutKind,
     selected: &[crate::contracts::identity::NodeId],
+    document: &crate::app::layout::arrange::Document,
 ) -> Vec<String> {
     let ids: Vec<String> = selected.iter().map(|node| node.get().to_string()).collect();
-    vec![
+    let mut lines = vec![
         format!("layout: {}", kind.name()),
         format!("selected: {}", ids.join(", ")),
-    ]
+    ];
+    lines.extend(document.render());
+    lines
 }
 
 /// An `(axis, mode)` from `<axis>:<mode>`.
@@ -955,39 +1068,28 @@ pub(super) fn parse_number(value: &str) -> Result<f64, String> {
         .map_err(|_| format!("{value:?} is not a number"))
 }
 
-/// Compares the preview with a library-generated probe on the same input (task T10.08).
+/// Compares rendered boxes with the library's own solve on the same input (task T10.08).
 pub(super) fn layout_probe(options: &crate::cli::LayoutProbeOptions) -> bool {
-    use crate::app::layout::layout_plan::{Computed, Diagnostic, Engine, LayoutInput, Role, Size};
-    use crate::app::layout::layout_probe::{compare, run};
-
-    /// The headless stand-in for a layout engine: it answers the boxes it was given for this side.
-    struct Supplied(Vec<Computed>);
-
-    impl Engine for Supplied {
-        fn layout(&self, inputs: &[LayoutInput]) -> Result<Vec<Computed>, Vec<Diagnostic>> {
-            let mut boxes = Vec::new();
-            let mut diagnostics = Vec::new();
-            for input in inputs {
-                match self.0.iter().find(|box_| box_.node == input.node) {
-                    Some(box_) => boxes.push(*box_),
-                    None => diagnostics.push(Diagnostic::new(
-                        input.node,
-                        "the stand-in has no box for this node",
-                    )),
-                }
-            }
-            if diagnostics.is_empty() {
-                Ok(boxes)
-            } else {
-                Err(diagnostics)
-            }
-        }
-    }
+    use crate::app::layout::layout_choice::LayoutKind;
+    use crate::app::layout::layout_plan::{Computed, LayoutInput, LibraryEngine, Role, Size};
+    use crate::app::layout::layout_probe::{Run, compare, run};
 
     let mut scenario = "scenario".to_owned();
     let mut inputs: Vec<LayoutInput> = Vec::new();
-    let mut preview_boxes: Vec<Computed> = Vec::new();
-    let mut probe_boxes: Vec<Computed> = Vec::new();
+    let mut rendered_boxes: Vec<Computed> = Vec::new();
+    let mut kind = LayoutKind::Row;
+    let mut container: Option<Size> = None;
+    let mut gap = 0u32;
+    let mut padding = 0u32;
+    // The probe side is never supplied by the caller: it is the library layout selected for
+    // the scenario, solved on the same inputs the rendered side was given.
+    let engine = |kind, container: Option<Size>, gap, padding| {
+        let mut engine = LibraryEngine::new(kind).with_gap(gap).with_padding(padding);
+        if let Some(container) = container {
+            engine = engine.with_container(container);
+        }
+        engine
+    };
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -1007,48 +1109,77 @@ pub(super) fn layout_probe(options: &crate::cli::LayoutProbeOptions) -> bool {
                 },
                 None => Err(format!("{argument:?} is not <node>:<w>,<h>")),
             },
+            "layout" => match LayoutKind::from_name(argument) {
+                Some(selected) => {
+                    kind = selected;
+                    Ok(vec![format!(
+                        "layout: {} ({})",
+                        selected.name(),
+                        LibraryEngine::new(selected).selection().name()
+                    )])
+                }
+                None => Err(format!("{argument:?} is not a layout kind")),
+            },
+            "container" => match parse_floats(argument).as_deref() {
+                Ok([width, height]) => {
+                    container = Some(Size::new(*width, *height));
+                    Ok(vec![format!("container: {width},{height}")])
+                }
+                _ => Err(format!("{argument:?} is not <w>,<h>")),
+            },
+            "gap" | "padding" => match argument.parse::<u32>() {
+                Ok(value) => {
+                    if verb == "gap" {
+                        gap = value;
+                    } else {
+                        padding = value;
+                    }
+                    Ok(vec![format!("{verb}: {value}")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a non-negative pixel count")),
+            },
+            // What the host rendered. This is the side the library output is checked against.
             "box" => match parse_box(argument) {
                 Ok(box_) => {
-                    preview_boxes.retain(|existing| existing.node != box_.node);
-                    preview_boxes.push(box_);
-                    Ok(vec![format!("box {}", box_.render())])
+                    rendered_boxes.retain(|existing| existing.node != box_.node);
+                    rendered_boxes.push(box_);
+                    Ok(vec![format!("rendered box {}", box_.render())])
                 }
                 Err(reason) => Err(reason),
             },
-            "probe-box" => match parse_box(argument) {
-                Ok(box_) => {
-                    probe_boxes.retain(|existing| existing.node != box_.node);
-                    probe_boxes.push(box_);
-                    Ok(vec![format!("probe-box {}", box_.render())])
-                }
-                Err(reason) => Err(reason),
-            },
+            // Kept only so an old command still runs: the probe is the library's answer, so a
+            // caller-supplied list would make the comparison two inputs instead of evidence.
+            "probe-box" => Ok(vec![format!(
+                "probe-box: {argument} ignored — the probe is produced by the library engine"
+            )]),
             "compare" => {
-                let preview = run(
-                    &Supplied(preview_boxes.clone()),
-                    Role::Preview,
-                    "preview",
-                    &inputs,
-                );
                 let probe = run(
-                    &Supplied(probe_boxes.clone()),
+                    &engine(kind, container, gap, padding),
                     Role::Generation,
                     "library",
                     &inputs,
                 );
+                let preview = Run {
+                    target: "preview (rendered)".to_owned(),
+                    boxes: rendered_boxes.clone(),
+                    diagnostics: Vec::new(),
+                };
                 let report = compare(&scenario, &inputs, &preview, &probe);
                 let mut lines = report.render();
                 if report.agreed() {
-                    lines.push("  the preview and the probe agree".to_owned());
+                    lines.push("  the rendered boxes and the library probe agree".to_owned());
                 }
                 Ok(lines)
             }
-            "state" => Ok(render_probe(
-                &scenario,
-                &inputs,
-                &preview_boxes,
-                &probe_boxes,
-            )),
+            "state" => {
+                let probe = run(
+                    &engine(kind, container, gap, padding),
+                    Role::Generation,
+                    "library",
+                    &inputs,
+                );
+                Ok(render_probe(&scenario, &inputs, &rendered_boxes, &probe))
+            }
             "show" => Ok(Vec::new()),
             other => Err(format!("{other:?} is not a layout-probe operation")),
         };
@@ -1061,18 +1192,24 @@ pub(super) fn layout_probe(options: &crate::cli::LayoutProbeOptions) -> bool {
             Err(reason) => return report(reason),
         }
     }
-    for line in render_probe(&scenario, &inputs, &preview_boxes, &probe_boxes) {
+    let probe = run(
+        &engine(kind, container, gap, padding),
+        Role::Generation,
+        "library",
+        &inputs,
+    );
+    for line in render_probe(&scenario, &inputs, &rendered_boxes, &probe) {
         println!("{line}");
     }
     true
 }
 
-/// The scenario, inputs and both sides' boxes in a report.
+/// The scenario, the inputs, the rendered boxes and the library's run in a report.
 pub(super) fn render_probe(
     scenario: &str,
     inputs: &[crate::app::layout::layout_plan::LayoutInput],
-    preview: &[crate::app::layout::layout_plan::Computed],
-    probe: &[crate::app::layout::layout_plan::Computed],
+    rendered: &[crate::app::layout::layout_plan::Computed],
+    library: &crate::app::layout::layout_probe::Run,
 ) -> Vec<String> {
     let mut lines = vec![format!("scenario: {scenario}")];
     lines.push(format!("inputs: {}", inputs.len()));
@@ -1084,7 +1221,133 @@ pub(super) fn render_probe(
             input.available.height
         ));
     }
-    lines.push(format!("preview boxes: {}", preview.len()));
-    lines.push(format!("library boxes: {}", probe.len()));
+    lines.push(format!("rendered boxes: {}", rendered.len()));
+    lines.push(format!("library boxes: {}", library.boxes.len()));
+    for box_ in &library.boxes {
+        lines.push(format!("  {}", box_.render()));
+    }
+    for diagnostic in &library.diagnostics {
+        lines.push(format!("  {}", diagnostic.render()));
+    }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_constraint, render_layout_state, run_arrange};
+    use crate::app::layout::arrange::{Axis, Document, Operation};
+    use crate::app::layout::layout_choice::LayoutKind;
+    use crate::app::layout::layout_plan::{
+        Computed, LayoutInput, LibraryEngine, Role, Size, Value,
+    };
+    use crate::app::layout::layout_probe::{Run, compare, run};
+    use crate::contracts::identity::NodeId;
+
+    fn node(value: u64) -> NodeId {
+        NodeId::from_raw(value)
+    }
+
+    #[test]
+    fn a_constraint_value_is_parsed_by_its_property() {
+        let minimum = parse_constraint("2:min:explicit:10,20").expect("a size value");
+        assert_eq!(
+            minimum.value,
+            Some(Value::Size {
+                width: 10.0,
+                height: 20.0
+            })
+        );
+        let position = parse_constraint("2:x:explicit:24").expect("a scalar value");
+        assert_eq!(position.value, Some(Value::Scalar(24.0)));
+        let cell = parse_constraint("2:cell:explicit:1,2").expect("a cell value");
+        assert_eq!(cell.value, Some(Value::Cell { row: 1, column: 2 }));
+        let align = parse_constraint("2:align:explicit:centre").expect("a word value");
+        assert_eq!(align.value, Some(Value::Word("centre".to_owned())));
+    }
+
+    #[test]
+    fn a_constraint_without_a_value_keeps_none() {
+        let constraint = parse_constraint("2:grow:explicit").expect("the legacy form");
+        assert_eq!(constraint.value, None);
+    }
+
+    #[test]
+    fn a_property_with_no_value_form_is_refused() {
+        let error = parse_constraint("2:unknown:explicit:1").expect_err("no value form");
+        assert!(error.contains("no value form"));
+    }
+
+    #[test]
+    fn a_frame_lets_a_size_match_write_a_real_width() {
+        let mut document = Document::new().with_bounds(Computed {
+            node: node(1),
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        });
+        let lines = run_arrange(
+            LayoutKind::Row,
+            &mut document,
+            &[node(1), node(2)],
+            Operation::MatchSize {
+                axis: Axis::Horizontal,
+            },
+        );
+        assert!(lines[0].contains("2 constraint(s)"));
+        assert_eq!(document.value(node(2), "width"), Some(&Value::Scalar(10.0)));
+    }
+
+    #[test]
+    fn the_probe_compares_library_output_with_rendered_boxes() {
+        let inputs = [LayoutInput::new(node(1), Size::new(30.0, 20.0))];
+        let probe = run(
+            &LibraryEngine::new(LayoutKind::Row),
+            Role::Generation,
+            "library",
+            &inputs,
+        );
+        assert_eq!(probe.boxes.len(), 1, "the library solved the input");
+        let rendered = Run {
+            target: "preview (rendered)".to_owned(),
+            boxes: vec![Computed {
+                node: node(1),
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            }],
+            diagnostics: Vec::new(),
+        };
+
+        let report = compare("mismatch", &inputs, &rendered, &probe);
+
+        assert!(!report.agreed());
+        let difference = &report.differences[0];
+        assert_eq!(difference.preview.map(|box_| box_.width), Some(20.0));
+        assert_eq!(difference.probe.map(|box_| box_.width), Some(30.0));
+        assert!(difference.render().contains("preview"));
+        assert!(difference.render().contains("but probe"));
+    }
+
+    #[test]
+    fn the_state_names_the_selection_and_demotes_caller_boxes() {
+        let inputs = [LayoutInput::new(node(1), Size::new(30.0, 20.0))];
+        let caller = [Computed {
+            node: node(1),
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }];
+
+        let lines = render_layout_state(&inputs, LayoutKind::Column, &caller);
+
+        assert!(lines.iter().any(|line| line.contains("FlexLayout")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("not used by the library engine"))
+        );
+    }
 }

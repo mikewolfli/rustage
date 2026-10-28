@@ -6,5 +6,7 @@
 //! [`report`] holds the types and operations; this boundary re-exports them.
 
 mod report;
+mod test_runner;
 
 pub use report::*;
+pub use test_runner::*;

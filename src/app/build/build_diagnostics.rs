@@ -12,11 +12,19 @@
 //! * **A position becomes a node.** [`locate`] turns a message's file/line/column into a byte offset
 //!   and asks the source map ([`crate::contracts::source_map`]) which node's generated code that
 //!   offset is — the link that turns "error at main.rs:12:9" into "the `save` button".
-//! * **A diagnostic is stamped.** The batch carries the model revision it was produced against, and
-//!   [`Batch::is_stale`] says whether it still describes the document in front of the user.
+//!   [`Batch::place`] is the typed path a captured `--message-format=json` stream takes: every
+//!   message is placed, and one with a position the map cannot answer keeps that position and is
+//!   marked [`Diagnostic::unmapped`] instead of being given an invented node.
+//! * **A diagnostic is stamped and fed to the problem centre.** [`Report::problems`] turns placed
+//!   messages into [`crate::app::quality::Problem`] rows with [`crate::app::quality::Source::Build`],
+//!   its target and the model revision; [`Report::record`] adds them to a
+//!   [`crate::app::quality::Center`], which deduplicates the same problem reported twice. The batch
+//!   carries the model revision it was produced against, and [`Batch::is_stale`] says whether it
+//!   still describes the document in front of the user.
 
 #![allow(dead_code)]
 
+use crate::app::quality::{Center, Problem, Severity, Source};
 use crate::contracts::identity::NodeId;
 use crate::contracts::revision::{Revision, Staleness};
 use crate::contracts::source_map::SourceMap;
@@ -47,6 +55,14 @@ pub struct Message {
 }
 
 impl Message {
+    /// The message and its code, as one problem row reads.
+    pub fn body(&self) -> String {
+        match &self.code {
+            Some(code) => format!("{} [{code}]", self.text),
+            None => self.text.clone(),
+        }
+    }
+
     /// The message in one line.
     pub fn render(&self) -> String {
         let place = match &self.span {
@@ -97,6 +113,134 @@ impl Batch {
             out.push(format!("output: {line}"));
         }
         out
+    }
+
+    /// Places every message against `map`, reading each referenced file through `text_of`.
+    ///
+    /// A map from a different model revision is not consulted: using it would jump to a line that
+    /// has since moved, which looks like an answer and is worse than no mapping. Such messages keep
+    /// their position and are marked unmapped.
+    pub fn place(&self, map: &SourceMap, text_of: impl Fn(&str) -> Option<String>) -> Report {
+        let map_is_current = map.stamp().model == self.revision;
+        let diagnostics = self
+            .messages
+            .iter()
+            .map(|message| {
+                let span = message.span.as_ref();
+                let node = if map_is_current {
+                    span.and_then(|span| {
+                        text_of(&span.file).and_then(|text| locate(message, &text, map))
+                    })
+                } else {
+                    None
+                };
+                Diagnostic {
+                    message: message.clone(),
+                    node,
+                    unmapped: span.is_some() && node.is_none(),
+                }
+            })
+            .collect();
+        Report {
+            revision: self.revision,
+            diagnostics,
+        }
+    }
+}
+
+/// One message after the source map was asked where it points.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Diagnostic {
+    /// The compiler message itself.
+    pub message: Message,
+    /// The node whose generated code contains the position.
+    pub node: Option<NodeId>,
+    /// The message has a position but the map has no node for it.
+    ///
+    /// A message without a position at all is not "unmapped": it simply has nowhere to point. The
+    /// distinction matters because the first is a gap in the map and the second is normal.
+    pub unmapped: bool,
+}
+
+impl Diagnostic {
+    /// The position as `file:line:column`, kept even when it did not map.
+    pub fn location(&self) -> Option<String> {
+        self.message
+            .span
+            .as_ref()
+            .map(|span| format!("{}:{}:{}", span.file, span.line, span.column))
+    }
+
+    /// The problem-centre row this diagnostic becomes.
+    ///
+    /// The source is always [`Source::Build`], and an unmapped diagnostic keeps its file/line/column
+    /// with `node: None` — the centre then navigates to the position instead of inventing a node.
+    pub fn problem(&self, target: &str, revision: Revision) -> Problem {
+        Problem {
+            source: Source::Build,
+            target: target.to_owned(),
+            revision: revision.get(),
+            node: self.node.map(NodeId::get),
+            location: self.location(),
+            severity: Severity::parse(&self.message.level).unwrap_or(Severity::Note),
+            message: self.message.body(),
+        }
+    }
+}
+
+/// A batch placed against one source map, ready for the problem centre.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Report {
+    /// The model revision the build was started against.
+    pub revision: Revision,
+    /// Every message, in the order the compiler printed it.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl Report {
+    /// The problem rows, stamped with their target and revision.
+    pub fn problems(&self, target: &str) -> Vec<Problem> {
+        self.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.problem(target, self.revision))
+            .collect()
+    }
+
+    /// Adds the rows to `center`, which replaces a duplicate rather than showing it twice.
+    pub fn record(&self, center: &mut Center, target: &str) {
+        for problem in self.problems(target) {
+            center.add(problem);
+        }
+    }
+
+    /// How many diagnostics are errors.
+    pub fn errors(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.level == "error")
+            .count()
+    }
+
+    /// How many positioned diagnostics the map could not place.
+    pub fn unmapped(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.unmapped)
+            .count()
+    }
+
+    /// One line per problem, with an explicit marker where the map had no node.
+    pub fn render(&self, target: &str) -> Vec<String> {
+        self.diagnostics
+            .iter()
+            .map(|diagnostic| {
+                let mut line = diagnostic.problem(target, self.revision).render();
+                if diagnostic.unmapped {
+                    line.push_str(" (unmapped)");
+                }
+                line
+            })
+            .collect()
     }
 }
 
@@ -204,6 +348,7 @@ fn offset_of(text: &str, line: u32, column: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{Span, locate, parse, parse_line};
+    use crate::app::quality::{Center, Filter, Severity, Source};
     use crate::contracts::identity::NodeId;
     use crate::contracts::revision::{GeneratorVersion, Revision};
     use crate::contracts::source_map::{SourceMap, SourceSpan};
@@ -268,5 +413,104 @@ mod tests {
         let map = SourceMap::new(GeneratorVersion::CURRENT, Revision::INITIAL);
         let message = parse_line(ERROR_LINE).expect("a message");
         assert_eq!(locate(&message, source, &map), None);
+    }
+
+    #[test]
+    fn a_mapped_span_becomes_the_right_node_in_a_build_problem() {
+        let source = "line one\nline two\npub fn x() { let a = 1; }\n";
+        let mut map = SourceMap::new(GeneratorVersion::CURRENT, Revision::from_raw(3));
+        map.insert(
+            NodeId::from_raw(9),
+            SourceSpan::new("src/main.rs", 18, source.len() as u32).unwrap(),
+        );
+        let batch = parse(ERROR_LINE, Revision::from_raw(3));
+        let report = batch.place(&map, |file| {
+            (file == "src/main.rs").then(|| source.to_owned())
+        });
+
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].node, Some(NodeId::from_raw(9)));
+        assert!(!report.diagnostics[0].unmapped);
+        assert_eq!(report.unmapped(), 0);
+
+        let problems = report.problems("aarch64-apple-darwin");
+        let problem = &problems[0];
+        assert_eq!(problem.source, Source::Build);
+        assert_eq!(problem.target, "aarch64-apple-darwin");
+        assert_eq!(problem.revision, 3);
+        assert_eq!(problem.node, Some(9));
+        assert_eq!(problem.location.as_deref(), Some("src/main.rs:3:5"));
+        assert_eq!(problem.severity, Severity::Error);
+        assert!(problem.message.contains("E0308"));
+        assert!(!report.render("host")[0].contains("(unmapped)"));
+    }
+
+    #[test]
+    fn an_unmapped_diagnostic_keeps_its_position_and_is_still_reported() {
+        let source = "line one\nline two\npub fn x() {}\n";
+        let map = SourceMap::new(GeneratorVersion::CURRENT, Revision::INITIAL);
+        let batch = parse(ERROR_LINE, Revision::INITIAL);
+        let report = batch.place(&map, |_| Some(source.to_owned()));
+
+        assert_eq!(report.diagnostics[0].node, None);
+        assert!(report.diagnostics[0].unmapped);
+        assert_eq!(report.unmapped(), 1);
+        assert_eq!(report.errors(), 1);
+
+        let problems = report.problems("host");
+        assert_eq!(problems[0].node, None);
+        assert_eq!(problems[0].location.as_deref(), Some("src/main.rs:3:5"));
+        assert_eq!(
+            Center::navigate(&problems[0]).as_deref(),
+            Some("src/main.rs:3:5")
+        );
+
+        let rendered = report.render("host");
+        assert!(rendered[0].contains("src/main.rs:3:5"));
+        assert!(rendered[0].contains("(unmapped)"));
+    }
+
+    #[test]
+    fn the_problem_centre_dedupes_a_diagnostic_reported_twice() {
+        let output = format!("{ERROR_LINE}\n{ERROR_LINE}");
+        let batch = parse(&output, Revision::from_raw(7));
+        let map = SourceMap::new(GeneratorVersion::CURRENT, Revision::from_raw(7));
+        let report = batch.place(&map, |_| None);
+        assert_eq!(report.diagnostics.len(), 2);
+
+        let mut center = Center::new();
+        report.record(&mut center, "desktop");
+
+        assert_eq!(center.matching(&Filter::default()).len(), 1);
+        assert_eq!(center.render(&Filter::default()).len(), 1);
+    }
+
+    #[test]
+    fn noise_between_valid_messages_is_kept_as_output_without_dropping_the_messages() {
+        let output = format!(
+            "Compiling demo v0.1.0\n{ERROR_LINE}\n{{\"reason\":\"build-finished\",\"success\":false}}\nnot json\n{ERROR_LINE}"
+        );
+        let batch = parse(&output, Revision::INITIAL);
+
+        assert_eq!(batch.messages.len(), 2);
+        assert_eq!(batch.errors(), 2);
+        assert_eq!(batch.raw.len(), 3);
+        assert!(batch.raw.contains(&"not json".to_owned()));
+        assert!(batch.raw.iter().any(|line| line.contains("build-finished")));
+    }
+
+    #[test]
+    fn a_map_from_another_revision_does_not_invent_a_node() {
+        let source = "line one\nline two\npub fn x() { let a = 1; }\n";
+        let mut map = SourceMap::new(GeneratorVersion::CURRENT, Revision::from_raw(2));
+        map.insert(
+            NodeId::from_raw(4),
+            SourceSpan::new("src/main.rs", 18, source.len() as u32).unwrap(),
+        );
+        let batch = parse(ERROR_LINE, Revision::from_raw(3));
+        let report = batch.place(&map, |_| Some(source.to_owned()));
+
+        assert_eq!(report.diagnostics[0].node, None);
+        assert!(report.diagnostics[0].unmapped);
     }
 }

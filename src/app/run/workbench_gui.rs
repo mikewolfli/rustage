@@ -422,6 +422,11 @@ fn refresh_inspector(gui: &mut Gui) {
         .kind(gui.property.node())
         .map(|kind| kind.name())
         .unwrap_or("?");
+    let contract = gui
+        .property
+        .control()
+        .map(|control| format!("{control}.{}", gui.property.name().as_str()))
+        .unwrap_or_else(|| "(no contract)".to_owned());
     let nodes = if gui.property.count() > 1 {
         format!("{} nodes", gui.property.count())
     } else {
@@ -429,7 +434,7 @@ fn refresh_inspector(gui: &mut Gui) {
     };
     let items = [
         format!("node: {nodes}"),
-        format!("kind: {kind}"),
+        format!("kind: {kind} · {contract}"),
         format!(
             "{}: {}",
             gui.property.name().as_str(),
@@ -446,6 +451,27 @@ fn refresh_inspector(gui: &mut Gui) {
     rust_widgets::list_box_clear_items(gui.inspector_list);
     for item in &items {
         let _ = rust_widgets::list_box_add_item(gui.inspector_list, item);
+    }
+    // Contract facts are reported instead of hidden behind one node's schema: an unavailable
+    // schema refuses edits, and a selection whose properties disagree is not agreement.
+    if gui.property_error != 0 {
+        let note = gui
+            .property
+            .schema_unavailable()
+            .map(|reason| format!("schema unavailable: {reason}"))
+            .or_else(|| {
+                gui.property
+                    .incompatible()
+                    .map(|reason| format!("contracts differ: {reason}"))
+            })
+            .or_else(|| {
+                gui.property
+                    .contract_note()
+                    .map(|note| format!("contracts: {note}"))
+            });
+        if let Some(note) = note {
+            rust_widgets::set_widget_text(gui.property_error, &note);
+        }
     }
     rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
     rust_widgets::set_widget_placeholder(
@@ -469,8 +495,22 @@ fn refresh_inspector(gui: &mut Gui) {
     crate::host::log::emit(
         crate::host::log::Level::Info,
         "app::run::workbench-property",
-        &format!("inspector rows: {}", items[2]),
+        &format!("inspector rows: {} [contract {contract}]", items[2]),
     );
+    if let Some(note) = gui.property.contract_note() {
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-property",
+            &format!("inspector contracts: {note}"),
+        );
+    }
+    if let Some(reason) = gui.property.incompatible() {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::workbench-property",
+            &format!("inspector refuses one shared property: {reason}"),
+        );
+    }
 }
 
 /// The event the Events rows currently select.
@@ -593,16 +633,21 @@ fn apply_property(gui: &mut Gui) {
     match gui.property.apply(&text) {
         Ok(revision) => {
             let nodes = gui.property.nodes().to_vec();
-            // The property is the tree's own name, so an accepted edit renames every selected
-            // node and both views (Outline and the canvas) show the same fact.
-            let mut renamed = Vec::new();
+            // Only a `title` contract is the tree's structural name. A button/label's `text` is
+            // stored by the schema editor and must not rename the node in the Outline or canvas.
+            let renames = gui.property.edits_node_name();
+            let mut applied = Vec::new();
             for node in &nodes {
-                match gui.scene.rename(*node, &text) {
-                    Ok(()) => renamed.push(node.get().to_string()),
-                    Err(reason) => renamed.push(format!("{} refused: {reason}", node.get())),
+                if renames {
+                    match gui.scene.rename(*node, &text) {
+                        Ok(()) => applied.push(node.get().to_string()),
+                        Err(reason) => applied.push(format!("{} refused: {reason}", node.get())),
+                    }
+                } else {
+                    applied.push(node.get().to_string());
                 }
             }
-            let nodes_text = renamed.join(", ");
+            let nodes_text = applied.join(", ");
             rust_widgets::set_widget_text(gui.property_error, "");
             refresh_inspector(gui);
             sync_outline(gui);
@@ -619,11 +664,22 @@ fn apply_property(gui: &mut Gui) {
                     gui.property.name().as_str()
                 ),
             );
-            crate::host::log::emit(
-                crate::host::log::Level::Info,
-                "app::run::workbench-scene",
-                &format!("renamed node(s) {nodes_text} to {text:?}"),
-            );
+            if renames {
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("renamed node(s) {nodes_text} to {text:?}"),
+                );
+            } else {
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-property",
+                    &format!(
+                        "stored {} = {text:?} on node(s) {nodes_text}; the tree name is unchanged",
+                        gui.property.name().as_str()
+                    ),
+                );
+            }
         }
         Err(reason) => {
             let reason = gui.property.problem().map(str::to_owned).unwrap_or(reason);
@@ -804,7 +860,20 @@ fn select_node(gui: &mut Gui, node: NodeId, source: &str) {
     match gui.scene.select_only(node) {
         Ok(()) => {
             let name = gui.scene.name(node).unwrap_or("?").to_owned();
-            gui.property.retarget(node, &name);
+            // The contract is the scene's stored mapping, never a lookup by display name. A node
+            // with no mapping is reported and the Inspector is left unable to guess a schema.
+            let outcome = match gui.scene.contract(node) {
+                Ok(contract) => gui.property.retarget_control(
+                    node,
+                    &contract.control,
+                    &contract.property,
+                    &name,
+                ),
+                Err(reason) => {
+                    gui.property.report_unavailable(node, &name, reason.clone());
+                    Err(reason)
+                }
+            };
             gui.message = format!("selected node {} ({name})", node.get());
             rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
             rust_widgets::set_widget_text(gui.property_error, "");
@@ -812,6 +881,16 @@ fn select_node(gui: &mut Gui, node: NodeId, source: &str) {
             retarget_panels(gui);
             sync_canvas(gui);
             sync_outline(gui);
+            if let Err(reason) = outcome {
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-property",
+                    &format!(
+                        "inspector contract refused for node {}: {reason}",
+                        node.get()
+                    ),
+                );
+            }
             crate::host::log::emit(
                 crate::host::log::Level::Info,
                 "app::run::workbench-scene",
@@ -848,20 +927,33 @@ fn marquee_select(gui: &mut Gui, rect: SceneRect) {
         .collect();
     gui.message = format!("marquee selected {count} node(s)");
     if !gui.scene.selected().is_empty() {
-        let names: Vec<(NodeId, String)> = gui
-            .scene
-            .selected()
+        let selected = gui.scene.selected().to_vec();
+        let mut entries = Vec::new();
+        let mut problems = Vec::new();
+        for node in &selected {
+            let Some(name) = gui.scene.name(*node) else {
+                continue;
+            };
+            match gui.scene.contract(*node) {
+                Ok(contract) => entries.push((*node, contract, name.to_owned())),
+                Err(reason) => problems.push(reason),
+            }
+        }
+        let refs: Vec<_> = entries
             .iter()
-            .filter_map(|node| gui.scene.name(*node).map(|name| (*node, name.to_owned())))
+            .map(|(node, contract, name)| (*node, contract.clone(), name.as_str()))
             .collect();
-        let refs: Vec<(NodeId, &str)> = names
-            .iter()
-            .map(|(node, name)| (*node, name.as_str()))
-            .collect();
-        gui.property.retarget_many(&refs);
+        gui.property.retarget_many_contracts(&refs, &problems);
         rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
         rust_widgets::set_widget_text(gui.property_error, "");
         refresh_inspector(gui);
+        if let Some(reason) = gui.property.incompatible() {
+            crate::host::log::emit(
+                crate::host::log::Level::Warn,
+                "app::run::workbench-property",
+                &format!("inspector cannot share one property across the marquee: {reason}"),
+            );
+        }
     }
     retarget_panels(gui);
     sync_canvas(gui);
@@ -1336,12 +1428,26 @@ pub(super) fn workbench_gui(
     }
 
     // The design scene starts with its panel selected, which is the node the Inspector's seed is
-    // about. Selecting through the model (not by writing the list) is what makes the first paint
-    // and the first click obey one rule.
+    // about. The Inspector reads the panel's contract (`panel.title`); selecting through the model
+    // (not by writing the list) is what makes the first paint and the first click obey one rule.
     let mut scene = CanvasState::demo();
-    let mut property = PropertyState::new("Demo");
+    let mut property = PropertyState::for_control("window", "title", "Demo");
     if let Some(initial) = scene.row_nodes().get(1).copied() {
-        property.retarget(initial, scene.name(initial).unwrap_or("Demo"));
+        let name = scene.name(initial).unwrap_or("Demo").to_owned();
+        match scene.contract(initial) {
+            Ok(contract) => {
+                if let Err(reason) =
+                    property.retarget_control(initial, &contract.control, &contract.property, &name)
+                {
+                    crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "app::run::workbench-property",
+                        &reason,
+                    );
+                }
+            }
+            Err(reason) => property.report_unavailable(initial, &name, reason),
+        }
         let _ = scene.select_only(initial);
     }
 
@@ -1898,10 +2004,13 @@ pub(super) fn workbench_gui(
                     // Reset is the T11.02 half the Clear button does not do: the explicit edit is
                     // taken away and each node returns to the structural name it started from.
                     let nodes = gui.property.nodes().to_vec();
+                    let renames = gui.property.edits_node_name();
                     let (count, lines) = gui.property.reset();
-                    for node in &nodes {
-                        if let Some(value) = gui.property.value_for(*node) {
-                            let _ = gui.scene.rename(*node, &value);
+                    if renames {
+                        for node in &nodes {
+                            if let Some(value) = gui.property.value_for(*node) {
+                                let _ = gui.scene.rename(*node, &value);
+                            }
                         }
                     }
                     rust_widgets::set_widget_text(gui.property_error, &lines.join(" | "));
@@ -2724,7 +2833,7 @@ pub(super) fn workbench_gui(
             {
                 let context = palette_context();
                 palette_with(&mut gui, |palette, registry, recents| {
-                    palette.set_query(&text, registry, &context, recents);
+                    palette.set_query(text, registry, &context, recents);
                 });
                 sync_palette(&mut gui);
                 crate::host::log::emit(

@@ -3,9 +3,12 @@
 
 //! The `--release` command: freeze, artifacts, SBOM, updates and maintenance (task F25).
 
+use std::path::Path;
+
 use crate::app::release::{
-    Artifact, Channel, Component, Freeze, Maintenance, Sbom, Signature, Update,
+    Artifact, Channel, Component, Freeze, Maintenance, Repository, Sbom, Signature, Update,
 };
+use crate::contracts::revision::FormatVersion;
 
 /// Runs the release operations, printing each answer as it is read.
 pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
@@ -48,10 +51,56 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                 freeze.support_matrix = argument.to_owned();
                 Ok(vec![format!("support matrix {argument}")])
             }
-            "freeze-check" => match freeze.validate() {
-                Ok(()) => Ok(vec!["freeze complete".to_owned()]),
-                Err(reason) => Err(reason),
+            "support-digest" => {
+                freeze.support_matrix_digest = argument.to_owned();
+                Ok(vec![format!("support matrix digest {argument}")])
+            }
+            "package" => {
+                freeze.package_version = argument.to_owned();
+                Ok(vec![format!("package {argument}")])
+            }
+            "widget-revision" => {
+                freeze.widget_revision = argument.to_owned();
+                Ok(vec![format!("rust_widgets revision {argument}")])
+            }
+            "document-format" => match argument.parse::<u32>() {
+                Ok(value) => {
+                    freeze.document_format = FormatVersion::from_raw(value);
+                    Ok(vec![format!("document format v{value}")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a document format version")),
             },
+            "protocol" => match argument.parse::<u32>() {
+                Ok(value) => {
+                    freeze.protocol_version = value;
+                    Ok(vec![format!("protocol {value}")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a protocol version")),
+            },
+            "freeze-check" => {
+                let root = if argument.is_empty() { "." } else { argument };
+                match Repository::read(Path::new(root)) {
+                    Ok(repository) => {
+                        let report = freeze.verify_against(&repository);
+                        for line in report.render() {
+                            println!("{line}");
+                        }
+                        if report.passed() {
+                            Ok(vec![format!(
+                                "freeze verified: {} verified, {} blocked, 0 failed",
+                                report.verified.len(),
+                                report.blocked.len()
+                            )])
+                        } else {
+                            return super::report(format!(
+                                "freeze check failed: {} item(s) do not match the repository",
+                                report.failed.len()
+                            ));
+                        }
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
             "artifact" => {
                 let parts: Vec<&str> = argument.splitn(4, ':').collect();
                 match parts.as_slice() {

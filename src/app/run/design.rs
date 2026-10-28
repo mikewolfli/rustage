@@ -9,101 +9,140 @@
 use super::*;
 
 /// Shows the widget catalog (task T09.01).
+///
+/// The catalog is captured from the pinned library contract, not from the command line: every name
+/// is one the factory registers, and each control's properties and events are the library's own
+/// designer manifest. The operations below query or annotate that capture — none of them can create
+/// a control, because a palette entry that no contract describes would be exactly the invented
+/// entry this task removes.
 pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
-    use crate::app::canvas::widget_catalog::{Catalog, WidgetDescriptor};
+    use crate::app::canvas::widget_catalog::Catalog;
+    use rust_widgets::widget::WidgetFactory;
 
-    let mut descriptors: Vec<WidgetDescriptor> = Vec::new();
-    let mut favorites: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let profile = contract_profile(&options.ops);
+    let mut catalog = match Catalog::from_contract(WidgetFactory::shared(), &profile) {
+        Ok(catalog) => catalog,
+        Err(refusal) => return report(refusal.message()),
+    };
+
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
-            "widget" => match parse_widget(argument) {
-                Some((id, name, category)) => {
-                    descriptors.push(WidgetDescriptor::new(id, name, category));
-                    Ok(vec![format!(
-                        "widget: {} ({})",
-                        descriptors.last().expect("just pushed").name,
-                        descriptors.last().expect("just pushed").category
-                    )])
+            // `widget:` no longer defines a control. It names one the contract already describes,
+            // so an unknown id is refused instead of becoming a palette entry. The optional
+            // `<name>` tail, when given, must agree with the contract.
+            "widget" => {
+                let (id, claimed) = match parse_widget(argument) {
+                    Some((id, name, _category)) => (id, Some(name)),
+                    None => (argument.to_owned(), None),
+                };
+                match catalog.get(&id) {
+                    Some(descriptor) => match claimed {
+                        // The contract's canonical name and its kind spelling are both names it
+                        // publishes; anything else in the old `<name>` slot is a claim it did not
+                        // make, and the catalog refuses to repeat it.
+                        Some(name) if name != descriptor.name && name != descriptor.category => {
+                            Err(format!(
+                                "the contract names {id:?} {:?} (kind {:?}), not {name:?}",
+                                descriptor.name, descriptor.category
+                            ))
+                        }
+                        _ => Ok(vec![format!(
+                            "widget: {} ({})",
+                            descriptor.name, descriptor.category
+                        )]),
+                    },
+                    None => Err(format!(
+                        "{id:?} is not a contract name; the catalog is captured from the library, not from arguments"
+                    )),
                 }
-                None => Err(format!("{argument:?} is not <id>:<name>:<category>")),
-            },
-            "unsupported" => match argument.split_once(':') {
-                Some((id, reason)) => match descriptors.iter_mut().find(|d| d.id == id) {
-                    Some(descriptor) => {
-                        *descriptor = descriptor.clone().unsupported(unescape(reason));
-                        Ok(vec![format!("unsupported: {id}")])
-                    }
-                    None => Err(format!("no widget {id:?}")),
-                },
-                None => Err(format!("{argument:?} is not <id>:<reason>")),
-            },
+            }
+            // `property:` no longer adds a property. It checks a claimed property against the
+            // contract's own schema, so a caller can confirm a declaration without inventing one.
             "property" => match parse_property(argument) {
-                Ok((id, property)) => match descriptors.iter_mut().find(|d| d.id == id) {
+                Ok((id, claimed)) => match catalog.get(&id) {
                     Some(descriptor) => {
-                        let line = property.render();
-                        descriptor.properties.push(property);
-                        Ok(vec![format!("property: {id} {line}")])
+                        match descriptor
+                            .properties
+                            .iter()
+                            .find(|property| property.name == claimed.name)
+                        {
+                            Some(actual) if actual.value_type == claimed.value_type => {
+                                Ok(vec![format!("property: {id} {}", actual.render())])
+                            }
+                            Some(actual) => Err(format!(
+                                "the contract declares {}: {}, not {}",
+                                actual.name,
+                                actual.value_type.name(),
+                                claimed.value_type.name()
+                            )),
+                            None => Err(format!(
+                                "the contract declares no property {:?} on {id:?}",
+                                claimed.name
+                            )),
+                        }
                     }
-                    None => Err(format!("no widget {id:?}")),
+                    None => Err(format!("no contract control {id:?}")),
                 },
                 Err(reason) => Err(reason),
             },
+            "profile" | "show" => Ok(Vec::new()),
             "limit" => match argument.split_once(':') {
-                Some((id, note)) => match descriptors.iter_mut().find(|d| d.id == id) {
-                    Some(descriptor) => {
-                        descriptor.limits.push(unescape(note));
+                Some((id, note)) => {
+                    if catalog.annotate(id, unescape(note)) {
                         Ok(vec![format!("limit: {id}")])
+                    } else {
+                        Err(format!("no contract control {id:?}"))
                     }
-                    None => Err(format!("no widget {id:?}")),
-                },
+                }
                 None => Err(format!("{argument:?} is not <id>:<note>")),
             },
             "search" => {
-                let catalog = Catalog::of(descriptors.clone());
                 let hits = catalog.search(argument);
                 let mut notes = vec![format!("search {argument:?}: {} hit(s)", hits.len())];
                 notes.extend(hits.iter().map(|hit| format!("  {}", hit.render())));
                 Ok(notes)
             }
             "category" => {
-                let catalog = Catalog::of(descriptors.clone());
                 let hits = catalog.in_category(argument);
                 let mut notes = vec![format!("category {argument}: {} kind(s)", hits.len())];
                 notes.extend(hits.iter().map(|hit| format!("  {}", hit.render())));
                 Ok(notes)
             }
             "favorite" | "unfavorite" => {
-                if verb == "favorite" {
-                    favorites.insert(argument.to_owned());
-                } else {
-                    favorites.remove(argument);
-                }
+                catalog.favorite(argument, verb == "favorite");
                 Ok(vec![format!("{verb}: {argument}")])
             }
-            "schema" => {
-                let catalog = Catalog::of(descriptors.clone());
-                match catalog.schema(argument) {
-                    Some(schema) => {
-                        let mut notes = vec![format!("schema {argument}:")];
-                        notes.extend(
-                            schema
-                                .iter()
-                                .map(|property| format!("  {}", property.render())),
-                        );
-                        for note in catalog
-                            .get(argument)
-                            .map(|d| d.limits.clone())
-                            .unwrap_or_default()
-                        {
-                            notes.push(format!("  limit: {note}"));
-                        }
-                        Ok(notes)
+            "schema" => match catalog.get(argument) {
+                Some(descriptor) => {
+                    let mut notes = vec![format!("schema {argument}:")];
+                    notes.extend(
+                        descriptor
+                            .properties
+                            .iter()
+                            .map(|property| format!("  {}", property.render())),
+                    );
+                    notes.extend(
+                        descriptor
+                            .events
+                            .iter()
+                            .map(|event| format!("  event {}", event.render())),
+                    );
+                    if let Some(reason) = descriptor.support.reason() {
+                        notes.push(format!("  support: {reason}"));
                     }
-                    None => Err(format!("no widget {argument:?}")),
+                    for note in &descriptor.limits {
+                        notes.push(format!("  limit: {note}"));
+                    }
+                    Ok(notes)
                 }
-            }
-            "show" => Ok(Vec::new()),
+                None => Err(format!("no contract control {argument:?}")),
+            },
+            // This operation asserted support the CLI invented. Support is the library's answer
+            // now, so it is refused rather than silently ignored.
+            "unsupported" => Err(format!(
+                "{verb:?} is not a catalog operation: support comes from the library's availability probe"
+            )),
             other => Err(format!("{other:?} is not a catalog operation")),
         };
         match step {
@@ -115,10 +154,7 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
             Err(reason) => return report(reason),
         }
     }
-    let mut catalog = Catalog::of(descriptors);
-    for id in &favorites {
-        catalog.favorite(id, true);
-    }
+
     for line in catalog.render() {
         println!("{line}");
     }
@@ -130,7 +166,51 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
             catalog.reason(&descriptor.id).unwrap_or("")
         );
     }
+    println!("caveats:");
+    for descriptor in catalog.caveats() {
+        println!(
+            "  {}: {}",
+            descriptor.id,
+            catalog.reason(&descriptor.id).unwrap_or("")
+        );
+    }
     true
+}
+
+/// The profile a catalog is captured for.
+///
+/// `profile:<name>` names it; otherwise the profile the library itself was built for is the only
+/// honest default, because that is the profile its constructor answers describe.
+fn contract_profile(ops: &[String]) -> String {
+    ops.iter()
+        .find_map(|op| op.strip_prefix("profile:"))
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or_else(|| rust_widgets::widget::capability::TargetSpec::current().profile)
+        .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contract_profile;
+
+    #[test]
+    fn the_catalog_profile_defaults_to_the_library_build_and_can_be_named() {
+        // With no instruction, the only conclusive profile is the one the library was built for.
+        assert_eq!(
+            contract_profile(&[]),
+            rust_widgets::widget::capability::TargetSpec::current().profile
+        );
+        // A named profile is the target, and an empty name is not a profile.
+        assert_eq!(contract_profile(&["profile:mini".to_owned()]), "mini");
+        assert_eq!(
+            contract_profile(&["show".to_owned(), "profile:mobile".to_owned()]),
+            "mobile"
+        );
+        assert_eq!(
+            contract_profile(&["profile:".to_owned()]),
+            rust_widgets::widget::capability::TargetSpec::current().profile
+        );
+    }
 }
 
 /// Drives the design scene: instances, hit tests and selection (task T09.02).

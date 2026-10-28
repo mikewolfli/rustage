@@ -21,6 +21,10 @@
 //!   the version before the change, so they are applied from the highest offset down (the same shape
 //!   as [`TextStore::edit_many`](crate::project::text::piece_table::TextStore::edit_many)), and an overlap is
 //!   refused whole.
+//! * **A typed operation returns the notification to send.** [`Operation`] and [`Notification`] keep
+//!   the version rule in one place: [`Sync::apply`] opens at 1, increments on every full or
+//!   incremental change, and leaves the version alone for a save. The transport turns the returned
+//!   notification into `textDocument/*` JSON without deciding any version itself.
 //!
 //! **Boundary.** The document text is held as one string here; the piece table of
 //! [T06.01](crate::project::text::piece_table) is the buffer the editor edits, and this module is the *protocol*
@@ -96,11 +100,140 @@ impl Change {
     }
 }
 
+/// A change as the protocol describes it: the whole text, or the ranges that changed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DocumentChange {
+    /// Replace the whole document (a full synchronisation).
+    Full {
+        /// The new text.
+        text: String,
+    },
+    /// Replace the listed ranges (an incremental synchronisation).
+    Incremental {
+        /// The edits, all resolved against the version before them.
+        changes: Vec<Change>,
+    },
+}
+
+impl DocumentChange {
+    /// Whether this change is sent as ranges rather than as the whole text.
+    pub fn is_incremental(&self) -> bool {
+        matches!(self, Self::Incremental { .. })
+    }
+}
+
+/// A typed `textDocument/*` notification the transport must send.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Notification {
+    /// `textDocument/didOpen` with the language id, version and text.
+    Open {
+        /// The document's uri.
+        uri: String,
+        /// The language id the server should analyse it as.
+        language_id: String,
+        /// The version the document opens at.
+        version: u64,
+        /// The whole text.
+        text: String,
+    },
+    /// `textDocument/didChange` with the version *after* the change.
+    Change {
+        /// The document's uri.
+        uri: String,
+        /// The version after the change.
+        version: u64,
+        /// The full or incremental content.
+        change: DocumentChange,
+    },
+    /// `textDocument/didSave` with the saved text.
+    Save {
+        /// The document's uri.
+        uri: String,
+        /// The version the save was made at.
+        version: u64,
+        /// The text that was saved.
+        text: String,
+    },
+    /// `textDocument/didClose`.
+    Close {
+        /// The document's uri.
+        uri: String,
+    },
+}
+
+impl Notification {
+    /// The method this notification is sent as.
+    pub fn method(&self) -> &'static str {
+        match self {
+            Self::Open { .. } => "textDocument/didOpen",
+            Self::Change { .. } => "textDocument/didChange",
+            Self::Save { .. } => "textDocument/didSave",
+            Self::Close { .. } => "textDocument/didClose",
+        }
+    }
+
+    /// The document the notification concerns.
+    pub fn uri(&self) -> &str {
+        match self {
+            Self::Open { uri, .. }
+            | Self::Change { uri, .. }
+            | Self::Save { uri, .. }
+            | Self::Close { uri } => uri,
+        }
+    }
+
+    /// The document version after the operation, when the notification carries one.
+    pub fn version(&self) -> Option<u64> {
+        match self {
+            Self::Open { version, .. }
+            | Self::Change { version, .. }
+            | Self::Save { version, .. } => Some(*version),
+            Self::Close { .. } => None,
+        }
+    }
+}
+
+/// One typed document-synchronisation operation.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Operation {
+    /// Open a document at version 1.
+    Open {
+        /// The document's uri.
+        uri: String,
+        /// The language id the server should analyse it as.
+        language_id: String,
+        /// The whole text.
+        text: String,
+    },
+    /// Change an open document. The version is the model's, so it cannot go backwards.
+    Change {
+        /// The document's uri.
+        uri: String,
+        /// The full or incremental content.
+        change: DocumentChange,
+    },
+    /// Record a save of an open document.
+    Save {
+        /// The document's uri.
+        uri: String,
+    },
+    /// Close an open document.
+    Close {
+        /// The document's uri.
+        uri: String,
+    },
+}
+
 /// Why a synchronisation operation was refused.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SyncError {
     /// The document is not open.
     NotOpen {
+        /// The document's uri.
+        uri: String,
+    },
+    /// The document is already open, so a second `didOpen` would be a protocol error.
+    AlreadyOpen {
         /// The document's uri.
         uri: String,
     },
@@ -130,6 +263,7 @@ impl SyncError {
     pub fn message(&self) -> String {
         match self {
             Self::NotOpen { uri } => format!("{uri} is not open"),
+            Self::AlreadyOpen { uri } => format!("{uri} is already open"),
             Self::StaleVersion {
                 uri,
                 named,
@@ -147,6 +281,7 @@ impl SyncError {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Document {
     uri: String,
+    language_id: String,
     text: String,
     version: u64,
     dirty: bool,
@@ -156,6 +291,11 @@ impl Document {
     /// The uri.
     pub fn uri(&self) -> &str {
         &self.uri
+    }
+
+    /// The language id the document was opened with.
+    pub fn language_id(&self) -> &str {
+        &self.language_id
     }
 
     /// The text.
@@ -249,19 +389,30 @@ impl Sync {
         Self::default()
     }
 
-    /// Opens a document at version 1.
-    pub fn open(&mut self, uri: impl Into<String>, text: impl Into<String>) -> u64 {
+    /// Opens a document at version 1 with the language id the editor would send.
+    pub fn open_with(
+        &mut self,
+        uri: impl Into<String>,
+        language_id: impl Into<String>,
+        text: impl Into<String>,
+    ) -> u64 {
         let uri = uri.into();
         self.documents.insert(
             uri.clone(),
             Document {
                 uri,
+                language_id: language_id.into(),
                 text: text.into(),
                 version: 1,
                 dirty: false,
             },
         );
         1
+    }
+
+    /// Opens a document at version 1.
+    pub fn open(&mut self, uri: impl Into<String>, text: impl Into<String>) -> u64 {
+        self.open_with(uri, "plaintext", text)
     }
 
     /// A document, when it is open.
@@ -356,6 +507,72 @@ impl Sync {
         Ok(document.version)
     }
 
+    /// Applies a typed operation to the model and returns the notification the transport sends.
+    ///
+    /// The version rule lives here rather than in each caller: `open` starts at 1, every change is
+    /// applied to the current version and increments it, and save/close leave it alone. A duplicate
+    /// open and a close of a document that is not open are refusals with no notification.
+    pub fn apply(&mut self, operation: Operation) -> Result<Notification, SyncError> {
+        match operation {
+            Operation::Open {
+                uri,
+                language_id,
+                text,
+            } => {
+                if self.documents.contains_key(&uri) {
+                    return Err(SyncError::AlreadyOpen { uri });
+                }
+                self.documents.insert(
+                    uri.clone(),
+                    Document {
+                        uri: uri.clone(),
+                        language_id: language_id.clone(),
+                        text: text.clone(),
+                        version: 1,
+                        dirty: false,
+                    },
+                );
+                Ok(Notification::Open {
+                    uri,
+                    language_id,
+                    version: 1,
+                    text,
+                })
+            }
+            Operation::Change { uri, change } => {
+                let current = self
+                    .documents
+                    .get(&uri)
+                    .ok_or_else(|| SyncError::NotOpen { uri: uri.clone() })?
+                    .version;
+                let version = match &change {
+                    DocumentChange::Full { text } => self.replace(&uri, text.clone())?,
+                    DocumentChange::Incremental { changes } => {
+                        self.change(&uri, current, changes)?
+                    }
+                };
+                Ok(Notification::Change {
+                    uri,
+                    version,
+                    change,
+                })
+            }
+            Operation::Save { uri } => {
+                let version = self.save(&uri)?;
+                let text = self
+                    .documents
+                    .get(&uri)
+                    .map(|document| document.text.clone())
+                    .unwrap_or_default();
+                Ok(Notification::Save { uri, version, text })
+            }
+            Operation::Close { uri } => {
+                self.close(&uri)?;
+                Ok(Notification::Close { uri })
+            }
+        }
+    }
+
     /// Closes a document, releasing it.
     pub fn close(&mut self, uri: &str) -> Result<(), SyncError> {
         if self.documents.remove(uri).is_some() {
@@ -393,7 +610,10 @@ fn boundary(text: &str, offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Position, Range, Sync, SyncError, to_offset, to_units};
+    use super::{
+        Change, DocumentChange, Notification, Operation, Position, Range, Sync, SyncError,
+        to_offset, to_units,
+    };
 
     #[test]
     fn chinese_and_emoji_are_counted_in_utf16_units() {
@@ -533,5 +753,155 @@ mod tests {
                 uri: "file:///a.rs".to_owned()
             })
         );
+    }
+
+    #[test]
+    fn typed_operations_emit_one_notification_and_increment_the_version_per_edit() {
+        let mut sync = Sync::new();
+        let opened = sync
+            .apply(Operation::Open {
+                uri: "file:///a.rs".to_owned(),
+                language_id: "rust".to_owned(),
+                text: "one\n".to_owned(),
+            })
+            .expect("an open");
+        match &opened {
+            Notification::Open {
+                uri,
+                language_id,
+                version,
+                text,
+            } => {
+                assert_eq!(uri, "file:///a.rs");
+                assert_eq!(language_id, "rust");
+                assert_eq!(*version, 1);
+                assert_eq!(text, "one\n");
+            }
+            other => panic!("expected didOpen, got {other:?}"),
+        }
+
+        let changed = sync
+            .apply(Operation::Change {
+                uri: "file:///a.rs".to_owned(),
+                change: DocumentChange::Incremental {
+                    changes: vec![Change::new(
+                        Range::new(Position::new(0, 0), Position::new(0, 0)),
+                        "x",
+                    )],
+                },
+            })
+            .expect("a change");
+        assert_eq!(changed.version(), Some(2));
+        assert!(matches!(
+            changed,
+            Notification::Change {
+                version: 2,
+                change: DocumentChange::Incremental { .. },
+                ..
+            }
+        ));
+
+        let replaced = sync
+            .apply(Operation::Change {
+                uri: "file:///a.rs".to_owned(),
+                change: DocumentChange::Full {
+                    text: "two\n".to_owned(),
+                },
+            })
+            .expect("a full change");
+        assert_eq!(replaced.version(), Some(3));
+        assert!(matches!(
+            replaced,
+            Notification::Change {
+                version: 3,
+                change: DocumentChange::Full { .. },
+                ..
+            }
+        ));
+        assert_eq!(sync.document("file:///a.rs").expect("open").text(), "two\n");
+
+        let saved = sync
+            .apply(Operation::Save {
+                uri: "file:///a.rs".to_owned(),
+            })
+            .expect("a save");
+        assert_eq!(saved.version(), Some(3));
+        assert!(matches!(saved, Notification::Save { .. }));
+
+        let closed = sync
+            .apply(Operation::Close {
+                uri: "file:///a.rs".to_owned(),
+            })
+            .expect("a close");
+        assert!(matches!(closed, Notification::Close { .. }));
+        // A second close is a refusal and emits nothing.
+        assert_eq!(
+            sync.apply(Operation::Close {
+                uri: "file:///a.rs".to_owned(),
+            }),
+            Err(SyncError::NotOpen {
+                uri: "file:///a.rs".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_duplicate_open_is_refused_without_a_second_did_open() {
+        let mut sync = Sync::new();
+        sync.apply(Operation::Open {
+            uri: "file:///a.rs".to_owned(),
+            language_id: "rust".to_owned(),
+            text: "one\n".to_owned(),
+        })
+        .expect("the first open");
+        assert_eq!(
+            sync.apply(Operation::Open {
+                uri: "file:///a.rs".to_owned(),
+                language_id: "rust".to_owned(),
+                text: "two\n".to_owned(),
+            }),
+            Err(SyncError::AlreadyOpen {
+                uri: "file:///a.rs".to_owned()
+            })
+        );
+        assert_eq!(sync.document("file:///a.rs").expect("open").text(), "one\n");
+    }
+
+    #[test]
+    fn a_typed_incremental_change_of_chinese_and_emoji_keeps_utf16_ranges() {
+        let mut sync = Sync::new();
+        sync.apply(Operation::Open {
+            uri: "file:///a.rs".to_owned(),
+            language_id: "rust".to_owned(),
+            text: "a🎉中\n".to_owned(),
+        })
+        .expect("an open");
+        // The emoji is UTF-16 units 1..3; replace it with one Chinese character (1 unit).
+        let changed = sync
+            .apply(Operation::Change {
+                uri: "file:///a.rs".to_owned(),
+                change: DocumentChange::Incremental {
+                    changes: vec![Change::new(
+                        Range::new(Position::new(0, 1), Position::new(0, 3)),
+                        "字",
+                    )],
+                },
+            })
+            .expect("a change");
+        assert!(matches!(
+            changed,
+            Notification::Change {
+                version: 2,
+                change: DocumentChange::Incremental { ref changes },
+                ..
+            } if changes[0].range == Range::new(Position::new(0, 1), Position::new(0, 3))
+        ));
+        assert_eq!(
+            sync.document("file:///a.rs").expect("open").text(),
+            "a字中\n"
+        );
+        // And the positions round-trip through the byte/UTF-16 conversion.
+        assert_eq!(to_units("a字中\n", 4), Position::new(0, 2));
+        assert_eq!(to_offset("a字中\n", Position::new(0, 2)), Some(4));
     }
 }

@@ -15,8 +15,18 @@
 //! * **Destructive commands are bounded.** Merge/rebase/cherry-pick report their conflict and name
 //!   the matching abort; nothing here pushes, force-updates a ref, deletes a worktree, or rewrites
 //!   public history.
+//! * **A conflict is three typed sides, not markers in a file.** [`Repository::conflicts`] asks
+//!   `git ls-files -u` which stages exist and reads each with `git show :1:path`, `:2:path` and
+//!   `:3:path`. The caller gets base/ours/theirs as values, so nothing has to parse conflict markers
+//!   and nothing is merged on the caller's behalf.
+//! * **Design and text conflicts resolve differently.** JSON/CSS (the design layer) need an explicit
+//!   resolved document and are never auto-merged; text conflicts keep all three sides and offer a
+//!   line/hunk selection. A text resolution of a generated file is refused when it would cross a
+//!   hand-written boundary, and no resolution is reported as complete until the caller's
+//!   regeneration step has passed.
 
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Why a directory is not a repository this module can drive.
@@ -104,6 +114,506 @@ impl Status {
     }
 }
 
+/// Which side of a three-way conflict an index stage holds.
+///
+/// The numbers are Git's own: `1` is the merge base, `2` is ours (the current branch) and `3` is
+/// theirs (the branch being merged in).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConflictStage {
+    /// The merge base (`:1:path`).
+    Base,
+    /// The current branch's side (`:2:path`).
+    Ours,
+    /// The side being merged in (`:3:path`).
+    Theirs,
+}
+
+impl ConflictStage {
+    /// Every stage, in Git's order.
+    pub const ALL: [Self; 3] = [Self::Base, Self::Ours, Self::Theirs];
+
+    /// The stage number Git's `:N:path` spelling uses.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::Base => 1,
+            Self::Ours => 2,
+            Self::Theirs => 3,
+        }
+    }
+
+    /// The stage's name, as a person reads it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Ours => "ours",
+            Self::Theirs => "theirs",
+        }
+    }
+
+    /// Reads the number `git ls-files -u` printed.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "1" => Some(Self::Base),
+            "2" => Some(Self::Ours),
+            "3" => Some(Self::Theirs),
+            _ => None,
+        }
+    }
+}
+
+/// How a conflicted path is resolved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConflictKind {
+    /// A JSON design/project document: needs an explicit resolved document.
+    Json,
+    /// A CSS document: needs an explicit resolved document.
+    Css,
+    /// Ordinary text (including Rust): line/hunk selection, with generated-zone protection.
+    Text,
+}
+
+impl ConflictKind {
+    /// The kind's name, as a person reads it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Css => "css",
+            Self::Text => "text",
+        }
+    }
+}
+
+/// The three sides of one conflicted path.
+///
+/// A side is absent when Git holds no stage for it: an add/add conflict has no base, and a
+/// delete/modify conflict has no `ours` or `theirs` text. `None` says that rather than pretending an
+/// empty file is the side.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Conflict {
+    /// The project-relative path.
+    pub path: String,
+    /// The merge base's bytes (`:1:path`).
+    pub base: Option<String>,
+    /// The current branch's bytes (`:2:path`).
+    pub ours: Option<String>,
+    /// The other branch's bytes (`:3:path`).
+    pub theirs: Option<String>,
+}
+
+impl Conflict {
+    /// How the path is classified from its extension.
+    pub fn kind(&self) -> ConflictKind {
+        if self.path.to_ascii_lowercase().ends_with(".json") {
+            ConflictKind::Json
+        } else if self.path.to_ascii_lowercase().ends_with(".css") {
+            ConflictKind::Css
+        } else {
+            ConflictKind::Text
+        }
+    }
+
+    /// The stages Git holds for this path, in stage order.
+    pub fn stages(&self) -> Vec<ConflictStage> {
+        let mut stages = Vec::new();
+        for stage in ConflictStage::ALL {
+            if self.text(stage).is_some() {
+                stages.push(stage);
+            }
+        }
+        stages
+    }
+
+    /// One side's bytes, when Git holds that stage.
+    pub fn text(&self, stage: ConflictStage) -> Option<&str> {
+        match stage {
+            ConflictStage::Base => self.base.as_deref(),
+            ConflictStage::Ours => self.ours.as_deref(),
+            ConflictStage::Theirs => self.theirs.as_deref(),
+        }
+    }
+
+    /// The conflict in one line.
+    pub fn render(&self) -> String {
+        let stages: Vec<&str> = self.stages().into_iter().map(ConflictStage::name).collect();
+        format!(
+            "{} ({}, stages {})",
+            self.path,
+            self.kind().name(),
+            stages.join("+")
+        )
+    }
+
+    /// The text view, requiring both `ours` and `theirs` and keeping every side whole.
+    pub fn text_conflict(&self) -> Result<TextConflict, String> {
+        let ours = self.ours.as_ref().ok_or_else(|| {
+            format!(
+                "{} has no ours side; it cannot be resolved as text",
+                self.path
+            )
+        })?;
+        let theirs = self.theirs.as_ref().ok_or_else(|| {
+            format!(
+                "{} has no theirs side; it cannot be resolved as text",
+                self.path
+            )
+        })?;
+        Ok(TextConflict::new(
+            self.path.clone(),
+            self.base.clone().unwrap_or_default(),
+            ours.clone(),
+            theirs.clone(),
+        ))
+    }
+
+    /// The structured design-layer diff, when the path is JSON or CSS.
+    ///
+    /// A side that cannot be parsed is reported as such rather than guessed at; text paths return
+    /// `None` and use [`TextConflict`] instead.
+    pub fn structured_diff(&self) -> Option<StructuredDiff> {
+        let format = match self.kind() {
+            ConflictKind::Json => StructuredFormat::Json,
+            ConflictKind::Css => StructuredFormat::Css,
+            ConflictKind::Text => return None,
+        };
+        let mut sides: [Option<Vec<StructuredEntry>>; 3] = [None, None, None];
+        let mut unparsed = Vec::new();
+        for (index, (stage, text)) in [
+            (ConflictStage::Base, &self.base),
+            (ConflictStage::Ours, &self.ours),
+            (ConflictStage::Theirs, &self.theirs),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(text) = text else { continue };
+            let parsed = match format {
+                StructuredFormat::Json => json_entries(text),
+                StructuredFormat::Css => css_entries(text),
+            };
+            match parsed {
+                Some(entries) => sides[index] = Some(entries),
+                None => unparsed.push(stage.name()),
+            }
+        }
+        if !unparsed.is_empty() {
+            return Some(StructuredDiff {
+                format,
+                rows: Vec::new(),
+                parsed: false,
+                note: Some(format!(
+                    "{} side(s) could not be parsed as {}; no structured rows are guessed",
+                    unparsed.join(", "),
+                    format.name()
+                )),
+            });
+        }
+        Some(compare_structured(format, &sides))
+    }
+}
+
+/// A design-layer format whose conflict can be compared by key rather than by line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StructuredFormat {
+    /// A JSON document.
+    Json,
+    /// A CSS document.
+    Css,
+}
+
+impl StructuredFormat {
+    /// The format's name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Json => "JSON",
+            Self::Css => "CSS",
+        }
+    }
+}
+
+/// One key a structured format holds, and the value each side gives it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StructuredRow {
+    /// The key: a JSON pointer-like path, or `selector|property` for CSS.
+    pub key: String,
+    /// The base side's value, when the key exists there.
+    pub base: Option<String>,
+    /// The ours side's value, when the key exists there.
+    pub ours: Option<String>,
+    /// The theirs side's value, when the key exists there.
+    pub theirs: Option<String>,
+}
+
+impl StructuredRow {
+    /// The row in one line.
+    pub fn render(&self) -> String {
+        format!(
+            "{}: base {:?}, ours {:?}, theirs {:?}",
+            self.key, self.base, self.ours, self.theirs
+        )
+    }
+}
+
+/// The three sides compared by key rather than by line.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StructuredDiff {
+    /// Which format was compared.
+    pub format: StructuredFormat,
+    /// Keys the sides do not all agree on.
+    pub rows: Vec<StructuredRow>,
+    /// Whether every present side parsed. When false `rows` is empty and `note` says why.
+    pub parsed: bool,
+    /// Why no rows were produced, when parsing failed.
+    pub note: Option<String>,
+}
+
+impl StructuredDiff {
+    /// The diff in one line per fact.
+    pub fn render(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "{} structured diff: {} differing key(s)",
+            self.format.name(),
+            self.rows.len()
+        )];
+        for row in &self.rows {
+            out.push(format!("  {}", row.render()));
+        }
+        if let Some(note) = &self.note {
+            out.push(format!("  note: {note}"));
+        }
+        out
+    }
+}
+
+/// One span the three sides disagree about, with each side's lines kept whole.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Hunk {
+    /// The base lines in this span (empty for an add/add conflict).
+    pub base: Vec<String>,
+    /// Ours lines in this span.
+    pub ours: Vec<String>,
+    /// Theirs lines in this span.
+    pub theirs: Vec<String>,
+}
+
+/// A line- or hunk-level selection for a text conflict.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum HunkChoice {
+    /// Take our side of the hunk.
+    Ours,
+    /// Take their side of the hunk.
+    Theirs,
+    /// Keep both sides, ours first.
+    Both,
+    /// Drop the hunk entirely.
+    Omit,
+    /// Take specific lines, by index into the hunk's `ours` and `theirs` lines.
+    Lines {
+        /// Ours line indexes, in the order they are emitted.
+        ours: Vec<usize>,
+        /// Theirs line indexes, in the order they are emitted.
+        theirs: Vec<usize>,
+    },
+}
+
+impl HunkChoice {
+    /// The choice's name, as a person reads it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Ours => "ours",
+            Self::Theirs => "theirs",
+            Self::Both => "both",
+            Self::Omit => "none",
+            Self::Lines { .. } => "lines",
+        }
+    }
+}
+
+/// One stretch of a text conflict: either all three sides agree, or they are a [`Hunk`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum TextSegment {
+    /// Bytes all three sides agree on; every resolution keeps them.
+    Same(Vec<String>),
+    /// Bytes the sides disagree about; the caller chooses.
+    Conflict(Hunk),
+}
+
+/// The three full sides of a text conflict and the hunks that differ.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TextConflict {
+    /// The project-relative path.
+    pub path: String,
+    /// The merge base, or empty when Git holds no base stage.
+    pub base: String,
+    /// Our whole side.
+    pub ours: String,
+    /// Their whole side.
+    pub theirs: String,
+    /// Agreeing spans and conflicting hunks, in file order.
+    pub segments: Vec<TextSegment>,
+}
+
+impl TextConflict {
+    /// Builds the hunk view from the three sides.
+    fn new(path: String, base: String, ours: String, theirs: String) -> Self {
+        let base_lines = lines(&base);
+        let ours_lines = lines(&ours);
+        let theirs_lines = lines(&theirs);
+        let segments = segments(&base_lines, &ours_lines, &theirs_lines);
+        Self {
+            path,
+            base,
+            ours,
+            theirs,
+            segments,
+        }
+    }
+
+    /// The conflicting hunks, in file order.
+    pub fn hunks(&self) -> impl Iterator<Item = &Hunk> {
+        self.segments.iter().filter_map(|segment| match segment {
+            TextSegment::Conflict(hunk) => Some(hunk),
+            TextSegment::Same(_) => None,
+        })
+    }
+
+    /// How many choices a resolution needs.
+    pub fn hunk_count(&self) -> usize {
+        self.hunks().count()
+    }
+
+    /// Renders a resolution from one choice per hunk.
+    ///
+    /// This never picks a side on its own: the choice list must cover every hunk, and specific-line
+    /// selections are bounds-checked. Agreeing spans are carried through unchanged.
+    pub fn render(&self, choices: &[HunkChoice]) -> Result<String, String> {
+        if choices.len() != self.hunk_count() {
+            let given: Vec<&str> = choices.iter().map(HunkChoice::name).collect();
+            return Err(format!(
+                "{} has {} conflicting hunk(s) but {} choice(s) were given ({})",
+                self.path,
+                self.hunk_count(),
+                choices.len(),
+                given.join(", ")
+            ));
+        }
+        let mut out = String::new();
+        let mut choice = 0;
+        for segment in &self.segments {
+            match segment {
+                TextSegment::Same(lines) => {
+                    for line in lines {
+                        out.push_str(line);
+                    }
+                }
+                TextSegment::Conflict(hunk) => {
+                    append_choice(&mut out, hunk, &choices[choice])?;
+                    choice += 1;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The hunks in one line per fact, with each side's lines named.
+    pub fn render_hunks(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "{}: {} conflicting hunk(s) in {} base line(s), {} ours line(s), {} theirs line(s)",
+            self.path,
+            self.hunk_count(),
+            self.base.lines().count(),
+            self.ours.lines().count(),
+            self.theirs.lines().count()
+        )];
+        for (index, hunk) in self.hunks().enumerate() {
+            out.push(format!(
+                "hunk {index}: base {} line(s), ours {}, theirs {}",
+                hunk.base.len(),
+                hunk.ours.len(),
+                hunk.theirs.len()
+            ));
+            for line in &hunk.base {
+                out.push(format!("  base   {}", display_line(line)));
+            }
+            for line in &hunk.ours {
+                out.push(format!("  ours   {}", display_line(line)));
+            }
+            for line in &hunk.theirs {
+                out.push(format!("  theirs {}", display_line(line)));
+            }
+        }
+        out
+    }
+}
+
+/// What a resolution did, and whether the caller's regeneration step has passed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Resolution {
+    /// The resolved path.
+    pub path: String,
+    /// Whether the resolved bytes were written and staged.
+    pub staged: bool,
+    /// The regeneration/check result, or `None` when the caller supplied no step.
+    pub regeneration: Option<Result<String, String>>,
+}
+
+impl Resolution {
+    /// Whether the path is staged *and* regeneration has passed.
+    ///
+    /// A resolution without a regeneration step is deliberately not complete: T20.07's acceptance
+    /// line is that a text resolution does not by itself say the model is valid.
+    pub fn is_complete(&self) -> bool {
+        self.staged && matches!(&self.regeneration, Some(Ok(_)))
+    }
+
+    /// The resolution in one line per fact.
+    pub fn render(&self) -> Vec<String> {
+        let mut out = vec![format!("resolved {}: written and staged", self.path)];
+        match &self.regeneration {
+            None => out.push(
+                "regeneration: not checked; run the generation/check step before reporting success"
+                    .to_owned(),
+            ),
+            Some(Ok(summary)) => out.push(if summary.trim().is_empty() {
+                "regeneration: passed".to_owned()
+            } else {
+                format!("regeneration: passed ({summary})")
+            }),
+            Some(Err(reason)) => out.push(format!("regeneration failed: {reason}")),
+        }
+        out
+    }
+}
+
+/// Whether an interrupted merge can be completed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Completion {
+    /// Paths Git still holds unmerged stages for, in path order.
+    pub unresolved: Vec<String>,
+}
+
+impl Completion {
+    /// Whether every conflicted path has been resolved and staged.
+    pub fn is_ready(&self) -> bool {
+        self.unresolved.is_empty()
+    }
+
+    /// The completion state in one line per fact.
+    pub fn render(&self) -> Vec<String> {
+        if self.is_ready() {
+            vec!["conflicts complete: no unmerged path remains".to_owned()]
+        } else {
+            let mut out = vec![format!(
+                "conflicts incomplete: {} path(s) still unmerged",
+                self.unresolved.len()
+            )];
+            for path in &self.unresolved {
+                out.push(format!("  {path}"));
+            }
+            out
+        }
+    }
+}
+
 /// One worktree row.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Worktree {
@@ -170,8 +680,8 @@ impl Repository {
         &self.root
     }
 
-    /// Runs one Git command and answers its stdout, or the error Git printed.
-    fn run(&self, arguments: &[&str]) -> Result<String, String> {
+    /// Runs one Git command and answers its stdout exactly as printed, or the error Git printed.
+    fn output(&self, arguments: &[&str]) -> Result<String, String> {
         let output = Command::new("git")
             .arg("-C")
             .arg(&self.root)
@@ -181,9 +691,7 @@ impl Repository {
             .output()
             .map_err(|error| format!("cannot run git: {error}"))?;
         if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout)
-                .trim_end()
-                .to_owned())
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
@@ -194,6 +702,17 @@ impl Repository {
                 output.status
             ))
         }
+    }
+
+    /// Runs one Git command and trims the trailing newline, which is what most commands mean.
+    fn run(&self, arguments: &[&str]) -> Result<String, String> {
+        self.output(arguments)
+            .map(|text| text.trim_end().to_owned())
+    }
+
+    /// Runs one Git command whose stdout is file content, keeping every byte Git printed.
+    fn run_exact(&self, arguments: &[&str]) -> Result<String, String> {
+        self.output(arguments)
     }
 
     /// Reads the branch, changed paths and ignored paths.
@@ -253,6 +772,207 @@ impl Repository {
             arguments.push(path);
         }
         self.run(&arguments)
+    }
+
+    /// Every unresolved conflict, with all three sides read out of the index.
+    ///
+    /// `git ls-files -u -z` says which stages exist per path; each is then read with
+    /// `git show :1:path`, `:2:path` or `:3:path`. Arguments only, never a shell, and the exact
+    /// bytes `git show` printed are kept (a trailing newline is part of a file).
+    pub fn conflicts(&self) -> Result<Vec<Conflict>, String> {
+        let text = self.run(&["ls-files", "-u", "-z"])?;
+        let mut stages: BTreeMap<String, [bool; 3]> = BTreeMap::new();
+        for record in text.split('\0') {
+            if record.is_empty() {
+                continue;
+            }
+            let Some((metadata, path)) = record.split_once('\t') else {
+                return Err(format!(
+                    "git ls-files -u printed a row without a path: {record:?}"
+                ));
+            };
+            let mut fields = metadata.split_whitespace();
+            let mode = fields.next();
+            let object = fields.next();
+            let stage = fields.next();
+            if mode.is_none() || object.is_none() {
+                return Err(format!(
+                    "git ls-files -u printed an incomplete row: {record:?}"
+                ));
+            }
+            let stage = stage
+                .and_then(ConflictStage::parse)
+                .ok_or_else(|| format!("git ls-files -u printed an unknown stage: {record:?}"))?;
+            stages.entry(path.to_owned()).or_default()[stage_index(stage)] = true;
+        }
+        let mut conflicts = Vec::with_capacity(stages.len());
+        for (path, present) in stages {
+            let mut conflict = Conflict {
+                path: path.clone(),
+                base: None,
+                ours: None,
+                theirs: None,
+            };
+            for stage in ConflictStage::ALL {
+                if !present[stage_index(stage)] {
+                    continue;
+                }
+                let reference = format!(":{}:{path}", stage.number());
+                let text = self.run_exact(&["show", &reference])?;
+                match stage {
+                    ConflictStage::Base => conflict.base = Some(text),
+                    ConflictStage::Ours => conflict.ours = Some(text),
+                    ConflictStage::Theirs => conflict.theirs = Some(text),
+                }
+            }
+            conflicts.push(conflict);
+        }
+        Ok(conflicts)
+    }
+
+    /// One unresolved conflict by path.
+    pub fn conflict(&self, path: &str) -> Result<Conflict, String> {
+        self.conflicts()?
+            .into_iter()
+            .find(|conflict| conflict.path == path)
+            .ok_or_else(|| format!("{path:?} is not an unresolved conflict"))
+    }
+
+    /// Whether the merge can be completed: no path may still have unmerged stages.
+    pub fn completion(&self) -> Result<Completion, String> {
+        Ok(Completion {
+            unresolved: self
+                .conflicts()?
+                .into_iter()
+                .map(|conflict| conflict.path)
+                .collect(),
+        })
+    }
+
+    /// Resolves a JSON/CSS conflict from an explicit, caller-written document.
+    ///
+    /// This never merges the three sides. The document must be non-empty and must parse as the
+    /// path's format; it is then written and staged, and `regenerate` is asked to prove the model
+    /// still generates. A failed regeneration is kept in the answer, not hidden.
+    pub fn resolve_document(
+        &self,
+        path: &str,
+        document: &str,
+        regenerate: Option<&mut dyn FnMut() -> Result<String, String>>,
+    ) -> Result<Resolution, String> {
+        let conflict = self.conflict(path)?;
+        if document.trim().is_empty() {
+            return Err(format!(
+                "resolving {path:?} needs an explicit document; an empty document is not a resolution"
+            ));
+        }
+        match conflict.kind() {
+            ConflictKind::Json => {
+                if json_entries(document).is_none() {
+                    return Err(format!(
+                        "the resolved document for {path:?} is not valid JSON; no side was merged in"
+                    ));
+                }
+            }
+            ConflictKind::Css => {
+                if css_entries(document).is_none() {
+                    return Err(format!(
+                        "the resolved document for {path:?} is not valid CSS; no side was merged in"
+                    ));
+                }
+            }
+            ConflictKind::Text => {
+                return Err(format!(
+                    "{path:?} is a text conflict; use a line/hunk selection or an explicit text file"
+                ));
+            }
+        }
+        self.write_resolution(path, document, regenerate)
+    }
+
+    /// Resolves a text conflict from one choice per hunk, then writes and stages the result.
+    pub fn resolve_text(
+        &self,
+        conflict: &TextConflict,
+        choices: &[HunkChoice],
+        regenerate: Option<&mut dyn FnMut() -> Result<String, String>>,
+    ) -> Result<Resolution, String> {
+        let resolved = conflict.render(choices)?;
+        self.resolve_text_file(&conflict.path, &resolved, regenerate)
+    }
+
+    /// Resolves a text conflict from a whole caller-written file.
+    ///
+    /// A generated file is protected even on this path: the resolved text must keep the generated
+    /// marker, every hand-written region must parse, and no hand-written body may differ between the
+    /// sides or be changed or dropped by the resolution. That is what stops a text resolution from
+    /// quietly claiming ownership of hand-written bytes.
+    pub fn resolve_text_file(
+        &self,
+        path: &str,
+        document: &str,
+        regenerate: Option<&mut dyn FnMut() -> Result<String, String>>,
+    ) -> Result<Resolution, String> {
+        let conflict = self.conflict(path)?;
+        if conflict.kind() != ConflictKind::Text {
+            return Err(format!(
+                "{path:?} is a {} conflict; use an explicit document rather than a text resolution",
+                conflict.kind().name()
+            ));
+        }
+        protect_generated_zones(&conflict, document)?;
+        self.write_resolution(path, document, regenerate)
+    }
+
+    /// Writes and stages a resolution, then runs the caller's regeneration step once.
+    fn write_resolution(
+        &self,
+        path: &str,
+        text: &str,
+        regenerate: Option<&mut dyn FnMut() -> Result<String, String>>,
+    ) -> Result<Resolution, String> {
+        let target = self.target(path)?;
+        if let Some(parent) = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("{} could not be created: {error}", parent.display()))?;
+        }
+        std::fs::write(&target, text)
+            .map_err(|error| format!("{} could not be written: {error}", target.display()))?;
+        self.stage(path)?;
+        let regeneration = regenerate.map(|step| step());
+        Ok(Resolution {
+            path: path.to_owned(),
+            staged: true,
+            regeneration,
+        })
+    }
+
+    /// The repository-relative path a resolution may write, refusing escapes.
+    fn target(&self, path: &str) -> Result<PathBuf, String> {
+        if path.trim().is_empty() {
+            return Err("a path is required".to_owned());
+        }
+        let relative = Path::new(path);
+        if relative.is_absolute() {
+            return Err(format!(
+                "{path:?} is absolute; a repository path must be relative to {}",
+                self.root.display()
+            ));
+        }
+        if relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err(format!(
+                "{path:?} escapes the repository; refusing to write it"
+            ));
+        }
+        Ok(self.root.join(relative))
     }
 
     /// Adds one path to the index.
@@ -408,9 +1128,30 @@ impl Repository {
     }
 
     /// Merges a branch without committing an empty fast-forward, reporting a conflict.
+    ///
+    /// A conflict is still the Git error the caller needs, but the refusal names the unmerged paths
+    /// and the resolution step rather than leaving a person to run `git status` to find out why.
     pub fn merge(&self, branch: &str) -> Result<String, String> {
-        self.run(&["merge", "--no-ff", "--no-edit", branch])
-            .map(|_| format!("merged {branch}"))
+        match self.run(&["merge", "--no-ff", "--no-edit", branch]) {
+            Ok(summary) => Ok(summary),
+            Err(reason) => {
+                let conflicts = self.conflicts().unwrap_or_default();
+                if conflicts.is_empty() {
+                    Err(reason)
+                } else {
+                    let paths: Vec<&str> = conflicts
+                        .iter()
+                        .map(|conflict| conflict.path.as_str())
+                        .collect();
+                    Err(format!(
+                        "{reason}\nmerge left {} unresolved path(s): {}; resolve each, then run \
+                         regeneration before committing (merge-abort restores the pre-merge state)",
+                        conflicts.len(),
+                        paths.join(", ")
+                    ))
+                }
+            }
+        }
     }
 
     /// Fetches a remote without touching the worktree. This is the only network operation that is
@@ -487,9 +1228,647 @@ impl Repository {
     }
 }
 
+/// The array position of a stage in a grouped `ls-files -u` row.
+const fn stage_index(stage: ConflictStage) -> usize {
+    match stage {
+        ConflictStage::Base => 0,
+        ConflictStage::Ours => 1,
+        ConflictStage::Theirs => 2,
+    }
+}
+
+/// A key and its value in a structured design format.
+type StructuredEntry = (String, String);
+
+/// One value a key holds across the three sides.
+fn compare_structured(
+    format: StructuredFormat,
+    sides: &[Option<Vec<StructuredEntry>>; 3],
+) -> StructuredDiff {
+    let maps: Vec<Option<BTreeMap<String, String>>> = sides
+        .iter()
+        .map(|side| {
+            side.as_ref()
+                .map(|entries| entries.iter().cloned().collect())
+        })
+        .collect();
+    let mut keys = BTreeSet::new();
+    for map in maps.iter().flatten() {
+        keys.extend(map.keys().cloned());
+    }
+    let mut rows = Vec::new();
+    for key in keys {
+        let value = |index: usize| maps[index].as_ref().and_then(|map| map.get(&key).cloned());
+        let base = value(0);
+        let ours = value(1);
+        let theirs = value(2);
+        if base != ours || ours != theirs {
+            rows.push(StructuredRow {
+                key,
+                base,
+                ours,
+                theirs,
+            });
+        }
+    }
+    StructuredDiff {
+        format,
+        rows,
+        parsed: true,
+        note: None,
+    }
+}
+
+/// A conflict hunk the sides disagree about, as line ranges into base and one side.
+#[derive(Clone, Copy)]
+struct DiffChange {
+    base_start: usize,
+    base_end: usize,
+    other_start: usize,
+    other_end: usize,
+}
+
+/// The largest LCS table this module builds; beyond it one whole-file hunk is honest about the cost.
+const MAX_DIFF_CELLS: usize = 1_000_000;
+
+/// Splits text into lines while keeping each line's ending.
+fn lines(text: &str) -> Vec<String> {
+    text.split_inclusive('\n').map(str::to_owned).collect()
+}
+
+/// The spans where `other` differs from `base`.
+fn line_changes(base: &[String], other: &[String]) -> Vec<DiffChange> {
+    if base.len().saturating_mul(other.len()) > MAX_DIFF_CELLS {
+        return if base.is_empty() && other.is_empty() {
+            Vec::new()
+        } else {
+            vec![DiffChange {
+                base_start: 0,
+                base_end: base.len(),
+                other_start: 0,
+                other_end: other.len(),
+            }]
+        };
+    }
+    let n = base.len();
+    let m = other.len();
+    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[i][j] = if base[i] == other[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let mut changes = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    let mut start: Option<(usize, usize)> = None;
+    while i < n && j < m {
+        if base[i] == other[j] {
+            if let Some((base_start, other_start)) = start.take() {
+                changes.push(DiffChange {
+                    base_start,
+                    base_end: i,
+                    other_start,
+                    other_end: j,
+                });
+            }
+            i += 1;
+            j += 1;
+        } else {
+            if start.is_none() {
+                start = Some((i, j));
+            }
+            if lcs[i + 1][j] >= lcs[i][j + 1] {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+    }
+    if let Some((base_start, other_start)) = start.take() {
+        changes.push(DiffChange {
+            base_start,
+            base_end: i,
+            other_start,
+            other_end: j,
+        });
+    }
+    if i < n || j < m {
+        changes.push(DiffChange {
+            base_start: i,
+            base_end: n,
+            other_start: j,
+            other_end: m,
+        });
+    }
+    changes.retain(|change| {
+        change.base_start != change.base_end || change.other_start != change.other_end
+    });
+    changes
+}
+
+/// Builds agreeing spans and conflicting hunks from the three sides.
+fn segments(base: &[String], ours: &[String], theirs: &[String]) -> Vec<TextSegment> {
+    let ours_changes = line_changes(base, ours);
+    let theirs_changes = line_changes(base, theirs);
+    let mut ranges: Vec<(usize, usize)> = ours_changes
+        .iter()
+        .chain(&theirs_changes)
+        .map(|change| (change.base_start, change.base_end))
+        .collect();
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut().filter(|last| start <= last.1) {
+            last.1 = last.1.max(end);
+            continue;
+        }
+        merged.push((start, end));
+    }
+
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    for (start, end) in merged {
+        if cursor < start {
+            out.push(TextSegment::Same(base[cursor..start].to_vec()));
+        }
+        let base_slice = base[start..end].to_vec();
+        let ours_slice = materialize(base, ours, &ours_changes, start, end);
+        let theirs_slice = materialize(base, theirs, &theirs_changes, start, end);
+        if ours_slice == base_slice && theirs_slice == base_slice {
+            out.push(TextSegment::Same(base_slice));
+        } else {
+            out.push(TextSegment::Conflict(Hunk {
+                base: base_slice,
+                ours: ours_slice,
+                theirs: theirs_slice,
+            }));
+        }
+        cursor = end;
+    }
+    if cursor < base.len() {
+        out.push(TextSegment::Same(base[cursor..].to_vec()));
+    }
+    out
+}
+
+/// Rebuilds one side's bytes for a base span, applying the changes that fall inside it.
+fn materialize(
+    base: &[String],
+    other: &[String],
+    changes: &[DiffChange],
+    start: usize,
+    end: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = start;
+    let mut index = 0;
+    while index < changes.len() && changes[index].base_start < start {
+        index += 1;
+    }
+    loop {
+        if index < changes.len() && changes[index].base_start == at {
+            let change = changes[index];
+            out.extend(other[change.other_start..change.other_end].iter().cloned());
+            at = change.base_end;
+            index += 1;
+            if at > end {
+                break;
+            }
+            continue;
+        }
+        if at < end {
+            out.push(base[at].clone());
+            at += 1;
+            continue;
+        }
+        break;
+    }
+    out
+}
+
+/// Emits one hunk choice, refusing an index outside the hunk.
+fn append_choice(out: &mut String, hunk: &Hunk, choice: &HunkChoice) -> Result<(), String> {
+    match choice {
+        HunkChoice::Ours => push_all(out, &hunk.ours),
+        HunkChoice::Theirs => push_all(out, &hunk.theirs),
+        HunkChoice::Both => {
+            push_all(out, &hunk.ours);
+            push_all(out, &hunk.theirs);
+        }
+        HunkChoice::Omit => {}
+        HunkChoice::Lines { ours, theirs } => {
+            for index in ours {
+                let line = hunk.ours.get(*index).ok_or_else(|| {
+                    format!(
+                        "ours line index {index} is outside a hunk with {} line(s)",
+                        hunk.ours.len()
+                    )
+                })?;
+                out.push_str(line);
+            }
+            for index in theirs {
+                let line = hunk.theirs.get(*index).ok_or_else(|| {
+                    format!(
+                        "theirs line index {index} is outside a hunk with {} line(s)",
+                        hunk.theirs.len()
+                    )
+                })?;
+                out.push_str(line);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Appends every line verbatim.
+fn push_all(out: &mut String, lines: &[String]) {
+    for line in lines {
+        out.push_str(line);
+    }
+}
+
+/// One line for a hunk listing, without adding a line ending of its own.
+fn display_line(line: &str) -> String {
+    let trimmed = line.trim_end_matches(['\n', '\r']);
+    if trimmed.is_empty() && !line.is_empty() {
+        "(blank line)".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Refuses a text resolution that would cross a generated file's hand-written boundary.
+fn protect_generated_zones(conflict: &Conflict, resolved: &str) -> Result<(), String> {
+    use crate::app::generate::artifact::{self, RegionKind};
+
+    let sides = [
+        ("base", &conflict.base),
+        ("ours", &conflict.ours),
+        ("theirs", &conflict.theirs),
+    ];
+    let generated: Vec<(&str, &str)> = sides
+        .into_iter()
+        .filter_map(|(name, text)| text.as_deref().map(|text| (name, text)))
+        .filter(|(_, text)| artifact::is_generated(text))
+        .collect();
+    if generated.is_empty() {
+        return Ok(());
+    }
+    if !artifact::is_generated(resolved) {
+        return Err(format!(
+            "resolving {:?} would drop the generated marker; a text resolution cannot claim bytes a \
+             person owns",
+            conflict.path
+        ));
+    }
+    let resolved_regions = artifact::regions(resolved).map_err(|reason| {
+        format!(
+            "the resolved {:?} does not have provable hand-written boundaries: {reason}",
+            conflict.path
+        )
+    })?;
+    let resolved_bodies = handwritten_bodies(resolved, &resolved_regions, &conflict.path)?;
+
+    // A body that differs between the sides is not a text-resolution decision: choosing it would
+    // silently discard one person's bytes. Identical bodies must survive verbatim.
+    let mut expected: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for (name, side) in generated {
+        let side_regions = artifact::regions(side).map_err(|reason| {
+            format!(
+                "the {name} side of {:?} does not have provable hand-written boundaries: {reason}",
+                conflict.path
+            )
+        })?;
+        for region in &side_regions {
+            if region.kind != RegionKind::Handwritten || region.name.is_empty() {
+                continue;
+            }
+            let body = region.content(side).to_owned();
+            match expected.get_mut(&region.name) {
+                None => {
+                    expected.insert(region.name.clone(), Some(body));
+                }
+                Some(existing) if existing.as_deref() != Some(body.as_str()) => {
+                    *existing = None;
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    for (name, body) in expected {
+        let Some(body) = body else {
+            return Err(format!(
+                "the hand-written region {name:?} in {:?} differs between the conflicting sides; a \
+                 text resolution cannot choose those bytes (regenerate or resolve through the design \
+                 model)",
+                conflict.path
+            ));
+        };
+        match resolved_bodies.get(&name) {
+            Some(found) if found == &body => {}
+            Some(_) => {
+                return Err(format!(
+                    "resolving {:?} changed the hand-written region {name:?}; regeneration owns only \
+                     the generated zone",
+                    conflict.path
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "resolving {:?} dropped the hand-written region {name:?}; a text resolution cannot \
+                     remove bytes a person owns",
+                    conflict.path
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The hand-written bodies a generated text holds, by region name.
+fn handwritten_bodies(
+    text: &str,
+    regions: &[crate::app::generate::artifact::Region],
+    path: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    use crate::app::generate::artifact::RegionKind;
+
+    let mut bodies = BTreeMap::new();
+    for region in regions {
+        if region.kind != RegionKind::Handwritten || region.name.is_empty() {
+            continue;
+        }
+        if bodies
+            .insert(region.name.clone(), region.content(text).to_owned())
+            .is_some()
+        {
+            return Err(format!(
+                "the resolved {path:?} names the hand-written region {:?} twice; the boundary is not \
+                 provable",
+                region.name
+            ));
+        }
+    }
+    Ok(bodies)
+}
+
+/// A tolerant JSON reader that flattens leaves into pointer-like keys.
+///
+/// This is not a general JSON library; it answers "which keys and values does each side hold?" for
+/// the design-layer diff. A malformed document returns `None`, so the caller can say the side did
+/// not parse rather than guessing at rows.
+fn json_entries(text: &str) -> Option<Vec<StructuredEntry>> {
+    let mut parser = JsonParser { text, at: 0 };
+    parser.skip_ws();
+    if parser.at == text.len() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    parser.value("", &mut out)?;
+    parser.skip_ws();
+    (parser.at == text.len()).then_some(out)
+}
+
+struct JsonParser<'a> {
+    text: &'a str,
+    at: usize,
+}
+
+impl JsonParser<'_> {
+    fn bytes(&self) -> &[u8] {
+        self.text.as_bytes()
+    }
+
+    fn byte(&self) -> Option<u8> {
+        self.bytes().get(self.at).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.byte(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.at += 1;
+        }
+    }
+
+    fn value(&mut self, path: &str, out: &mut Vec<StructuredEntry>) -> Option<()> {
+        self.skip_ws();
+        match self.byte()? {
+            b'{' => self.object(path, out),
+            b'[' => self.array(path, out),
+            b'"' => {
+                let start = self.at;
+                self.string()?;
+                out.push((root_path(path), self.text[start..self.at].to_owned()));
+                Some(())
+            }
+            b't' => self.literal("true", path, out),
+            b'f' => self.literal("false", path, out),
+            b'n' => self.literal("null", path, out),
+            _ => self.number(path, out),
+        }
+    }
+
+    fn object(&mut self, path: &str, out: &mut Vec<StructuredEntry>) -> Option<()> {
+        self.at += 1;
+        self.skip_ws();
+        if self.byte()? == b'}' {
+            self.at += 1;
+            out.push((root_path(path), "{}".to_owned()));
+            return Some(());
+        }
+        loop {
+            self.skip_ws();
+            let key_start = self.at;
+            self.string()?;
+            let key = self.text[key_start..self.at].trim_matches('"').to_owned();
+            self.skip_ws();
+            if self.byte()? != b':' {
+                return None;
+            }
+            self.at += 1;
+            let child = if path.is_empty() {
+                key
+            } else {
+                format!("{path}.{key}")
+            };
+            self.value(&child, out)?;
+            self.skip_ws();
+            match self.byte()? {
+                b',' => self.at += 1,
+                b'}' => {
+                    self.at += 1;
+                    return Some(());
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn array(&mut self, path: &str, out: &mut Vec<StructuredEntry>) -> Option<()> {
+        self.at += 1;
+        self.skip_ws();
+        if self.byte()? == b']' {
+            self.at += 1;
+            out.push((root_path(path), "[]".to_owned()));
+            return Some(());
+        }
+        let mut index = 0usize;
+        loop {
+            let child = if path.is_empty() {
+                format!("$[{index}]")
+            } else {
+                format!("{path}[{index}]")
+            };
+            self.value(&child, out)?;
+            index += 1;
+            self.skip_ws();
+            match self.byte()? {
+                b',' => self.at += 1,
+                b']' => {
+                    self.at += 1;
+                    return Some(());
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn string(&mut self) -> Option<()> {
+        if self.byte()? != b'"' {
+            return None;
+        }
+        self.at += 1;
+        while let Some(byte) = self.byte() {
+            match byte {
+                b'\\' => self.at += 2,
+                b'"' => {
+                    self.at += 1;
+                    return Some(());
+                }
+                _ => self.at += 1,
+            }
+        }
+        None
+    }
+
+    fn literal(&mut self, word: &str, path: &str, out: &mut Vec<StructuredEntry>) -> Option<()> {
+        if !self.text[self.at..].starts_with(word) {
+            return None;
+        }
+        self.at += word.len();
+        out.push((root_path(path), word.to_owned()));
+        Some(())
+    }
+
+    fn number(&mut self, path: &str, out: &mut Vec<StructuredEntry>) -> Option<()> {
+        let start = self.at;
+        if self.byte() == Some(b'-') {
+            self.at += 1;
+        }
+        while matches!(
+            self.byte(),
+            Some(b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+        ) {
+            self.at += 1;
+        }
+        if self.at == start {
+            return None;
+        }
+        out.push((root_path(path), self.text[start..self.at].to_owned()));
+        Some(())
+    }
+}
+
+fn root_path(path: &str) -> String {
+    if path.is_empty() {
+        "$".to_owned()
+    } else {
+        path.to_owned()
+    }
+}
+
+/// Reads CSS rules into `selector|property` keys.
+///
+/// Comment removal and a brace-depth check keep a malformed document from becoming invented rows;
+/// nested rules return `None` rather than guessing which selector owns a declaration.
+fn css_entries(text: &str) -> Option<Vec<StructuredEntry>> {
+    let text = strip_css_comments(text);
+    let mut entries = Vec::new();
+    let mut rest = text.as_str();
+    loop {
+        let current = rest.trim_start();
+        if current.is_empty() {
+            return Some(entries);
+        }
+        let open = current.find('{')?;
+        let selector = current[..open].trim();
+        if selector.is_empty() {
+            return None;
+        }
+        let body = &current[open + 1..];
+        let mut depth = 1usize;
+        let mut nested = false;
+        let mut close = None;
+        for (index, character) in body.char_indices() {
+            match character {
+                '{' => {
+                    depth += 1;
+                    nested = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close = close?;
+        if nested {
+            return None;
+        }
+        for declaration in body[..close].split(';') {
+            let declaration = declaration.trim();
+            if declaration.is_empty() {
+                continue;
+            }
+            let (property, value) = declaration.split_once(':')?;
+            let property = property.trim();
+            if property.is_empty() {
+                return None;
+            }
+            entries.push((format!("{selector}|{property}"), value.trim().to_owned()));
+        }
+        rest = &body[close + 1..];
+    }
+}
+
+/// Removes CSS comments so a declaration inside one is not read as a rule.
+fn strip_css_comments(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        match rest[start + 2..].find("*/") {
+            Some(end) => rest = &rest[start + 2 + end + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Discover, Repository};
+    use super::{ConflictKind, Discover, HunkChoice, Repository};
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -538,6 +1917,74 @@ mod tests {
         std::fs::write(directory.join("a.txt"), "one\n").expect("a file");
         git(&directory, &["add", "a.txt"]);
         git(&directory, &["commit", "-q", "-m", "initial"]);
+        let repository = Repository::discover(&directory).expect("a repository");
+        Some((directory, repository))
+    }
+
+    fn git_text(directory: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(arguments)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {arguments:?} succeeds");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn write(directory: &Path, path: &str, text: &str) {
+        let target = directory.join(path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).expect("a parent directory");
+        }
+        std::fs::write(target, text).expect("a file");
+    }
+
+    /// A real repository whose `side` branch conflicts with the current branch on every given path.
+    ///
+    /// Each tuple is `(path, base, ours, theirs)`. The merge is expected to fail; the repository is
+    /// left in the conflicted state so the tests exercise what the installed Git actually recorded.
+    fn repository_with_conflicts(
+        name: &str,
+        files: &[(&str, &str, &str, &str)],
+    ) -> Option<(PathBuf, Repository)> {
+        if !git_available() {
+            return None;
+        }
+        let directory = temporary(name);
+        git(&directory, &["init", "-q", "--template="]);
+        git(
+            &directory,
+            &["config", "user.email", "rustage@example.invalid"],
+        );
+        git(&directory, &["config", "user.name", "rustage"]);
+        for (path, base, _, _) in files {
+            write(&directory, path, base);
+        }
+        git(&directory, &["add", "--", "."]);
+        git(&directory, &["commit", "-q", "-m", "base"]);
+        let branch = git_text(&directory, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        assert!(!branch.is_empty(), "the current branch has a name");
+        git(&directory, &["branch", "side"]);
+        for (path, _, ours, _) in files {
+            write(&directory, path, ours);
+        }
+        git(&directory, &["add", "--", "."]);
+        git(&directory, &["commit", "-q", "-m", "ours"]);
+        git(&directory, &["switch", "-q", "side"]);
+        for (path, _, _, theirs) in files {
+            write(&directory, path, theirs);
+        }
+        git(&directory, &["add", "--", "."]);
+        git(&directory, &["commit", "-q", "-m", "theirs"]);
+        git(&directory, &["switch", "-q", &branch]);
+        let merge = Command::new("git")
+            .arg("-C")
+            .arg(&directory)
+            .args(["merge", "side"])
+            .output()
+            .expect("git runs");
+        assert!(!merge.status.success(), "the merge conflicts");
         let repository = Repository::discover(&directory).expect("a repository");
         Some((directory, repository))
     }
@@ -633,5 +2080,266 @@ mod tests {
             return;
         };
         assert!(repository.commit("   ").is_err());
+    }
+
+    #[test]
+    fn a_real_conflict_exposes_all_three_stages_and_a_staged_resolution() {
+        let Some((directory, repository)) = repository_with_conflicts(
+            "stages",
+            &[
+                ("a.txt", "base a\n", "ours a\n", "theirs a\n"),
+                ("b.txt", "base b\n", "ours b\n", "theirs b\n"),
+            ],
+        ) else {
+            return;
+        };
+
+        let conflicts = repository.conflicts().expect("conflicts");
+        assert_eq!(conflicts.len(), 2, "{conflicts:?}");
+        let a = conflicts
+            .iter()
+            .find(|conflict| conflict.path == "a.txt")
+            .expect("a.txt is conflicted");
+        assert_eq!(a.base.as_deref(), Some("base a\n"));
+        assert_eq!(a.ours.as_deref(), Some("ours a\n"));
+        assert_eq!(a.theirs.as_deref(), Some("theirs a\n"));
+        assert_eq!(a.kind(), ConflictKind::Text);
+
+        let text = a.text_conflict().expect("a text conflict");
+        assert_eq!(text.hunk_count(), 1);
+        assert_eq!(
+            text.render(&[HunkChoice::Ours]).expect("a side"),
+            "ours a\n"
+        );
+
+        let resolution = repository
+            .resolve_text(&text, &[HunkChoice::Ours], None)
+            .expect("a resolution");
+        assert!(resolution.staged);
+        assert!(
+            !resolution.is_complete(),
+            "without regeneration the resolution is not complete"
+        );
+        assert!(
+            resolution
+                .render()
+                .iter()
+                .any(|line| line.contains("not checked")),
+            "{resolution:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.join("a.txt")).expect("a file"),
+            "ours a\n"
+        );
+        assert!(
+            repository
+                .status()
+                .expect("a status")
+                .entries
+                .iter()
+                .all(|entry| entry.path != "a.txt"),
+            "resolving to the checked-out side leaves nothing unstaged for a.txt"
+        );
+        assert!(
+            !repository
+                .conflicts()
+                .expect("conflicts")
+                .iter()
+                .any(|conflict| conflict.path == "a.txt")
+        );
+
+        let completion = repository.completion().expect("a completion");
+        assert!(!completion.is_ready());
+        assert_eq!(completion.unresolved, vec!["b.txt".to_owned()]);
+
+        // The last path resolves, but a failing regeneration is not success.
+        let b = repository.conflict("b.txt").expect("b.txt is conflicted");
+        let text = b.text_conflict().expect("a text conflict");
+        let mut regenerate = || -> Result<String, String> {
+            Err("the generator refused the resolved model".to_owned())
+        };
+        let resolution = repository
+            .resolve_text(&text, &[HunkChoice::Theirs], Some(&mut regenerate))
+            .expect("a written resolution");
+        assert!(resolution.staged);
+        assert!(!resolution.is_complete());
+        assert!(
+            resolution
+                .render()
+                .iter()
+                .any(|line| line.contains("regeneration failed")),
+            "{resolution:?}"
+        );
+        assert!(
+            repository
+                .staged_diff(Some("b.txt"))
+                .expect("a staged diff")
+                .contains("+theirs b"),
+            "the resolved bytes are in the index"
+        );
+        assert!(repository.completion().expect("a completion").is_ready());
+    }
+
+    #[test]
+    fn a_line_selection_keeps_only_the_named_lines() {
+        let Some((_directory, repository)) =
+            repository_with_conflicts("lines", &[("a.txt", "a\nb\nc\n", "A\nB\nc\n", "a\nX\nY\n")])
+        else {
+            return;
+        };
+        let conflict = repository.conflict("a.txt").expect("a conflict");
+        let text = conflict.text_conflict().expect("a text conflict");
+        assert_eq!(text.hunk_count(), 1, "{text:?}");
+        let resolved = text
+            .render(&[HunkChoice::Lines {
+                ours: vec![0],
+                theirs: vec![2],
+            }])
+            .expect("a line selection");
+        assert_eq!(resolved, "A\nY\n");
+        assert!(text.render(&[HunkChoice::Ours]).is_ok());
+        assert!(text.render(&[]).is_err(), "one choice is not enough");
+        assert!(
+            text.render(&[HunkChoice::Lines {
+                ours: vec![9],
+                theirs: Vec::new(),
+            }])
+            .is_err(),
+            "an index outside the hunk is refused"
+        );
+    }
+
+    #[test]
+    fn a_generated_file_refuses_a_text_resolution_inside_a_hand_written_region() {
+        const MARKER: &str = "// Generated by the rust_widgets designer. Do not edit by hand.\n";
+        let base = format!(
+            "{MARKER}pub fn build_ui() {{}}\n// region:handwritten save\nfn save() {{ base }}\n// endregion:handwritten save\n"
+        );
+        let ours = format!(
+            "{MARKER}pub fn build_ui() {{}}\n// region:handwritten save\nfn save() {{ ours }}\n// endregion:handwritten save\n"
+        );
+        let theirs = format!(
+            "{MARKER}pub fn build_ui() {{}}\n// region:handwritten save\nfn save() {{ theirs }}\n// endregion:handwritten save\n"
+        );
+        let Some((_directory, repository)) =
+            repository_with_conflicts("generated-boundary", &[("ui.rs", &base, &ours, &theirs)])
+        else {
+            return;
+        };
+        let conflict = repository.conflict("ui.rs").expect("a conflict");
+        let text = conflict.text_conflict().expect("a text conflict");
+        let reason = repository
+            .resolve_text(&text, &vec![HunkChoice::Ours; text.hunk_count()], None)
+            .expect_err("a hand-written boundary blocks a text resolution");
+        assert!(reason.contains("hand-written"), "{reason}");
+        assert!(
+            repository.conflict("ui.rs").is_ok(),
+            "a refused resolution leaves the conflict in place"
+        );
+    }
+
+    #[test]
+    fn a_generated_zone_conflict_resolves_when_the_hand_written_body_is_unchanged() {
+        const MARKER: &str = "// Generated by the rust_widgets designer. Do not edit by hand.\n";
+        let base = format!(
+            "{MARKER}pub fn build_ui() {{ let a = 1; }}\n// region:handwritten save\nfn save() {{ mine }}\n// endregion:handwritten save\n"
+        );
+        let ours = format!(
+            "{MARKER}pub fn build_ui() {{ let a = 2; }}\n// region:handwritten save\nfn save() {{ mine }}\n// endregion:handwritten save\n"
+        );
+        let theirs = format!(
+            "{MARKER}pub fn build_ui() {{ let a = 3; }}\n// region:handwritten save\nfn save() {{ mine }}\n// endregion:handwritten save\n"
+        );
+        let Some((directory, repository)) =
+            repository_with_conflicts("generated-zone", &[("ui.rs", &base, &ours, &theirs)])
+        else {
+            return;
+        };
+        let conflict = repository.conflict("ui.rs").expect("a conflict");
+        let text = conflict.text_conflict().expect("a text conflict");
+        let resolved = text
+            .render(&vec![HunkChoice::Ours; text.hunk_count()])
+            .expect("a generated-zone resolution");
+        assert!(resolved.contains("let a = 2;"), "{resolved}");
+        let mut regenerate = || -> Result<String, String> { Ok("regenerated ui.rs".to_owned()) };
+        let resolution = repository
+            .resolve_text(
+                &text,
+                &vec![HunkChoice::Ours; text.hunk_count()],
+                Some(&mut regenerate),
+            )
+            .expect("a resolution");
+        assert!(resolution.is_complete(), "{resolution:?}");
+        assert!(
+            resolution
+                .render()
+                .iter()
+                .any(|line| line.contains("regeneration: passed")),
+            "{resolution:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.join("ui.rs")).expect("a file"),
+            resolved
+        );
+    }
+
+    #[test]
+    fn a_json_conflict_presents_keys_and_needs_an_explicit_document() {
+        let Some((directory, repository)) = repository_with_conflicts(
+            "structured",
+            &[(
+                "design.json",
+                "{\"a\":1,\"b\":2}\n",
+                "{\"a\":10,\"b\":2}\n",
+                "{\"a\":1,\"b\":20}\n",
+            )],
+        ) else {
+            return;
+        };
+        let conflict = repository.conflict("design.json").expect("a conflict");
+        assert_eq!(conflict.kind(), ConflictKind::Json);
+        let diff = conflict.structured_diff().expect("a structured diff");
+        assert!(diff.parsed, "{diff:?}");
+        assert_eq!(diff.rows.len(), 2, "{diff:?}");
+        assert!(
+            diff.rows
+                .iter()
+                .any(|row| row.key == "a" && row.ours.as_deref() == Some("10")),
+            "{diff:?}"
+        );
+
+        let reason = repository
+            .resolve_document("design.json", "{not json", None)
+            .expect_err("a malformed document is refused");
+        assert!(reason.contains("not valid JSON"), "{reason}");
+        assert!(repository.conflict("design.json").is_ok());
+
+        let resolution = repository
+            .resolve_document("design.json", "{\"a\":15,\"b\":25}\n", None)
+            .expect("an explicit document");
+        assert!(resolution.staged);
+        assert_eq!(
+            std::fs::read_to_string(directory.join("design.json")).expect("a file"),
+            "{\"a\":15,\"b\":25}\n"
+        );
+        assert!(repository.conflicts().expect("conflicts").is_empty());
+    }
+
+    #[test]
+    fn abort_restores_the_state_that_was_checked_out_before_the_merge() {
+        let Some((directory, repository)) =
+            repository_with_conflicts("abort", &[("a.txt", "base\n", "ours\n", "theirs\n")])
+        else {
+            return;
+        };
+        assert!(!repository.completion().expect("a completion").is_ready());
+        repository.merge_abort().expect("an abort");
+        assert!(repository.conflicts().expect("conflicts").is_empty());
+        assert!(repository.status().expect("a status").is_clean());
+        assert_eq!(
+            std::fs::read_to_string(directory.join("a.txt")).expect("a file"),
+            "ours\n",
+            "abort restores the pre-merge checkout, not the merge base"
+        );
     }
 }

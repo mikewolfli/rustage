@@ -217,6 +217,10 @@ impl Surface {
     }
 
     /// The canvas, derived from the tree so the two cannot disagree.
+    ///
+    /// Each instance carries the tree node's name as its sibling-scoped key, which is what makes
+    /// [`Scene::id_of_key`] and [`Scene::key_of`] agree with the object tree. Paths address a virtual
+    /// root (a top-level node is `[i]`), because the design document may have several roots.
     pub fn scene(&self) -> Scene {
         let tree = self.design.tree();
         let mut scene = Scene::new();
@@ -224,15 +228,16 @@ impl Surface {
             tree.roots().iter().rev().map(|id| (*id, 0, None)).collect();
         let mut index = 0usize;
         while let Some((node, depth, parent)) = stack.pop() {
-            scene.insert(node, rect_of(index, depth));
+            let Some(holder) = tree.get(node) else {
+                continue;
+            };
+            scene.insert_keyed(node, holder.name.clone(), rect_of(index, depth));
             if let Some(parent) = parent {
                 let _ = scene.set_parent(node, Some(parent));
             }
             index += 1;
-            if let Some(holder) = tree.get(node) {
-                for child in holder.children.iter().rev() {
-                    stack.push((*child, depth + 1, Some(node)));
-                }
+            for child in holder.children.iter().rev() {
+                stack.push((*child, depth + 1, Some(node)));
             }
         }
         scene
@@ -643,5 +648,61 @@ mod tests {
     #[test]
     fn the_keymap_has_one_binding_per_design_command() {
         assert_eq!(keymap().len(), 9);
+    }
+
+    #[test]
+    fn the_tree_and_the_canvas_share_one_key_and_path_mapping() {
+        let mut surface = Surface::new();
+        let panel = surface.add(None, Kind::Container, "panel").expect("root");
+        let button = surface
+            .add(Some(panel), Kind::Widget, "button")
+            .expect("child");
+        let label = surface
+            .add(Some(panel), Kind::Text, "label")
+            .expect("child");
+
+        let scene = surface.scene();
+        assert_eq!(scene.id_of_key(None, "panel"), Some(panel));
+        assert_eq!(scene.id_of_key(Some(panel), "button"), Some(button));
+        assert_eq!(scene.id_of_key(Some(panel), "label"), Some(label));
+
+        // Every tree node is in exactly one place in the one scene, and both directions of the
+        // lookup agree with the tree's own parent/name facts.
+        for node in surface.tree().ids() {
+            let holder = surface.tree().get(node).expect("a tree node");
+            let path = scene.path_of(node).expect("indexed").to_vec();
+            assert_eq!(scene.id_at(&path), Some(node));
+            assert_eq!(scene.id_of_key(holder.parent, &holder.name), Some(node));
+            assert_eq!(scene.key_of(node), Some(holder.name.as_str()));
+        }
+        assert_eq!(scene.path_of(button), Some(&[0, 0][..]));
+        assert_eq!(scene.path_of(label), Some(&[0, 1][..]));
+    }
+
+    #[test]
+    fn hit_testing_and_selection_agree_through_the_one_scene() {
+        let mut surface = Surface::new();
+        let panel = surface.add(None, Kind::Container, "panel").expect("root");
+        let button = surface
+            .add(Some(panel), Kind::Widget, "button")
+            .expect("child");
+
+        let scene = surface.scene();
+        // The button is the topmost node at its rectangle; the panel owns the rest of the canvas.
+        let button_rect = scene
+            .resolve(scene.instance(button).expect("live"))
+            .expect("live");
+        let top = scene
+            .hit(button_rect.x + 1, button_rect.y + 1)
+            .expect("the button");
+        let path = scene.path_of(top).expect("indexed").to_vec();
+        assert_eq!(scene.id_at(&path), Some(top));
+        let key = scene.key_of(top).expect("keyed").to_owned();
+        assert_eq!(scene.id_of_key(scene.parent(top), &key), Some(top));
+
+        // A canvas click selects the same node the hit test named.
+        assert!(surface.select(top));
+        assert!(surface.selection().contains(top));
+        assert!(surface.agrees());
     }
 }

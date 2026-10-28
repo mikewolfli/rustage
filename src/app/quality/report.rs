@@ -11,6 +11,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rust_widgets::designer::generator::availability_with;
+use rust_widgets::platform::profile::{SurfacePolicy, surface_policy};
+use rust_widgets::widget::WidgetFactory;
+use rust_widgets::widget::capability::TargetSpec;
+
+use crate::app::targets::snapshot::{Level, target_profile};
 use crate::project::record::json::{Json, JsonObject};
 
 /// Where a problem came from.
@@ -140,6 +146,9 @@ pub struct Filter {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Center {
     problems: Vec<Problem>,
+    /// The revision the centre currently reports. Problems older than it are retained only until
+    /// the next [`Center::advance`], which is what keeps a stale build error out of "current".
+    current: Option<u64>,
 }
 
 impl Center {
@@ -148,9 +157,34 @@ impl Center {
         Self::default()
     }
 
-    /// Adds a problem.
+    /// Adds a problem, replacing an existing one with the same identity.
+    ///
+    /// Two runs that report the same source, target, revision, node, location and message are one
+    /// problem, not two rows. Severity is deliberately not part of the identity: a later run that
+    /// raises or lowers the severity updates the row instead of leaving both answers visible.
     pub fn add(&mut self, problem: Problem) {
+        if let Some(existing) = self.problems.iter_mut().find(|existing| {
+            existing.source == problem.source
+                && existing.target == problem.target
+                && existing.revision == problem.revision
+                && existing.node == problem.node
+                && existing.location == problem.location
+                && existing.message == problem.message
+        }) {
+            *existing = problem;
+            return;
+        }
         self.problems.push(problem);
+    }
+
+    /// Makes `revision` the current one and drops problems from older revisions.
+    ///
+    /// The centre is a view of the current revision, not a log: keeping an old revision could make
+    /// an already-fixed error look current. A caller that wants history records it in the evidence
+    /// bundle before advancing.
+    pub fn advance(&mut self, revision: u64) {
+        self.current = Some(revision);
+        self.problems.retain(|problem| problem.revision >= revision);
     }
 
     /// The problems matching `filter`, in insertion order.
@@ -158,7 +192,9 @@ impl Center {
         self.problems
             .iter()
             .filter(|problem| {
-                filter.source.is_none_or(|source| problem.source == source)
+                self.current
+                    .is_none_or(|current| problem.revision >= current)
+                    && filter.source.is_none_or(|source| problem.source == source)
                     && filter
                         .target
                         .as_ref()
@@ -190,26 +226,427 @@ impl Center {
     }
 }
 
+/// A width and height in logical units.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Extent {
+    /// The width.
+    pub width: f64,
+    /// The height.
+    pub height: f64,
+}
+
+/// A placed box in the parent's coordinates.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Frame {
+    /// The left edge.
+    pub x: f64,
+    /// The top edge.
+    pub y: f64,
+    /// The width.
+    pub width: f64,
+    /// The height.
+    pub height: f64,
+}
+
+impl Frame {
+    /// The right edge.
+    fn right(self) -> f64 {
+        self.x + self.width
+    }
+
+    /// The bottom edge.
+    fn bottom(self) -> f64 {
+        self.y + self.height
+    }
+
+    /// Whether this box contains `other`, touching edges included.
+    fn contains(self, other: Self) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other.right() <= self.right()
+            && other.bottom() <= self.bottom()
+    }
+
+    /// Whether the two boxes share area. Touching edges do not count.
+    fn overlaps(self, other: Self) -> bool {
+        self.x < other.right()
+            && other.x < self.right()
+            && self.y < other.bottom()
+            && other.y < self.bottom()
+    }
+
+    /// The box in one line.
+    fn render(self) -> String {
+        format!("{},{} {}x{}", self.x, self.y, self.width, self.height)
+    }
+}
+
+/// Whether a node may overlap its siblings.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Overlap {
+    /// Siblings may share area.
+    #[default]
+    Allowed,
+    /// Siblings must not share area.
+    Forbidden,
+}
+
+impl Overlap {
+    /// The policy's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Forbidden => "forbidden",
+        }
+    }
+
+    /// Reads a policy name.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "allowed" => Some(Self::Allowed),
+            "forbidden" => Some(Self::Forbidden),
+            _ => None,
+        }
+    }
+}
+
+/// One node's layout: the constraints it must satisfy and the box it was placed in.
+///
+/// Both the constraints and the frame are facts the caller reports. The library's arrangement
+/// (`Layout::update`/`arrange_with_context`) is not consumed here yet, so a constraint the check
+/// cannot verify is a *cannot verify* warning, never a silent pass.
+#[derive(Clone, PartialEq, Debug)]
+pub struct LayoutFact {
+    /// The node.
+    pub node: u64,
+    /// The smallest it may be.
+    pub minimum: Option<Extent>,
+    /// The largest it may be.
+    pub maximum: Option<Extent>,
+    /// The box the layout placed it in, when one was arranged.
+    pub frame: Option<Frame>,
+    /// Whether it may share area with its siblings.
+    pub overlap: Overlap,
+}
+
+impl LayoutFact {
+    /// A node with no constraints and no frame.
+    pub fn new(node: u64) -> Self {
+        Self {
+            node,
+            minimum: None,
+            maximum: None,
+            frame: None,
+            overlap: Overlap::Allowed,
+        }
+    }
+}
+
+/// What a binding writes.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum BindingTarget {
+    /// A node's property.
+    Property {
+        /// The node.
+        node: u64,
+        /// The property.
+        property: String,
+    },
+    /// A node's event.
+    Event {
+        /// The node.
+        node: u64,
+        /// The event.
+        event: String,
+    },
+}
+
+impl BindingTarget {
+    /// The node the target belongs to, for navigation.
+    pub fn node(&self) -> u64 {
+        match self {
+            Self::Property { node, .. } | Self::Event { node, .. } => *node,
+        }
+    }
+
+    /// Whether this is a property or an event.
+    fn what(&self) -> &'static str {
+        match self {
+            Self::Property { .. } => "property",
+            Self::Event { .. } => "event",
+        }
+    }
+
+    /// The target in one line.
+    pub fn render(&self) -> String {
+        match self {
+            Self::Property { node, property } => format!("node {node}.{property}"),
+            Self::Event { node, event } => format!("node {node} event {event}"),
+        }
+    }
+}
+
+/// The declared value family on one side of a binding.
+///
+/// The fact is the pair *after* conversion. Which conversions may bridge which families is the
+/// contract of `data::binding`; this check does not repeat it and does not claim a pair was
+/// converted merely because the document names a conversion.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum BindingType {
+    /// Free text.
+    Text,
+    /// A whole number.
+    Integer,
+    /// A fractional number.
+    Number,
+    /// A flag.
+    Bool,
+    /// A colour.
+    Colour,
+    /// One of a fixed set of names.
+    Enum(Vec<String>),
+}
+
+impl BindingType {
+    /// The type's name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Integer => "integer",
+            Self::Number => "number",
+            Self::Bool => "bool",
+            Self::Colour => "colour",
+            Self::Enum(_) => "enum",
+        }
+    }
+
+    /// Reads a type name, with `enum(a,b)` for a named set.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "text" => Some(Self::Text),
+            "integer" => Some(Self::Integer),
+            "number" => Some(Self::Number),
+            "bool" => Some(Self::Bool),
+            "colour" => Some(Self::Colour),
+            _ => {
+                let variants = text.strip_prefix("enum(")?.strip_suffix(')')?;
+                let names: Vec<String> = variants
+                    .split(',')
+                    .map(|name| name.trim().to_owned())
+                    .collect();
+                if names.iter().any(String::is_empty) {
+                    return None;
+                }
+                Some(Self::Enum(names))
+            }
+        }
+    }
+
+    /// Whether a target of this type accepts a source of `source`.
+    ///
+    /// Families are compared after conversion, so only a whole number widening to a fractional
+    /// number is accepted across families; everything else must already match.
+    pub fn accepts(&self, source: &Self) -> bool {
+        match (self, source) {
+            (Self::Number, Self::Integer | Self::Number) => true,
+            (Self::Enum(target), Self::Enum(source)) => target == source,
+            _ => self == source,
+        }
+    }
+}
+
+/// One binding as the document and the generator describe it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BindingFact {
+    /// Where the value comes from, as the document names it.
+    pub source: String,
+    /// What it writes.
+    pub target: BindingTarget,
+    /// The source's type after conversion.
+    pub source_type: BindingType,
+    /// The type the target declares. `None` means the document does not declare that target.
+    pub target_type: Option<BindingType>,
+    /// Whether the target is generated output that must not be written back.
+    pub generated: bool,
+}
+
+/// Where a capability or capacity fact came from.
+///
+/// The two sources are kept apart on purpose. A caller-supplied fact is only as good as the
+/// document or argv that stated it; a contract-derived fact was read from the pinned library. The
+/// check never rewrites one source with the other, so a report can say which witness it used.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Provenance {
+    /// The caller stated the fact; the document or argv is the only witness.
+    #[default]
+    Supplied,
+    /// The fact was read from the pinned `rust_widgets` contract.
+    Contract,
+}
+
+impl Provenance {
+    /// The provenance's name, for a report or the CLI.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Supplied => "supplied",
+            Self::Contract => "contract",
+        }
+    }
+}
+
+/// One capability answer read from the library for one name.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CapabilityAnswer {
+    /// The name that was asked about.
+    pub name: String,
+    /// The library's answer, kept as a [`Level`] rather than a yes/no.
+    pub level: Level,
+}
+
+/// The library's resource limits for the profile this binary was built for.
+///
+/// Every field is copied from [`SurfacePolicy`]; none is derived or rounded here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CapacityLimits {
+    /// Upper bound on simultaneously mounted controls.
+    pub max_widgets: usize,
+    /// Largest square texture the surface may allocate, in pixels.
+    pub max_texture: u32,
+    /// Glyph atlas budget, in bytes.
+    pub font_cache_bytes: usize,
+    /// Depth of the platform event queue.
+    pub event_queue: usize,
+}
+
+impl CapacityLimits {
+    /// Reads the four limits from the library's policy without changing them.
+    pub fn from_surface_policy(policy: SurfacePolicy) -> Self {
+        Self {
+            max_widgets: policy.max_widgets,
+            max_texture: policy.max_texture,
+            font_cache_bytes: policy.font_cache_bytes,
+            event_queue: policy.event_queue,
+        }
+    }
+}
+
 /// Facts a design check reads. It is deliberately small: every field is something the document
 /// already knows, not a second document.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+///
+/// Layout and binding facts are *reported by the caller*: the library's arranged boxes
+/// (`Layout::update`/`arrange_with_context`) and binding contract (`BindingPipeline`,
+/// `bind_widget_property`) are not consumed here yet. Where a fact is missing the check says
+/// *cannot verify*; it does not invent a library value or treat the gap as a pass.
+///
+/// Capability and capacity facts can come from either side, and they stay distinguishable:
+/// [`Self::capabilities`] and a `Supplied` [`Self::capacity_provenance`] are caller-supplied,
+/// while [`Self::contract_capabilities`] and a `Contract` provenance were read from the pinned
+/// library by [`Self::capability_from`] and [`Self::capacity_from`].
+#[derive(Clone, PartialEq, Debug, Default)]
 pub struct DesignFacts {
     /// Node ids in the tree.
     pub nodes: Vec<u64>,
     /// Each node's parent (`None` for a root).
     pub parents: BTreeMap<u64, Option<u64>>,
-    /// Capabilities the target was asked for and whether it has them.
+    /// Capabilities the caller stated and whether the target has them.
     pub capabilities: BTreeMap<String, bool>,
     /// The control count and the target's limit.
     pub capacity: (usize, usize),
+    /// Whether `capacity.1` was supplied by the caller or read from the library.
+    pub capacity_provenance: Provenance,
+    /// The full limit set, present only when [`Self::capacity_from`] set the limit.
+    pub capacity_limits: Option<CapacityLimits>,
+    /// Capability answers read from the library, keyed by name.
+    pub contract_capabilities: BTreeMap<String, Level>,
     /// Resources the document references and whether they exist.
     pub resources: BTreeMap<String, bool>,
     /// The focus order, as written.
     pub focus_order: Vec<u64>,
+    /// Each node's constraints and placed box.
+    pub layout: Vec<LayoutFact>,
+    /// Each binding's source, target and declared types.
+    pub bindings: Vec<BindingFact>,
 }
 
 impl DesignFacts {
-    /// Runs the structural, capability, capacity, resource and focus checks.
+    /// Records whether the library can supply each named capability for `profile`.
+    ///
+    /// The answer comes from [`availability_with`], so `Local` and `CrossProfile` are allowed and
+    /// `Unavailable`/`Unknown` are diagnosed by [`Self::check`]. The answers are kept in
+    /// [`Self::contract_capabilities`], apart from a caller's yes/no in [`Self::capabilities`].
+    ///
+    /// A name the caller already stated is refused rather than overwritten: a caller that wants the
+    /// contract's answer must not leave a contradictory second fact behind.
+    pub fn capability_from(
+        &mut self,
+        factory: &WidgetFactory,
+        profile: &str,
+        names: &[&str],
+    ) -> Result<Vec<CapabilityAnswer>, String> {
+        let target = target_profile(profile).ok_or_else(|| unknown_profile(profile))?;
+        if let Some(supplied) = names
+            .iter()
+            .find(|name| self.capabilities.contains_key(**name))
+        {
+            return Err(format!(
+                "capability {supplied:?} was supplied by the caller and is not overwritten by the contract"
+            ));
+        }
+        Ok(names
+            .iter()
+            .map(|name| {
+                let level = Level::of(availability_with(factory, name, target));
+                self.contract_capabilities.insert((*name).to_owned(), level);
+                CapabilityAnswer {
+                    name: (*name).to_owned(),
+                    level,
+                }
+            })
+            .collect())
+    }
+
+    /// Reads the target's control limit from the library's surface policy.
+    ///
+    /// `used` stays whatever the caller recorded in [`Self::capacity`]; only the limit comes from
+    /// the contract, and [`Self::capacity_provenance`] says so. The full policy is kept in
+    /// [`Self::capacity_limits`] so a report can name the texture, font-cache and queue limits it
+    /// did not check.
+    ///
+    /// The library exposes [`surface_policy`] for the profile this binary was built with and has
+    /// no per-profile lookup. Asking for another profile therefore names that gap instead of
+    /// applying this profile's numbers to it.
+    pub fn capacity_from(&mut self, profile: &str) -> Result<CapacityLimits, String> {
+        if target_profile(profile).is_none() {
+            return Err(unknown_profile(profile));
+        }
+        let current = TargetSpec::current().profile;
+        if profile != current {
+            return Err(format!(
+                "the library's surface policy describes the profile this binary was built with ({current}); it exposes no per-profile lookup, so the {profile:?} limit cannot be read from the contract"
+            ));
+        }
+        let limits = CapacityLimits::from_surface_policy(surface_policy());
+        self.capacity.1 = limits.max_widgets;
+        self.capacity_provenance = Provenance::Contract;
+        self.capacity_limits = Some(limits);
+        Ok(limits)
+    }
+
+    /// Which side stated the capability fact for `name`.
+    ///
+    /// A contract answer wins when both sides named the same capability, because
+    /// [`Self::capability_from`] refuses that collision; `None` means neither side named it.
+    pub fn capability_provenance(&self, name: &str) -> Option<Provenance> {
+        if self.contract_capabilities.contains_key(name) {
+            Some(Provenance::Contract)
+        } else if self.capabilities.contains_key(name) {
+            Some(Provenance::Supplied)
+        } else {
+            None
+        }
+    }
+
+    /// Runs the structural, layout, binding, capability, capacity, resource and focus checks.
     pub fn check(&self, target: &str, revision: u64) -> Vec<Problem> {
         let mut problems = Vec::new();
         let mut seen = BTreeSet::new();
@@ -251,7 +688,28 @@ impl DesignFacts {
                 ));
             }
         }
+        for (capability, level) in &self.contract_capabilities {
+            let reason = match level {
+                Level::Local | Level::CrossProfile => continue,
+                Level::Unavailable => {
+                    "the library knows this name but no constructor under the running profile can build it"
+                }
+                Level::Unknown => "the library registers no control by that name",
+            };
+            problems.push(problem(
+                Source::Design,
+                target,
+                revision,
+                None,
+                Severity::Error,
+                format!("target {target} does not support {capability}: {reason}"),
+            ));
+        }
         if self.capacity.0 > self.capacity.1 {
+            let origin = match self.capacity_provenance {
+                Provenance::Contract => " (the library's surface policy)",
+                Provenance::Supplied => "",
+            };
             problems.push(problem(
                 Source::Design,
                 target,
@@ -259,7 +717,7 @@ impl DesignFacts {
                 None,
                 Severity::Error,
                 format!(
-                    "the document uses {} controls, over the target limit of {}",
+                    "the document uses {} controls, over the target limit of {}{origin}",
                     self.capacity.0, self.capacity.1
                 ),
             ));
@@ -289,8 +747,213 @@ impl DesignFacts {
                 ));
             }
         }
+        self.check_layout(target, revision, &mut problems);
+        self.check_bindings(target, revision, &mut problems);
         problems
     }
+
+    /// The parent a node declares, if it declares one.
+    fn parent_of(&self, node: u64) -> Option<u64> {
+        self.parents.get(&node).copied().flatten()
+    }
+
+    /// Constraints that cannot be satisfied, boxes outside their parent and forbidden overlaps.
+    fn check_layout(&self, target: &str, revision: u64, problems: &mut Vec<Problem>) {
+        let frames: BTreeMap<u64, Frame> = self
+            .layout
+            .iter()
+            .filter_map(|fact| fact.frame.map(|frame| (fact.node, frame)))
+            .collect();
+        for fact in &self.layout {
+            if let (Some(minimum), Some(maximum)) = (fact.minimum, fact.maximum) {
+                if minimum.width > maximum.width {
+                    problems.push(problem(
+                        Source::Design,
+                        target,
+                        revision,
+                        Some(fact.node),
+                        Severity::Error,
+                        format!(
+                            "node {} minimum width {} is above the maximum width {}",
+                            fact.node, minimum.width, maximum.width
+                        ),
+                    ));
+                }
+                if minimum.height > maximum.height {
+                    problems.push(problem(
+                        Source::Design,
+                        target,
+                        revision,
+                        Some(fact.node),
+                        Severity::Error,
+                        format!(
+                            "node {} minimum height {} is above the maximum height {}",
+                            fact.node, minimum.height, maximum.height
+                        ),
+                    ));
+                }
+            }
+            let Some(frame) = fact.frame else {
+                continue;
+            };
+            if let Some(Some(parent)) = self.parents.get(&fact.node) {
+                match frames.get(parent) {
+                    Some(parent_frame) if !parent_frame.contains(frame) => {
+                        problems.push(problem(
+                            Source::Design,
+                            target,
+                            revision,
+                            Some(fact.node),
+                            Severity::Error,
+                            format!(
+                                "node {} is placed outside its parent {}: {} is not inside {}",
+                                fact.node,
+                                parent,
+                                frame.render(),
+                                parent_frame.render()
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        problems.push(problem(
+                            Source::Design,
+                            target,
+                            revision,
+                            Some(fact.node),
+                            Severity::Warning,
+                            format!(
+                                "the layout check cannot verify node {} inside parent {}: the parent has no frame",
+                                fact.node, parent
+                            ),
+                        ));
+                    }
+                }
+            }
+            if fact.overlap == Overlap::Forbidden && !self.parents.contains_key(&fact.node) {
+                problems.push(problem(
+                    Source::Design,
+                    target,
+                    revision,
+                    Some(fact.node),
+                    Severity::Warning,
+                    format!(
+                        "the layout check cannot verify overlap for node {}: its parent is not declared",
+                        fact.node
+                    ),
+                ));
+            }
+        }
+        let mut ordered: Vec<&LayoutFact> = self
+            .layout
+            .iter()
+            .filter(|fact| fact.frame.is_some())
+            .collect();
+        ordered.sort_by_key(|fact| fact.node);
+        for (index, first) in ordered.iter().enumerate() {
+            for second in &ordered[index + 1..] {
+                if first.node == second.node
+                    || (first.overlap != Overlap::Forbidden && second.overlap != Overlap::Forbidden)
+                    || !self.parents.contains_key(&first.node)
+                    || !self.parents.contains_key(&second.node)
+                    || self.parent_of(first.node) != self.parent_of(second.node)
+                {
+                    continue;
+                }
+                let (Some(first_frame), Some(second_frame)) = (first.frame, second.frame) else {
+                    continue;
+                };
+                if first_frame.overlaps(second_frame) {
+                    problems.push(problem(
+                        Source::Design,
+                        target,
+                        revision,
+                        Some(first.node),
+                        Severity::Error,
+                        format!(
+                            "nodes {} and {} overlap, and overlap is not allowed",
+                            first.node, second.node
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Unknown targets, unwritable generated targets, type mismatches and duplicate bindings.
+    fn check_bindings(&self, target: &str, revision: u64, problems: &mut Vec<Problem>) {
+        let mut seen = BTreeSet::new();
+        for binding in &self.bindings {
+            if !seen.insert((binding.source.clone(), binding.target.clone())) {
+                problems.push(problem(
+                    Source::Design,
+                    target,
+                    revision,
+                    Some(binding.target.node()),
+                    Severity::Error,
+                    format!(
+                        "binding {} -> {} is declared twice",
+                        binding.source,
+                        binding.target.render()
+                    ),
+                ));
+            }
+            let Some(declared) = &binding.target_type else {
+                problems.push(problem(
+                    Source::Design,
+                    target,
+                    revision,
+                    Some(binding.target.node()),
+                    Severity::Error,
+                    format!(
+                        "binding {} -> {} names an unknown target {}",
+                        binding.source,
+                        binding.target.render(),
+                        binding.target.what()
+                    ),
+                ));
+                continue;
+            };
+            if binding.generated {
+                problems.push(problem(
+                    Source::Design,
+                    target,
+                    revision,
+                    Some(binding.target.node()),
+                    Severity::Error,
+                    format!(
+                        "binding {} -> {} writes to generated output, which is not writable",
+                        binding.source,
+                        binding.target.render()
+                    ),
+                ));
+                continue;
+            }
+            if !declared.accepts(&binding.source_type) {
+                problems.push(problem(
+                    Source::Design,
+                    target,
+                    revision,
+                    Some(binding.target.node()),
+                    Severity::Error,
+                    format!(
+                        "binding {} -> {} gives {} to a {} target",
+                        binding.source,
+                        binding.target.render(),
+                        binding.source_type.name(),
+                        declared.name()
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// The refusal for a profile the library's target does not declare.
+fn unknown_profile(profile: &str) -> String {
+    format!(
+        "{profile:?} is not a profile the library's target declares (desktop, tablet, mobile, mini, embedded)"
+    )
 }
 
 /// Builds one problem with the common fields.
@@ -410,6 +1073,19 @@ impl Tests {
                 seconds,
             },
         );
+    }
+
+    /// Records a discovered test as not run, unless it already has a result.
+    ///
+    /// Re-listing a suite must not forget that a test passed a moment ago, so discovery adds the
+    /// tests it has not seen and leaves every existing result alone.
+    pub fn note_discovered(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        self.results.entry(name.clone()).or_insert(TestResult {
+            name,
+            status: TestStatus::NotRun,
+            seconds: None,
+        });
     }
 
     /// The results in name order.
@@ -587,9 +1263,12 @@ impl Evidence {
 #[cfg(test)]
 mod tests {
     use super::{
-        Center, DesignFacts, Evidence, Filter, Problem, Severity, Source, TestStatus, Tests,
-        VisualCondition, contrast,
+        BindingFact, BindingTarget, BindingType, Center, DesignFacts, Evidence, Extent, Filter,
+        Frame, LayoutFact, Level, Overlap, Problem, Provenance, Severity, Source, TestStatus,
+        Tests, VisualCondition, contrast,
     };
+    use rust_widgets::widget::WidgetFactory;
+    use rust_widgets::widget::capability::TargetSpec;
 
     fn problem(source: Source, target: &str, revision: u64, message: &str) -> Problem {
         Problem {
@@ -625,6 +1304,18 @@ mod tests {
     }
 
     #[test]
+    fn the_same_problem_is_one_row_and_an_older_one_is_not_current() {
+        let mut center = Center::new();
+        center.add(problem(Source::Build, "desktop", 4, "compile failed"));
+        center.add(problem(Source::Build, "desktop", 4, "compile failed"));
+        assert_eq!(center.matching(&Filter::default()).len(), 1);
+        center.advance(5);
+        assert!(center.matching(&Filter::default()).is_empty());
+        center.add(problem(Source::Build, "desktop", 5, "compile failed"));
+        assert_eq!(center.matching(&Filter::default()).len(), 1);
+    }
+
+    #[test]
     fn a_design_check_names_each_breakage() {
         let mut parents = std::collections::BTreeMap::new();
         parents.insert(1, None);
@@ -640,6 +1331,7 @@ mod tests {
             capacity: (12, 8),
             resources,
             focus_order: vec![1, 1],
+            ..DesignFacts::default()
         };
         let problems = facts.check("mini", 3);
         assert!(problems.iter().any(|p| p.message.contains("twice")));
@@ -708,5 +1400,371 @@ mod tests {
         let json = evidence.json();
         assert!(json.contains("\"status\": \"failed\""), "{json}");
         assert!(json.contains("\"source\": \"test\""), "{json}");
+    }
+
+    #[test]
+    fn a_layout_violation_produces_a_design_problem() {
+        let mut parents = std::collections::BTreeMap::new();
+        parents.insert(1, None);
+        parents.insert(2, Some(1));
+        parents.insert(3, Some(1));
+        parents.insert(4, Some(1));
+        let facts = DesignFacts {
+            nodes: vec![1, 2, 3, 4],
+            parents,
+            layout: vec![
+                LayoutFact {
+                    node: 1,
+                    frame: Some(Frame {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 200.0,
+                        height: 200.0,
+                    }),
+                    ..LayoutFact::new(1)
+                },
+                LayoutFact {
+                    node: 2,
+                    minimum: Some(Extent {
+                        width: 120.0,
+                        height: 10.0,
+                    }),
+                    maximum: Some(Extent {
+                        width: 80.0,
+                        height: 10.0,
+                    }),
+                    frame: Some(Frame {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 20.0,
+                        height: 20.0,
+                    }),
+                    ..LayoutFact::new(2)
+                },
+                LayoutFact {
+                    node: 3,
+                    frame: Some(Frame {
+                        x: 190.0,
+                        y: 190.0,
+                        width: 20.0,
+                        height: 20.0,
+                    }),
+                    ..LayoutFact::new(3)
+                },
+                LayoutFact {
+                    node: 4,
+                    frame: Some(Frame {
+                        x: 185.0,
+                        y: 185.0,
+                        width: 10.0,
+                        height: 10.0,
+                    }),
+                    overlap: Overlap::Forbidden,
+                    ..LayoutFact::new(4)
+                },
+            ],
+            ..DesignFacts::default()
+        };
+        let problems = facts.check("desktop", 9);
+        assert!(problems.iter().any(|p| p.message.contains("minimum width")));
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("outside its parent"))
+        );
+        assert!(problems.iter().any(|p| p.message.contains("overlap")));
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.source == Source::Design && p.target == "desktop" && p.revision == 9)
+        );
+    }
+
+    #[test]
+    fn a_valid_layout_produces_no_problems() {
+        let mut parents = std::collections::BTreeMap::new();
+        parents.insert(1, None);
+        parents.insert(2, Some(1));
+        let facts = DesignFacts {
+            nodes: vec![1, 2],
+            parents,
+            layout: vec![
+                LayoutFact {
+                    node: 1,
+                    frame: Some(Frame {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    }),
+                    ..LayoutFact::new(1)
+                },
+                LayoutFact {
+                    node: 2,
+                    minimum: Some(Extent {
+                        width: 10.0,
+                        height: 10.0,
+                    }),
+                    maximum: Some(Extent {
+                        width: 50.0,
+                        height: 50.0,
+                    }),
+                    frame: Some(Frame {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 20.0,
+                        height: 20.0,
+                    }),
+                    overlap: Overlap::Forbidden,
+                },
+            ],
+            ..DesignFacts::default()
+        };
+        assert!(facts.check("desktop", 1).is_empty());
+    }
+
+    #[test]
+    fn a_binding_type_violation_is_a_design_problem_of_the_right_source() {
+        let facts = DesignFacts {
+            bindings: vec![BindingFact {
+                source: "f.count".to_owned(),
+                target: BindingTarget::Property {
+                    node: 2,
+                    property: "label".to_owned(),
+                },
+                source_type: BindingType::Text,
+                target_type: Some(BindingType::Number),
+                generated: false,
+            }],
+            ..DesignFacts::default()
+        };
+        let problems = facts.check("mini", 4);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].source, Source::Design);
+        assert_eq!(problems[0].target, "mini");
+        assert_eq!(problems[0].revision, 4);
+        assert_eq!(problems[0].node, Some(2));
+        assert!(
+            problems[0]
+                .message
+                .contains("gives text to a number target")
+        );
+    }
+
+    #[test]
+    fn an_unsupported_binding_target_is_diagnosed_not_dropped() {
+        let facts = DesignFacts {
+            bindings: vec![
+                BindingFact {
+                    source: "f.count".to_owned(),
+                    target: BindingTarget::Property {
+                        node: 2,
+                        property: "tone".to_owned(),
+                    },
+                    source_type: BindingType::Text,
+                    target_type: None,
+                    generated: false,
+                },
+                BindingFact {
+                    source: "f.saved".to_owned(),
+                    target: BindingTarget::Event {
+                        node: 3,
+                        event: "finished".to_owned(),
+                    },
+                    source_type: BindingType::Bool,
+                    target_type: None,
+                    generated: false,
+                },
+            ],
+            ..DesignFacts::default()
+        };
+        let problems = facts.check("desktop", 2);
+        assert_eq!(problems.len(), 2);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("unknown target property"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("unknown target event"))
+        );
+        assert!(problems.iter().all(|p| p.source == Source::Design));
+    }
+
+    #[test]
+    fn a_duplicate_binding_and_a_generated_target_are_named() {
+        let binding = BindingFact {
+            source: "1.label".to_owned(),
+            target: BindingTarget::Property {
+                node: 5,
+                property: "text".to_owned(),
+            },
+            source_type: BindingType::Text,
+            target_type: Some(BindingType::Text),
+            generated: false,
+        };
+        let facts = DesignFacts {
+            bindings: vec![
+                binding.clone(),
+                binding,
+                BindingFact {
+                    source: "f.total".to_owned(),
+                    target: BindingTarget::Property {
+                        node: 6,
+                        property: "width".to_owned(),
+                    },
+                    source_type: BindingType::Number,
+                    target_type: Some(BindingType::Number),
+                    generated: true,
+                },
+            ],
+            ..DesignFacts::default()
+        };
+        let problems = facts.check("desktop", 1);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("declared twice"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("generated output"))
+        );
+    }
+
+    #[test]
+    fn a_valid_binding_produces_no_problems() {
+        let facts = DesignFacts {
+            bindings: vec![BindingFact {
+                source: "f.count".to_owned(),
+                target: BindingTarget::Property {
+                    node: 2,
+                    property: "width".to_owned(),
+                },
+                source_type: BindingType::Integer,
+                target_type: Some(BindingType::Number),
+                generated: false,
+            }],
+            ..DesignFacts::default()
+        };
+        assert!(facts.check("desktop", 1).is_empty());
+    }
+
+    #[test]
+    fn a_local_library_capability_is_not_diagnosed() {
+        let current = TargetSpec::current().profile;
+        let mut facts = DesignFacts::default();
+        let answers = facts
+            .capability_from(WidgetFactory::shared(), current, &["button"])
+            .expect("the library's own profile");
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].level, Level::Local);
+        assert_eq!(
+            facts.capability_provenance("button"),
+            Some(Provenance::Contract)
+        );
+        assert!(facts.check(current, 1).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_library_capability_is_diagnosed() {
+        let current = TargetSpec::current().profile;
+        let mut facts = DesignFacts::default();
+        let answers = facts
+            .capability_from(WidgetFactory::shared(), current, &["not_a_widget"])
+            .expect("the library's own profile");
+        assert_eq!(answers[0].level, Level::Unknown);
+        let problems = facts.check(current, 1);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].message.contains("not_a_widget"));
+        assert!(problems[0].message.contains("registers no control"));
+    }
+
+    #[test]
+    fn an_unavailable_library_capability_is_diagnosed() {
+        // A desktop build registers a constructor for every capability, so `Unavailable` cannot be
+        // produced by this binary's factory. The answer a crippled build reports is still checked.
+        let mut facts = DesignFacts::default();
+        facts
+            .contract_capabilities
+            .insert("gated".to_owned(), Level::Unavailable);
+        let problems = facts.check("mini", 1);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].message.contains("gated"));
+        assert!(problems[0].message.contains("no constructor"));
+    }
+
+    #[test]
+    fn capacity_comes_from_the_surface_policy_and_overflow_names_the_library_limit() {
+        let current = TargetSpec::current().profile;
+        let mut facts = DesignFacts::default();
+        let limits = facts
+            .capacity_from(current)
+            .expect("the library's own profile");
+        assert_eq!(facts.capacity_provenance, Provenance::Contract);
+        assert_eq!(facts.capacity_limits, Some(limits));
+        assert_eq!(facts.capacity.1, limits.max_widgets);
+
+        facts.capacity.0 = limits.max_widgets + 1;
+        let problems = facts.check(current, 1);
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0]
+                .message
+                .contains(&format!("over the target limit of {}", limits.max_widgets))
+        );
+        assert!(problems[0].message.contains("surface policy"));
+    }
+
+    #[test]
+    fn a_capacity_limit_for_another_profile_names_the_library_gap() {
+        let current = TargetSpec::current().profile;
+        let other = if current == "mini" { "desktop" } else { "mini" };
+        let mut facts = DesignFacts {
+            capacity: (10, 20),
+            ..DesignFacts::default()
+        };
+        let refusal = facts
+            .capacity_from(other)
+            .expect_err("the library has no per-profile lookup");
+        assert!(refusal.contains("surface policy"));
+        assert!(refusal.contains("no per-profile lookup"));
+        assert_eq!(facts.capacity, (10, 20));
+        assert_eq!(facts.capacity_provenance, Provenance::Supplied);
+        assert_eq!(facts.capacity_limits, None);
+    }
+
+    #[test]
+    fn caller_supplied_facts_stay_distinguishable_from_contract_facts() {
+        let current = TargetSpec::current().profile;
+        let mut facts = DesignFacts::default();
+        facts.capabilities.insert("graphics".to_owned(), false);
+        assert_eq!(
+            facts.capability_provenance("graphics"),
+            Some(Provenance::Supplied)
+        );
+        assert_eq!(facts.capacity_provenance, Provenance::Supplied);
+
+        facts
+            .capability_from(WidgetFactory::shared(), current, &["button"])
+            .expect("the library's own profile");
+        assert_eq!(
+            facts.capability_provenance("button"),
+            Some(Provenance::Contract)
+        );
+
+        // The contract does not overwrite a caller's fact; the collision is refused.
+        let refusal = facts
+            .capability_from(WidgetFactory::shared(), current, &["graphics"])
+            .expect_err("graphics was supplied by the caller");
+        assert!(refusal.contains("supplied by the caller"));
+        assert_eq!(
+            facts.capability_provenance("graphics"),
+            Some(Provenance::Supplied)
+        );
+        assert!(!facts.contract_capabilities.contains_key("graphics"));
     }
 }

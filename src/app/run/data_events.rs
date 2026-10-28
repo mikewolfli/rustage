@@ -382,52 +382,61 @@ pub(super) fn binding(options: &crate::cli::BindingOptions) -> bool {
 }
 
 pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
-    use crate::app::data::data_model::{Data, DataField, FieldKind};
-    use crate::app::data::events::{EventDecl, Registry, Trigger, Wiring, fire, status};
+    use crate::app::data::data_model::{Data, FieldKind};
+    use crate::app::data::events::{Registry, Trigger, Wiring, fire, status};
     use crate::contracts::identity::NodeId;
 
+    // Declarations are not built here: `control:<name>` loads the control's own `EventSchema` rows,
+    // and `event:`/`field:` only answer whether the library declares them. A payload field that the
+    // library does not publish therefore cannot be introduced from the command line.
     let mut registry = Registry::new();
     let mut wiring = Wiring::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
-            "event" => {
-                if registry.has(argument) {
-                    Ok(vec![format!("event {argument}: already declared")])
-                } else {
-                    registry.events.push(EventDecl {
-                        name: argument.to_owned(),
-                        payload: Vec::new(),
-                    });
-                    Ok(vec![format!("event {argument}")])
+            "control" => match Registry::from_control(argument) {
+                Ok(loaded) => {
+                    let mut lines = vec![format!(
+                        "control {argument}: {} declared event(s)",
+                        loaded.events.len()
+                    )];
+                    lines.extend(loaded.render());
+                    registry = loaded;
+                    Ok(lines)
                 }
-            }
+                Err(reason) => Err(reason),
+            },
+            "event" => match registry.get(argument) {
+                Some(declaration) => Ok(vec![format!(
+                    "event {argument}: declared ({})",
+                    declaration.payload_summary()
+                )]),
+                None => Err(no_such_event(&registry, argument)),
+            },
             "field" => match argument.split_once(':') {
                 Some((event, rest)) => match rest.split_once(':') {
                     Some((field, rest)) => {
                         let (kind_text, required) = match rest.split_once(':') {
-                            Some((kind, "required")) => (kind, true),
-                            Some((kind, "optional")) => (kind, false),
+                            Some((kind, "required")) => (kind, Some(true)),
+                            Some((kind, "optional")) => (kind, Some(false)),
                             Some((_, other)) => {
                                 return report(format!("{other:?} is not required or optional"));
                             }
-                            None => (rest, false),
+                            None => (rest, None),
                         };
                         let kind = match FieldKind::parse(kind_text) {
                             Ok(kind) => kind,
                             Err(reason) => return report(reason),
                         };
-                        match registry.events.iter_mut().find(|decl| decl.name == event) {
-                            Some(declaration) => {
-                                let line = format!("field {event}.{field}: {}", kind.render());
-                                declaration.payload.push(DataField {
-                                    name: field.to_owned(),
-                                    kind,
-                                    required,
-                                });
-                                Ok(vec![line])
-                            }
-                            None => Err(format!("no event {event:?} is declared")),
+                        let Some(declaration) = registry.get(event) else {
+                            return report(no_such_event(&registry, event));
+                        };
+                        match declared_field(declaration, event, field, &kind, required) {
+                            Ok(declared) => Ok(vec![format!(
+                                "field {event}.{field}: {} (declared)",
+                                declared.kind.render()
+                            )]),
+                            Err(reason) => Err(reason),
                         }
                     }
                     None => Err(format!(
@@ -443,7 +452,7 @@ pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
                     Some((event, handler)) => match node.parse::<u64>() {
                         Ok(node) => {
                             match wiring.attach(&registry, NodeId::from_raw(node), event, handler) {
-                                Ok(()) => Ok(vec![format!("node {node}: {event} -> {handler}")]),
+                                Ok(_) => Ok(vec![format!("node {node}: {event} -> {handler}")]),
                                 Err(reason) => Err(reason),
                             }
                         }
@@ -457,6 +466,16 @@ pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
                     "attach needs <node>:<event>:<handler>, got {argument:?}"
                 )),
             },
+            "detach" => match argument.split_once(':') {
+                Some((node, event)) => match node.parse::<u64>() {
+                    Ok(node) => match wiring.detach(NodeId::from_raw(node), event) {
+                        Some(removed) => Ok(vec![format!("released {}", removed.render())]),
+                        None => Err(format!("no handler is wired to {event:?} on node {node}")),
+                    },
+                    Err(_) => Err(format!("{node:?} is not a node id")),
+                },
+                None => Err(format!("detach needs <node>:<event>, got {argument:?}")),
+            },
             "status" => match argument.split_once(':') {
                 Some((node, event)) => match node.parse::<u64>() {
                     Ok(node) => {
@@ -468,15 +487,18 @@ pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
                 None => Err(format!("status needs <node>:<event>, got {argument:?}")),
             },
             "fire" => match argument.split_once(':') {
-                Some((node, rest)) => match rest.split_once(':') {
-                    Some((event, pairs)) => {
-                        let node = match node.parse::<u64>() {
-                            Ok(node) => NodeId::from_raw(node),
-                            Err(_) => {
-                                return report(format!("{node:?} is not a node id"));
-                            }
-                        };
-                        let mut payload = Data::new();
+                Some((node, rest)) => {
+                    let node = match node.parse::<u64>() {
+                        Ok(node) => NodeId::from_raw(node),
+                        Err(_) => {
+                            return report(format!("{node:?} is not a node id"));
+                        }
+                    };
+                    // A payload-free event carries no `field=value` part at all, so an absent
+                    // third segment is an empty payload rather than a malformed operation.
+                    let (event, pairs) = rest.split_once(':').unwrap_or((rest, ""));
+                    let mut payload = Data::new();
+                    if !pairs.is_empty() {
                         for pair in pairs.split(',') {
                             let Some((field, value)) = pair.split_once('=') else {
                                 return report(format!(
@@ -499,21 +521,18 @@ pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
                                 Err(reason) => return report(reason),
                             }
                         }
-                        let trigger = Trigger {
-                            event: event.to_owned(),
-                            payload,
-                        };
-                        match fire(&registry, &wiring, node, &trigger) {
-                            Ok(firing) => Ok(firing.render(node)),
-                            Err(reason) => Err(reason),
-                        }
                     }
-                    None => Err(format!(
-                        "fire needs <node>:<event>:<field>=<value>, got {argument:?}"
-                    )),
-                },
+                    let trigger = Trigger {
+                        event: event.to_owned(),
+                        payload,
+                    };
+                    match fire(&registry, &wiring, node, &trigger) {
+                        Ok(firing) => Ok(firing.render(node)),
+                        Err(reason) => Err(reason),
+                    }
+                }
                 None => Err(format!(
-                    "fire needs <node>:<event>:<field>=<value>, got {argument:?}"
+                    "fire needs <node>:<event>[:<field>=<value>,...], got {argument:?}"
                 )),
             },
             "check" => {
@@ -554,6 +573,56 @@ pub(super) fn events(options: &crate::cli::EventsOptions) -> bool {
     true
 }
 
+/// Why a name is not declared, naming the control whose manifest supplied the declarations.
+fn no_such_event(registry: &crate::app::data::events::Registry, event: &str) -> String {
+    match &registry.control {
+        Some(control) => format!(
+            "no event {event:?} is declared by {control:?}; declarations come from the library's EventSchema"
+        ),
+        None => "no control is loaded; start with control:<name> so declarations come from the library's EventSchema".to_owned(),
+    }
+}
+
+/// Checks a `field:<event>:<field>:<kind>[:required|optional]` argument against the declaration.
+///
+/// The command line can agree or disagree with the library; it cannot add a field or change a
+/// type. That is what keeps the registry derived from `EventSchema` rather than from its arguments.
+fn declared_field<'a>(
+    declaration: &'a crate::app::data::events::EventDecl,
+    event: &str,
+    field: &str,
+    kind: &crate::app::data::data_model::FieldKind,
+    required: Option<bool>,
+) -> Result<&'a crate::app::data::data_model::DataField, String> {
+    let Some(declared) = declaration
+        .payload
+        .iter()
+        .find(|declared| declared.name == field)
+    else {
+        return Err(format!(
+            "event {event:?} declares no field {field:?}; its payload is {}",
+            declaration.payload_summary()
+        ));
+    };
+    if declared.kind != *kind {
+        return Err(format!(
+            "event {event:?} field {field:?} is declared as {}; a command-line kind cannot change the declaration",
+            declared.kind.render()
+        ));
+    }
+    if required.is_some_and(|required| required != declared.required) {
+        return Err(format!(
+            "event {event:?} field {field:?} is declared as {}; a command-line marker cannot change the declaration",
+            if declared.required {
+                "required"
+            } else {
+                "optional"
+            }
+        ));
+    }
+    Ok(declared)
+}
+
 pub(super) fn parse_capability(text: &str) -> Option<crate::contracts::permission::Capability> {
     use crate::contracts::permission::Capability;
     Some(match text {
@@ -573,6 +642,7 @@ pub(super) fn dispatch_actions(options: &crate::cli::DispatchOptions) -> bool {
     use crate::app::data::binding::Environment;
     use crate::app::data::data_model::Schema;
     use crate::app::data::dispatch::{Action, Dispatcher};
+    use crate::app::data::events::{Registry, WireSource};
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::PropertyName;
     use crate::contracts::permission::{PermissionGate, Principal};
@@ -618,6 +688,34 @@ pub(super) fn dispatch_actions(options: &crate::cli::DispatchOptions) -> bool {
                 dispatcher.commands.insert(argument.to_owned());
                 Ok(vec![format!("command: {argument}")])
             }
+            "control" => match Registry::from_control(argument) {
+                Ok(registry) => {
+                    let lines = vec![format!(
+                        "control {argument}: {} declared event(s) for WIRE_RULES",
+                        registry.events.len()
+                    )];
+                    dispatcher = dispatcher.with_registry(&registry);
+                    Ok(lines)
+                }
+                Err(reason) => Err(reason),
+            },
+            // `control:` loads the library's own declarations; `event:` records only the source
+            // shape `WIRE_RULES` needs, so a wire can be checked without a live control. Neither
+            // adds a declaration to the Events registry.
+            "event" => match argument.split_once(':') {
+                Some((event, kind)) => match WireSource::parse(kind) {
+                    Some(source) => {
+                        dispatcher.declare_event(event, source);
+                        Ok(vec![format!("event {event}: {}", source.render())])
+                    }
+                    None => Err(format!(
+                        "{kind:?} is not a wire source; use none, payload, or a library kind"
+                    )),
+                },
+                None => Err(format!(
+                    "event needs <name>:<kind|none|payload>, got {argument:?}"
+                )),
+            },
             "function" => {
                 dispatcher.functions.insert(argument.to_owned());
                 Ok(vec![format!("function: {argument}")])
@@ -697,7 +795,15 @@ pub(super) fn dispatch_actions(options: &crate::cli::DispatchOptions) -> bool {
                                 return report(format!("{rest:?} is not set/command/call"));
                             }
                         };
-                        match dispatcher.install(&gate, Principal::Human, node, event, action) {
+                        let source = dispatcher.event_source(event);
+                        match dispatcher.install_wired(
+                            &gate,
+                            Principal::Human,
+                            node,
+                            event,
+                            source,
+                            action,
+                        ) {
                             Ok(install) => Ok(vec![format!(
                                 "node {}: {event}: {}",
                                 node.get(),
@@ -1273,4 +1379,80 @@ pub(super) fn session_log(options: &crate::cli::SessionLogOptions) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::declared_field;
+    use crate::app::data::data_model::FieldKind;
+    use crate::app::data::events::Registry;
+    use rust_widgets::widget::capability::{EventSchema, PropertyValueKind};
+
+    fn registry() -> Registry {
+        Registry::from_event_schemas(&[EventSchema::scalar(
+            "state_changed",
+            PropertyValueKind::String,
+        )])
+    }
+
+    #[test]
+    fn a_command_line_field_must_match_the_declared_type() {
+        let registry = registry();
+        let declaration = registry.get("state_changed").expect("a declaration");
+        assert!(
+            declared_field(
+                declaration,
+                "state_changed",
+                "value",
+                &FieldKind::Text,
+                Some(true)
+            )
+            .is_ok()
+        );
+        let reason = declared_field(
+            declaration,
+            "state_changed",
+            "value",
+            &FieldKind::Integer,
+            None,
+        )
+        .expect_err("a different kind");
+        assert!(reason.contains("declared as text"), "{reason}");
+    }
+
+    #[test]
+    fn a_command_line_field_cannot_add_a_field_the_schema_does_not_publish() {
+        let registry = registry();
+        let declaration = registry.get("state_changed").expect("a declaration");
+        let reason = declared_field(
+            declaration,
+            "state_changed",
+            "count",
+            &FieldKind::Integer,
+            None,
+        )
+        .expect_err("an undeclared field");
+        assert!(reason.contains("declares no field"), "{reason}");
+        assert!(
+            !declaration
+                .payload
+                .iter()
+                .any(|field| field.name == "count")
+        );
+    }
+
+    #[test]
+    fn a_command_line_marker_must_match_the_declaration() {
+        let registry = registry();
+        let declaration = registry.get("state_changed").expect("a declaration");
+        let reason = declared_field(
+            declaration,
+            "state_changed",
+            "value",
+            &FieldKind::Text,
+            Some(false),
+        )
+        .expect_err("a different required marker");
+        assert!(reason.contains("declared as required"), "{reason}");
+    }
 }

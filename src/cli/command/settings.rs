@@ -13,7 +13,7 @@ pub struct SettingsOptions {
     /// The operations: `schema:<key>:<kind>`, `set:<layer>:<key>=<value>`, `get:<key>`,
     /// `search:<term>`, `reset:<layer>:<key>`, `migrate:<old>=<new>[,<old>=<new>]`,
     /// `keymap:<command>=<chord>`, `keymap-other:<command>=<chord>`, `keymap-diff`,
-    /// `keymap-import`, `show`.
+    /// `keymap-import`, `export:<file>`, `import-file:<file>`, `show`.
     pub ops: Vec<String>,
 }
 

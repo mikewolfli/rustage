@@ -258,12 +258,25 @@ pub struct Discovery {
     /// How many non-empty lines were not understood. A listing with these is not treated as
     /// complete: an ignored line is an unknown test, not a missing one.
     pub unparsed: usize,
+    /// Why the list is not complete even though it parsed: the ignored-test listing failed, so
+    /// which of these tests are ignored is unknown.
+    pub incomplete: Option<String>,
 }
 
 impl Discovery {
     /// How many listed tests are marked ignored.
     pub fn ignored(&self) -> usize {
         self.tests.iter().filter(|test| test.ignored).count()
+    }
+
+    /// Marks the tests the ignored listing named, keeping the full listing's order.
+    ///
+    /// Only ever sets the flag: a toolchain that also marks the plain listing keeps its marks.
+    fn mark_ignored(&mut self, ignored: &[DiscoveredTest]) {
+        let names: BTreeSet<&str> = ignored.iter().map(|test| test.name.as_str()).collect();
+        for test in &mut self.tests {
+            test.ignored |= names.contains(test.name.as_str());
+        }
     }
 }
 
@@ -373,6 +386,29 @@ impl RunReport {
             .filter(|result| result.status == status)
             .count()
     }
+
+    /// Whether this report is a complete pass for `selection`.
+    ///
+    /// A run that was stopped, that reported a failure, or whose output could not be trusted is
+    /// not a pass. Neither is a test the selection asked about that reported no result — filtered
+    /// out by the harness, skipped by the capture limit, or never reached. "Not run" is not
+    /// "passed", so this is the test a caller may use for an exit code.
+    pub fn complete_for(&self, selection: &Selection) -> bool {
+        if self.cancelled || !self.failures.is_empty() || self.incomplete.is_some() {
+            return false;
+        }
+        if selection.names.is_empty() {
+            // A whole-suite (or filtered) run is a pass only when every test this session knows
+            // about reported a result.
+            self.not_run.is_empty()
+        } else {
+            // An exact selection asks about the tests it named, and only those.
+            selection
+                .names
+                .iter()
+                .all(|name| !self.not_run.contains(name))
+        }
+    }
 }
 
 /// Discovers and runs cargo tests.
@@ -416,17 +452,50 @@ impl TestRunner {
         if output.cancelled {
             return Err("test discovery was cancelled before it finished".to_owned());
         }
-        match output.exit {
-            Some(0) => Ok(parse_listing(&output.stdout, output.truncated)),
-            Some(code) => Err(format!(
-                "cargo test -- --list exited with code {code}: {}",
-                tail(&output.stderr)
-            )),
-            None => Err(format!(
-                "cargo test -- --list ended without an exit code: {}",
-                tail(&output.stderr)
-            )),
+        let mut discovery = match output.exit {
+            Some(0) => parse_listing(&output.stdout, output.truncated),
+            Some(code) => {
+                return Err(format!(
+                    "cargo test -- --list exited with code {code}: {}",
+                    tail(&output.stderr)
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "cargo test -- --list ended without an exit code: {}",
+                    tail(&output.stderr)
+                ));
+            }
+        };
+
+        // libtest 1.98 prints `name: test` for an ignored test in the plain listing too — verified
+        // against a real project, not assumed — so the plain listing cannot say which tests are
+        // ignored. `--list --ignored` is the harness filter that names only those. A failure here
+        // does not throw away the tests that were listed; it says which part is unknown.
+        let ignored_command = self.command(
+            "cargo test -- --list --ignored",
+            ["test", "--", "--list", "--ignored"],
+        );
+        let ignored = self.runner.run(&ignored_command, cancel)?;
+        if ignored.cancelled {
+            return Err("test discovery was cancelled before it finished".to_owned());
         }
+        match ignored.exit {
+            Some(0) => {
+                let listing = parse_listing(&ignored.stdout, ignored.truncated);
+                discovery.mark_ignored(&listing.tests);
+                discovery.truncated |= listing.truncated;
+                discovery.unparsed += listing.unparsed;
+            }
+            _ => {
+                discovery.incomplete = Some(format!(
+                    "cargo test -- --list --ignored exited with {}; which tests are ignored is \
+                     unknown",
+                    exit_text(ignored.exit)
+                ));
+            }
+        }
+        Ok(discovery)
     }
 
     /// Lists the tests and records each newly seen one as not run.
@@ -445,6 +514,10 @@ impl TestRunner {
     ///
     /// Results are recorded for the tests the harness explicitly reported. Everything else in the
     /// selection stays not run, and a failure is added to `center` as a test problem at `revision`.
+    ///
+    /// Only the tests use this: every production caller names a stop policy it owns, so an
+    /// operation that cannot be stopped is not built into the binary.
+    #[cfg(test)]
     pub fn run(
         &self,
         selection: &Selection,
@@ -474,9 +547,12 @@ impl TestRunner {
         cancel: &CancelToken,
     ) -> Result<RunReport, String> {
         if cancel.is_requested() {
+            // Nothing was started, so no test ran. The tests this session already knows about are
+            // listed as not run for the same reason a terminated run lists them: a stop is the
+            // opposite of a pass, and "0 not run" here would read as "nothing was missed".
             return Ok(RunReport {
                 cancelled: true,
-                not_run: selection.names.clone(),
+                not_run: outstanding(tests, selection, &BTreeSet::new()),
                 ..RunReport::default()
             });
         }
@@ -499,19 +575,7 @@ impl TestRunner {
             .iter()
             .map(|result| result.name.as_str())
             .collect();
-        let mut not_run: Vec<String> = tests
-            .results()
-            .into_iter()
-            .filter(|result| result.status == TestStatus::NotRun)
-            .map(|result| result.name.clone())
-            .collect();
-        for name in &selection.names {
-            if !observed.contains(name.as_str()) && !not_run.contains(name) {
-                not_run.push(name.clone());
-            }
-        }
-        not_run.sort();
-        not_run.dedup();
+        let not_run = outstanding(tests, selection, &observed);
 
         let mut notes = Vec::new();
         if output.truncated {
@@ -560,6 +624,9 @@ impl TestRunner {
     }
 
     /// Re-runs exactly the tests whose last recorded status is failed.
+    ///
+    /// Only the tests use this, for the same reason [`TestRunner::run`] does.
+    #[cfg(test)]
     pub fn rerun_failed(
         &self,
         revision: u64,
@@ -567,6 +634,24 @@ impl TestRunner {
         tests: &mut Tests,
         center: &mut Center,
     ) -> Result<RunReport, String> {
+        self.rerun_failed_cancellable(revision, target, tests, center, &CancelToken::default())
+            .map(|(_, report)| report)
+    }
+
+    /// Re-runs the failed tests, stopping if `cancel` is requested.
+    ///
+    /// The selection is returned with the report because the caller that prints the result also has
+    /// to say whether the re-run covered everything it asked for
+    /// ([`RunReport::complete_for`]), and only this call knows which tests were still failing when
+    /// it started.
+    pub fn rerun_failed_cancellable(
+        &self,
+        revision: u64,
+        target: &str,
+        tests: &mut Tests,
+        center: &mut Center,
+        cancel: &CancelToken,
+    ) -> Result<(Selection, RunReport), String> {
         let failed: Vec<String> = tests
             .results()
             .into_iter()
@@ -576,7 +661,9 @@ impl TestRunner {
         if failed.is_empty() {
             return Err("there is no failed test to re-run".to_owned());
         }
-        self.run(&Selection::exact(failed), revision, target, tests, center)
+        let selection = Selection::exact(failed);
+        let report = self.run_cancellable(&selection, revision, target, tests, center, cancel)?;
+        Ok((selection, report))
     }
 
     fn command<I, S>(&self, label: &str, arguments: I) -> Command
@@ -615,6 +702,28 @@ impl TestFailure {
             message: format!("test {} failed: {}", self.name, self.reason),
         }
     }
+}
+
+/// The tests a run left without a result, in name order.
+///
+/// Every test this session knows about that has not run, plus every selected name that did not
+/// report one. `observed` is what this run's output proved, so a selected test that reported stays
+/// out of the list even when it was already not run before.
+fn outstanding(tests: &Tests, selection: &Selection, observed: &BTreeSet<&str>) -> Vec<String> {
+    let mut not_run: Vec<String> = tests
+        .results()
+        .into_iter()
+        .filter(|result| result.status == TestStatus::NotRun)
+        .map(|result| result.name.clone())
+        .collect();
+    for name in &selection.names {
+        if !observed.contains(name.as_str()) && !not_run.contains(name) {
+            not_run.push(name.clone());
+        }
+    }
+    not_run.sort();
+    not_run.dedup();
+    not_run
 }
 
 /// The results one run's output proves.
@@ -784,6 +893,22 @@ fn panic_location(detail: &str) -> Option<String> {
     }
 }
 
+/// The harness's own count line, `3 tests, 0 benchmarks` or `1 test, 0 benchmarks`.
+///
+/// Singular and plural both occur: the ignored-test listing is usually a single test, and counting
+/// its summary as an unparsed line would mark a perfectly readable list as incomplete.
+fn is_listing_summary(line: &str) -> bool {
+    if !(line.ends_with("benchmark") || line.ends_with("benchmarks")) {
+        return false;
+    }
+    let Some((count, rest)) = line.split_once(' ') else {
+        return false;
+    };
+    !count.is_empty()
+        && count.chars().all(|digit| digit.is_ascii_digit())
+        && (rest.starts_with("test, ") || rest.starts_with("tests, "))
+}
+
 /// Parses `cargo test -- --list`.
 fn parse_listing(text: &str, truncated: bool) -> Discovery {
     let mut discovery = Discovery {
@@ -795,9 +920,7 @@ fn parse_listing(text: &str, truncated: bool) -> Discovery {
         if line.is_empty() || line.starts_with("running ") {
             continue;
         }
-        if line.contains(" tests, ")
-            && (line.ends_with("benchmark") || line.ends_with("benchmarks"))
-        {
+        if is_listing_summary(line) {
             continue;
         }
         let mut ignored = false;
@@ -938,10 +1061,16 @@ mod tests {
 
     #[test]
     fn discovery_parses_a_listing_and_records_what_it_saw() {
-        let (runner, fake) = runner(vec![output(
-            "running 0 tests\napp::quality::report::tests::one: test\napp::quality::report::tests::two: test\n2 tests, 0 benchmarks\n",
-            0,
-        )]);
+        let (runner, fake) = runner(vec![
+            output(
+                "running 0 tests\napp::quality::report::tests::one: test\napp::quality::report::tests::two: test\n2 tests, 0 benchmarks\n",
+                0,
+            ),
+            output(
+                "app::quality::report::tests::two: test\n1 test, 0 benchmarks\n",
+                0,
+            ),
+        ]);
         let mut tests = Tests::new();
         let discovery = runner.discover_into(&mut tests).expect("a listing");
 
@@ -950,22 +1079,53 @@ mod tests {
         assert_eq!(discovery.benchmarks, 0);
         assert_eq!(discovery.unparsed, 0);
         assert!(!discovery.truncated);
+        assert_eq!(discovery.ignored(), 1);
+        assert!(discovery.tests[1].ignored);
+        assert!(discovery.incomplete.is_none());
         assert_eq!(tests.tally().get("not-run"), Some(&2));
 
         let commands = fake.commands();
-        assert_eq!(commands.len(), 1);
+        assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].arguments, ["test", "--", "--list"]);
         assert_eq!(commands[0].directory.as_deref(), Some("demo".as_ref()));
+        assert_eq!(
+            commands[1].arguments,
+            ["test", "--", "--list", "--ignored"],
+            "the plain listing does not mark ignored tests, so they are listed separately"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_ignored_listing_leaves_the_rest_of_the_list_in_place() {
+        let (runner, _fake) = runner(vec![
+            output("app::tests::one: test\napp::tests::two: test\n", 0),
+            output("", 101),
+        ]);
+        let discovery = runner.discover().expect("a listing");
+
+        assert_eq!(
+            discovery.tests.len(),
+            2,
+            "the tests that were listed are kept"
+        );
+        let reason = discovery.incomplete.expect("the gap is named");
+        assert!(
+            reason.contains("which tests are ignored is unknown"),
+            "{reason}"
+        );
     }
 
     #[test]
     fn a_truncated_listing_is_not_reported_as_complete() {
-        let (runner, _fake) = runner(vec![CommandOutput {
-            exit: Some(0),
-            stdout: "app::tests::one: test\n".to_owned(),
-            truncated: true,
-            ..CommandOutput::default()
-        }]);
+        let (runner, _fake) = runner(vec![
+            CommandOutput {
+                exit: Some(0),
+                stdout: "app::tests::one: test\n".to_owned(),
+                truncated: true,
+                ..CommandOutput::default()
+            },
+            output("", 0),
+        ]);
         let discovery = runner.discover().expect("a listing");
         assert_eq!(discovery.tests.len(), 1);
         assert!(discovery.truncated);
@@ -973,7 +1133,7 @@ mod tests {
 
     #[test]
     fn a_listing_that_fails_to_compile_reports_the_diagnostics() {
-        let (runner, _fake) = runner(vec![CommandOutput {
+        let (runner, fake) = runner(vec![CommandOutput {
             exit: Some(101),
             stderr: "error[E0425]: cannot find value `x` in this scope\n".to_owned(),
             ..CommandOutput::default()
@@ -981,6 +1141,11 @@ mod tests {
         let error = runner.discover().expect_err("a failed listing");
         assert!(error.contains("exited with code 101"), "{error}");
         assert!(error.contains("error[E0425]"), "{error}");
+        assert_eq!(
+            fake.commands().len(),
+            1,
+            "a listing that failed is not asked twice"
+        );
     }
 
     #[test]
@@ -1102,6 +1267,7 @@ mod tests {
         let cancel = CancelToken::default();
         cancel.request();
         let mut tests = Tests::new();
+        tests.note_discovered("c");
         let mut center = Center::new();
         let report = runner
             .run_cancellable(
@@ -1116,7 +1282,12 @@ mod tests {
 
         assert!(report.cancelled);
         assert!(report.observed.is_empty());
-        assert_eq!(report.not_run, ["a".to_owned(), "b".to_owned()]);
+        assert_eq!(
+            report.not_run,
+            ["a".to_owned(), "b".to_owned(), "c".to_owned()],
+            "a test discovery already knew about is not run either"
+        );
+        assert!(!report.complete_for(&Selection::exact(["a", "b"])));
         assert!(fake.commands().is_empty(), "nothing was started");
     }
 
@@ -1210,7 +1381,7 @@ mod tests {
 
     #[test]
     fn discovery_does_not_forget_an_existing_result() {
-        let (runner, _fake) = runner(vec![output("a: test\nb: test\n", 0)]);
+        let (runner, _fake) = runner(vec![output("a: test\nb: test\n", 0), output("", 0)]);
         let mut tests = Tests::new();
         tests.record("a", TestStatus::Passed, Some(0.2));
         runner.discover_into(&mut tests).expect("a listing");
@@ -1227,6 +1398,7 @@ mod tests {
              module::ignored: test ... ignored\n\
              module::bench: benchmark\n\
              2 tests, 1 benchmarks\n\
+             1 test, 0 benchmarks\n\
              not a listing line\n",
             false,
         );
@@ -1276,6 +1448,61 @@ mod tests {
     }
 
     #[test]
+    fn a_complete_pass_asks_about_every_test_it_named() {
+        let (runner, _fake) = runner(vec![
+            output(
+                "test a ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 1 filtered out\n",
+                0,
+            ),
+            output(
+                "test a ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 1 filtered out\n",
+                0,
+            ),
+            output(
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+                0,
+            ),
+        ]);
+        let mut tests = Tests::new();
+        let mut center = Center::new();
+
+        // A whole-suite run where a known test reported nothing is not a pass.
+        tests.note_discovered("a");
+        tests.note_discovered("b");
+        let report = runner
+            .run(&Selection::all(), 0, "desktop", &mut tests, &mut center)
+            .expect("a run");
+        assert!(!report.complete_for(&Selection::all()));
+        assert_eq!(report.not_run, ["b".to_owned()]);
+
+        // An exact selection asks only about its own names, so an unrelated test that never ran is
+        // not a reason to call it incomplete.
+        let report = runner
+            .run(
+                &Selection::exact(["a"]),
+                0,
+                "desktop",
+                &mut tests,
+                &mut center,
+            )
+            .expect("a run");
+        assert!(report.complete_for(&Selection::exact(["a"])));
+        assert!(!report.complete_for(&Selection::exact(["a", "b"])));
+
+        // Nothing printed at all: not a pass, however the command exited.
+        let report = runner
+            .run(
+                &Selection::exact(["gone"]),
+                0,
+                "desktop",
+                &mut tests,
+                &mut center,
+            )
+            .expect("a run");
+        assert!(!report.complete_for(&Selection::exact(["gone"])));
+    }
+
+    #[test]
     fn the_runner_does_not_mutate_the_project_directory() {
         use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1290,6 +1517,7 @@ mod tests {
 
         let fake = FakeRunner::replying(vec![
             output("suite::one: test\n", 0),
+            output("", 0),
             output(
                 "test suite::one ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored\n",
                 0,

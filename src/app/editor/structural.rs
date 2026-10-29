@@ -23,7 +23,7 @@
 //!   the thing it marked.
 //! * **An inline diff is shown only against a real revision.** The display toggle for it answers
 //!   [`Toggles::reason`] when there is no baseline, and the baseline is a read-only
-//!   [`Revision`](crate::app::search::diff::Revision) from [T08.07](crate::app::search::diff), so this task's inline
+//!   [`Revision`] from [T08.07](crate::app::search::diff), so this task's inline
 //!   diff is the one that task built rather than a second, weaker one.
 
 #![allow(dead_code)]

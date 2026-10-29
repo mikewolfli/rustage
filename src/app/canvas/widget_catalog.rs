@@ -442,6 +442,17 @@ impl Catalog {
         Self::from_contract_at(factory, profile, captured_now())
     }
 
+    /// Captures the catalog from the host's own factory for `profile`.
+    ///
+    /// The host factory is the pinned library's defaults **plus** the suites installed by
+    /// [`crate::app::contract::factory`], so a suite control such as `form` or `form_set` is in
+    /// the catalog with the same schema the parent crate's controls get. Reaching for
+    /// [`WidgetFactory::shared`] here would capture the parent crate's table only, where those
+    /// names do not exist.
+    pub fn from_host_contract(profile: &str) -> Result<Self, ContractError> {
+        Self::from_contract(crate::app::contract::factory(), profile)
+    }
+
     /// [`Catalog::from_contract`] with a caller-supplied capture time.
     ///
     /// The clock is a parameter so a stored or replayed capture can name the moment it was taken
@@ -873,8 +884,13 @@ mod tests {
     }
 
     fn contract(profile: &str) -> Catalog {
-        Catalog::from_contract_at(WidgetFactory::shared(), profile, "2026-10-29T00:00:00Z")
-            .expect("a profile the library declares")
+        // The host factory, not the parent crate's shared table: the suites are installed there.
+        Catalog::from_contract_at(
+            crate::app::contract::factory(),
+            profile,
+            "2026-10-29T00:00:00Z",
+        )
+        .expect("a profile the library declares")
     }
 
     #[test]
@@ -989,6 +1005,73 @@ mod tests {
                 .iter()
                 .any(|event| event.name == "clicked")
         );
+    }
+
+    #[test]
+    fn the_form_suite_is_in_the_catalog_with_properties_and_events() {
+        let catalog = contract("desktop");
+
+        for (id, property, event) in [
+            ("form", "title", "submitted"),
+            ("form_set", "current_index", "current_changed"),
+        ] {
+            let descriptor = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("the catalog contains {id}"));
+            assert!(
+                descriptor.properties.iter().any(|row| row.name == property),
+                "{id} publishes {property}: {:?}",
+                descriptor.properties
+            );
+            assert!(
+                descriptor.events.iter().any(|row| row.name == event),
+                "{id} publishes {event}: {:?}",
+                descriptor.events
+            );
+            // The aggregate accessors answer the same facts as the descriptor.
+            assert!(
+                catalog.schema(id).is_some_and(|schema| !schema.is_empty()),
+                "{id} has a readable property schema"
+            );
+            assert!(
+                catalog.events(id).is_some_and(|events| !events.is_empty()),
+                "{id} has readable events"
+            );
+            // The manifest was readable, so no "could not be read" limit was recorded for it.
+            assert!(
+                descriptor.limits.is_empty(),
+                "{id}: {:?}",
+                descriptor.limits
+            );
+        }
+    }
+
+    #[test]
+    fn the_form_suite_aliases_resolve_to_their_canonical_controls() {
+        let catalog = contract("desktop");
+        let factory = crate::app::contract::factory();
+
+        for (alias, canonical) in [
+            ("form_panel", "form"),
+            ("form_layout", "form"),
+            ("formset", "form_set"),
+            ("wizard_form", "form_set"),
+            ("form_pages", "form_set"),
+        ] {
+            let descriptor = catalog
+                .get(canonical)
+                .unwrap_or_else(|| panic!("the catalog contains {canonical}"));
+            assert!(
+                descriptor.aliases.iter().any(|row| row == alias),
+                "{canonical} publishes the alias {alias}: {:?}",
+                descriptor.aliases
+            );
+            assert_eq!(factory.canonical_name(alias), canonical);
+            assert_eq!(
+                factory.capability(alias).map(|row| row.canonical_name),
+                Some(canonical)
+            );
+        }
     }
 
     #[test]

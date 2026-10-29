@@ -41,6 +41,242 @@ still need their window entry; both are work lists, not statements of implemente
 
 ## Records
 
+- [An end-to-end walk that really runs cargo, and stops at the compiler's own line](log/log-20261029-30.md):
+  `--e2e` used to record only what the caller *said* happened (`check:ok`, `build:fail:…`) — the right
+  report shape, but no build. `--e2e walk:<directory>:<program>` now runs `cargo check`, then
+  `cargo build`, then the built binary, each as a real process, and when the check fails it records
+  the compiler's first `error` line together with the `--> file:line` beneath it as the feedback.
+  A failing check stops the walk: build and run do not happen, and with `skip` they are printed as
+  skipped rather than passed (`is_success` already refuses to count a skipped stage). The integration
+  test is its own process and calls the real host binary; a healthy one-file project passes all four
+  stages in 0.23 s, and a deliberately broken one ends with `blocked at check` and a non-zero exit.
+  Generation is deliberately not part of this walk, and the fixture has no `rust_widgets` dependency —
+  so this proves the walk executes, not that generated code compiles in a clean project; the gated,
+  minutes-long version of that is the next item.
+
+- [Build-log problems with a source and a version, and a warning cleanup](log/log-20261029-29.md):
+  a matcher's finding kept its file, line and message but lost the tool that read it, and never
+  reached the problem centre — so a log line had no source and no revision. `dag::Problem` now
+  carries `owner` and renders as `cargo src/main.rs:12: mismatched types`; `--dag match:<line>` records
+  every hit as a `Source::Build` problem in `quality::Center` for the current `target:`/`revision:`
+  and location, while a line no matcher reads stays "not a problem" rather than becoming an error.
+  The housekeeping pass in the same round: `clippy --all-targets -D warnings` is clean for this
+  repository (two `useless_vec` test literals fixed) and rust-analyzer reports nothing; the one line
+  left in the build output is a future-incompat *report* from `block 0.1.6` pulled in by
+  `cocoa 0.25` via upstream `rust_widgets` — a vendored patch of that crate's unsafe FFI declaration
+  would cost more than the warning, so it stays an upstream item. About forty pre-existing rustdoc
+  intra-doc link ambiguities are listed as separate backlog, not silently ignored.
+
+- [A design diff by path, and a code diff that says which half changed](log/log-20261029-28.md):
+  a text diff of a design document answers the wrong question. `design-diff:<revision>:<path>`
+  walks two parsed documents and names each change by its structural path — `changed $.title:
+  "Checkout" -> "Checkout 2"`, `added $.pages[1]`, `removed $.tags` — with arrays compared by index
+  so an inserted page is not one opaque array change. `code-diff:<revision>:<path>` reads the
+  library's own region markers in both versions and reports per region whether the *generated* body
+  or a named hand-written region differs, which is what a reviewer needs before approving a
+  regeneration: the real fixture prints `generated: changed` and `handwritten save: changed`. A file
+  whose markers do not balance is refused rather than half-split. Attribution is per region, not per
+  hunk, and the structured three-way comparison still lives elsewhere.
+
+- [Pre/post tasks, concurrent waves, and a cleanup that shows its scope first](log/log-20261029-27.md):
+  a task can now declare `pre` and `post` tasks; they join the ordering graph as "must finish before"
+  and "runs after" edges, so a cycle through a post edge is refused like any other and an unknown name
+  is named. `schedule` groups tasks into waves that may run at once (no edge inside a wave, ties broken
+  by name) while `order` stays the flat deterministic sequence. The default task now excludes both
+  pre-tasks (the main task brings them) and post-tasks (they run after it). Cleanup became a plan:
+  `cleanup_plan` lists every declared output with existence and bytes, and refuses an empty path, an
+  absolute path, a `..` escape, a path that resolves outside the project, the project root itself, or
+  a directory — then `apply` deletes only the entries it allowed, one file at a time. `clean:<task>`
+  refuses unless `clean-preview:<task>` ran earlier in the same invocation, so the displayed scope is
+  a precondition rather than good advice. Real run: 2 of 4 paths removed (9 bytes), the directory
+  kept. Real concurrent execution is still absent and says so.
+
+- [Staging one hunk at a time](log/log-20261029-26.md): the last T20.03 gap was per-hunk staging —
+  `stage:<path>` put every change in the index at once. `hunks:<path>` splits the unstaged diff on
+  Git's own `@@` lines and `stage-hunk:<path>:<n>` applies Git's own file header plus exactly that
+  hunk with `git apply --cached -`, so the index gains the selected change and the working copy keeps
+  the rest. The patch is never re-assembled by hand: context lines, offsets and `\ No newline` are
+  already correct in Git's diff, and a rewritten patch would be the one that fails to apply. The
+  hunk number is 1-based and out of range is refused with the *current* count. A real 30-line file
+  with three far-apart edits stages only hunk 2 while hunks 1 and 3 stay in the worktree. Unstaging a
+  single hunk and line-level selection are still missing.
+
+- [A commit that is previewed first, and secrets that stop it](log/log-20261029-25.md):
+  T20.03's line is "a dirty-buffer notice; never commit unauthorized changes or secrets".
+  `--vcs commit-preview` (and `commit`, which runs it first) reads only the index, so it reports
+  exactly what would go in; changed-but-unstaged and untracked paths are listed as left out, and a
+  `dirty:<path>` buffer is named with the warning that the staged copy may differ from the screen.
+  The secret scan covers six named shapes — private-key header, AWS key id, GitHub, Slack, `sk-`
+  keys and a conservative secret-named assignment — and deliberately does not fire on placeholders
+  (`$TOKEN`, `<your-token>`, `changeme`, `xxxx`), on calls (`read_token()`) or on names that only end
+  in a secret word. Staged content that is not UTF-8 is reported as not scanned rather than clean.
+  A finding **refuses** the commit instead of warning while it commits: the real fixture ends with
+  one commit in the log, not two. Per-hunk staging is still missing and is listed as such.
+
+- [Dates, numbers and list order in the interface language](log/log-20261029-24.md): F24's last piece
+  was date/number/sorting localisation, held back in round 12 because the host had no date surface —
+  printing one would have proved only that a formatter was called. Round 23 created a real surface
+  (the commit time in `--vcs log`), so it is done against that. `locale::format::Rules` holds one
+  entry per language: en writes `2026-10-29` and groups digits with a comma, zh-Hans writes
+  `2026年10月29日`; the same commit renders in both in real CLI runs. Ordering is the part that could
+  be faked, so it is not: English uses an ASCII case fold (`apple < Banana`), Chinese is labelled
+  `code-point` with the note that no collation table ships, and the sample list shows both answers.
+  Dates are UTC because the build has no time-zone source; inventing an offset would make one commit
+  render differently on two machines.
+
+- [Commit history, one commit's changes, and a restore that is only a preview](log/log-20261029-23.md):
+  `--vcs log[:<n>]` reads the installed `git log` and refuses a line it cannot split into the five
+  fields it asked for, rather than inventing one. `commit-show:<revision>[:<path>]` is either that
+  commit's diff or the exact bytes one path held at that revision. `restore-preview:<revision>:<path>`
+  reads the old content, compares it with the working copy and says what would change — differing,
+  identical, or absent — and then says out loud that nothing was written; a path that revision never
+  held is refused with Git's own words instead of previewing an empty file. Commit times are computed
+  from the epoch into `YYYY-MM-DD HH:MM:SS UTC` (a calendar conversion, not the machine's clock), and
+  that line is deliberately language-neutral: it is now a real date surface for T24.03's
+  localisation.
+
+- [Tool adapters: kept and explained, and a failure that stays where it happened](log/log-20261029-22.md):
+  language, debug, build and deploy adapters are declared with their version, host range and the
+  host capabilities they need. Registration checks all three against the host contract, and an
+  incompatible adapter is *kept* in the list with a `disabled (reason)` that names both sides —
+  a tool that silently vanished would be the explanation nobody can read. `adapter-probe`
+  re-evaluates every adapter so a host change can disable or re-enable one, while a `failed`
+  adapter stays failed until an answer clears it, because a probe is not evidence of recovery.
+  A failure is recorded on one id only: the other adapters keep their status and the host keeps
+  answering. The listing ends with which kinds have no usable adapter. There is no protocol
+  handshake here — compatibility is the host contract, not the tool's own version.
+
+- [The test wizard: generated data vectors run once over both call seams](log/log-20261029-21.md):
+  T21.05's acceptance is that the IPC call and the static call *share* the core test vectors, so the
+  wizard declares states, event payloads, transitions and page edges (each checked at the moment it
+  is entered — an undeclared state, an event without a payload or a duplicate `state/event` is
+  refused there), then generates one event vector per reachable state by a breadth-first
+  shortest-path walk. A state no walk reaches and a transition whose guard reads runtime state are
+  reported rather than skipped, because a guessed field value is not a data vector. One set of
+  vectors is handed to `logic::regression::run`, which drives the core directly and again with each
+  event carried through the typed channel, and the verdict is the identity of the two walks; page
+  edges are replayed through a real `Window`. The artifact is the plan itself — `wizard-save` writes
+  it, `wizard-load` reads it strictly, and the same vectors come back. The wizard is a command-line
+  surface, not a window, and the artifact is the host's vector file rather than generated `tests/`
+  source.
+
+- [The extension manager panel, and a removal that names the project's dependencies](log/log-20261029-20.md):
+  an extension manifest may now declare the entry points it registers (`provides`), and the open
+  project reports the names it references (`usage`). `--extension panel` renders one row per
+  installed extension — id, version, licence, state, pin, source, how much it provides and how much
+  of that the project uses — plus the project's dependency list. A dependency is the exact
+  intersection, so a name an extension does not declare is never attributed to it. `remove-preflight`
+  shows the dependencies, and `remove` is *refused* while any exist rather than warned-then-done:
+  a warning that still removed would leave exactly the dangling entry point T22.05 forbids. Real
+  CLI evidence: two provided names, one used → one dependency, both removal paths exit 4, and the
+  removal succeeds once the project stops naming it. The usage report is the caller's input because
+  project documents do not record extension use yet (that needs T22.02's registration).
+
+- [A persisted update journal, so another process can recover an interrupted install](log/log-20261029-19.md):
+  the update state machine lived in one process, which covers "the user pressed interrupt" but not
+  the accident it exists for — the machine dying between the backup and the write. `--release
+  journal:<file>` now writes a record (`from`/`to`, artifact, digest, size, signature, state, backup)
+  after every transition, `journal-recover:<file>` turns a recorded `installing` state into
+  `interrupted` in another process and answers it with its backup, and `journal-clear` removes the
+  file. A missing journal is `None`, not an error; a finished install is left alone; a malformed
+  file is refused with its line instead of guessing a half-applied state. This build's install is
+  still the state machine, so the journal states what the state was and does not pretend to restore
+  files. Update *discovery* still needs a signed source, which is blocked on the packaging identity
+  decision (T25.02).
+
+- [Extension fault bisection and a redacted diagnostic bundle](log/log-20261029-18.md): startup failures
+  are narrowed over a caller-supplied probe that is one real process start per attempt, with the
+  enabled ids in `RUSTAGE_EXTENSIONS`. One id whose removal fixes it is named; when no single removal
+  helps but each half passes alone the finding is an interaction; a failure with everything disabled
+  blames no extension; every attempt is recorded and capped. The service log keeps language, debug
+  and other services apart, and the diagnostic bundle has a preview (sections, line and redacted byte
+  counts), a fixed redaction pass (paths, e-mails, secret-keyed values, long opaque strings), and an
+  export permit minted only by a local `FileWrite` decision. Sending needs a `Network` decision and is
+  refused because no project network policy exists, and this build has no transport to send through.
+
+- [The test tree, ignored tests and targeted reruns](log/log-20261029-17.md): discovery now becomes a
+  module tree (`::` split, so it cannot disagree with the names libtest printed), with ignored and
+  `[..]`-parameterized leaves marked from the listing rather than guessed. An automatic run uses the
+  tree's non-ignored tests by exact path, and a tree whose every test is ignored runs nothing instead
+  of falling back to "everything" — the side-effecting test stays unrun. A rerun after a failure
+  selects only the failed, non-ignored paths, exactly, so a substring cannot widen it. Results now
+  carry the document revision they were recorded at, and `tests` reports `stale` when the document
+  moved on; JUnit export writes that revision as a property so the importer can check it. Coverage
+  mapping and debug-at-breakpoint runs are still absent and are listed as such.
+
+- [Accessibility: automated checks separated from screen-reader acceptance](log/log-20261029-16.md): the
+  quality centre now builds a real library `A11yTree` from declared elements and checks accessible
+  names, `labelled_by`/`control_for` associations, focus flags, roles, duplicate ids, unknown
+  children, cycles, roots and reachability. Structural checks run before registration because the
+  library's focus traversal is an unguarded recursive DFS, so a cycle is refused in the host rather
+  than reaching it. `mini` and `embedded` have no accessibility bridge and are reported
+  `unsupported`. The manual half is a record of what a person found with a screen reader
+  (`NotPerformed` by default), and `a11y-accept` requires both halves: an automated pass with no
+  manual result is not acceptance. No real screen-reader session was run on this machine, so the
+  manual field carries no evidence yet.
+
+- [Visual evidence against the real baseline engine, and JUnit import](log/log-20261029-15.md): the quality
+  centre now compares real pixels through `preview::visual_baseline` instead of comparing only the
+  platform/scale/font of two conditions. `VisualEvidence` has four states — `NotCollected`,
+  `Captured`, `MissingBaseline`, `Compared` — and only `Compared` can pass, so a check that collected
+  nothing is not a green run. `--quality` gained `visual-baseline`, `visual-candidate`,
+  `visual-tolerance` and `visual-check`; the evidence JSON carries the state, the verdict and both
+  sides' conditions (platform, DPI, resource version, fonts), and a resource-version difference is
+  `not comparable` rather than a pixel verdict. T21.11 reads JUnit back: `<failure>`/`<error>`,
+  `<skipped>` and passing cases map to the same states, malformed elements are refused with their
+  line, and a `<properties>` revision/target that disagrees with the run refuses the import instead
+  of being overwritten. Still absent: a real screen capture and an image decoder — the pixels are
+  declared on the command line — and CDATA/DTD support in the importer.
+
+- [Real process memory/threads under 100 rebuild cycles, and the extension permission gate](log/log-20261029-14.md):
+  `--quality load:100` drives 100 real mount/update/stop cycles and now also reads this process's
+  resident set and thread count (`ps` on macOS, `/proc/self/status` on Linux) after the first and
+  last cycle. The report names both growths, fails on a thread the run never gave back or RSS growth
+  past 64 MiB, and keeps saying `not measured` on a platform with no reader. Because the unit-test
+  binary runs in parallel, the growth assertion lives in its own process (`tests/preview_load.rs`):
+  100 cycles, `threads 1 -> 1 (growth 0)`, RSS +557 KB, worst latency 38 ms, zero residual controls.
+  T22.08 routes every permission an extension declares through `PermissionService` before an
+  install, directory install or upgrade preflight: `fs` is allowed and recorded for a human session,
+  while `network` is refused with the service's own reason and next step until a project network
+  policy exists, so a network-declaring package cannot be installed unauthorized. A per-call runtime
+  gate still needs an extension executor that does not exist yet.
+
+- [Target-application i18n, the confirmed/interruptible update, and extension provenance](log/log-20261029-13.md):
+  `app::language::target` consumes the library's `I18nManager` for the *generated* application's
+  resources — plural categories, context, English fallback, key audit, file-backed hot reload and a
+  character-count long-text preview — with a host-owned locale→direction table (`ar`, `he`, `fa`,
+  `ur`, `yi`, `dv`, `ps`, `sd` are RTL) that is explicitly a direction fact, not shaping. The
+  `--target-i18n` command loads `<tag>.json` catalogues and answers translate/audit/direction/
+  preview/reload against a real two-language fixture. T25.03's update is now a confirmed state
+  machine: `Verified → Confirmed → Installing → Installed`, with `interrupt`/`resume`/`recover`,
+  a recorded `rustage-<from>.bak`, and a `Migration` that must be declared *and* acknowledged before
+  confirmation — the CLI refuses to confirm an unacknowledged format migration. T22.09 installs an
+  extension from a local directory (refusing symlinks), verifies the digest before any state
+  change, records where it came from, pins a version against updates, and rolls back to the
+  replaced version. Also keeps the previous round's Form/FormSet, zh-Hans, SBOM and settings work
+  green. Parallel work used disjoint write scopes; CLI wiring was done after the merge.
+
+- [Form/FormSet host contract, the zh-Hans interface pack and a lockfile-derived SBOM](log/log-20261029-12.md):
+  the Inspector, the event registry and the `--quality` contract facts now read the host factory
+  (library defaults plus `rust-widgets-suites`) instead of the parent crate's immutable
+  `WidgetFactory::shared()`, so `form`/`form_set` properties and events resolve; the live Inspector
+  reports their schema rather than “schema unavailable”. T24.03 gained a complete Simplified Chinese
+  pack (all 73 identified strings, same key set, placeholders preserved, menu and diagnostic text
+  translated), `--ui-language zh-Hans` switching and an `--locale-report` that writes and reads back
+  both `en.lang` and `zh-Hans.lang`; the process's own refusal prefix follows the selection. T25.09
+  derives the SBOM from `Cargo.lock` (`pkg:cargo/<name>@<version>` so two versions of one crate stay
+  distinct), counts coverage and records an unrecorded licence as such instead of guessing, and links
+  the release artifact's digest into the SBOM. Date/number/sorting localisation and an advisory
+  source remain open and are listed rather than approximated. T24.01 gained the machine settings layer
+  and a real export/import: every layer is written (not just the effective value), a bad line is
+  refused with `file:line` and leaves the profile untouched, and the CLI reports the layer that
+  supplies each value. T22.06's process path is now real as well: `ChildHandler` speaks one frame
+  per line over a `DuplexProcess`, starts only from a `Command` execution permit, refuses a
+  multi-line frame before it reaches the pipe, and reports a closed pipe as a crash rather than an
+  empty answer; `--extension supervise-child:<program>` drives it against a real `/bin/cat`. Also
+  closes the evidence for T21.04 (real cargo discover/run/cancel) and T20.07 (the `regenerate`
+  end-to-end fixture).
+
 - [2.8.11 re-pin, the MS12 journey walk and a page-to-generator seam](log/log-20261020-3.md): the
   dependency moved to `cee6b22367244527aa407bb9ae67305751f61c26` (2.8.11), which adds
   `BorderLayout`, panel child factories and the GTK resize repaint fix. The workbench now creates
@@ -153,8 +389,9 @@ still need their window entry; both are work lists, not statements of implemente
   shell lines, with the English pack *derived* from it so the two cannot drift), the global
   `--ui-language <tag>` and the `--locale-report <directory>` producer, and the diagnostics
   (`Refusal::message`, `why_not_exists`) plus the status/version lines now read through the catalog —
-  73 identified strings, 26 new tests. Done ahead of its milestone at the user's request; only English is
-  bundled, and what T24.03 still owes is listed in the record. Recorded in the same file as MS07–MS09.
+  73 identified strings, 26 new tests. Done ahead of its milestone at the user's request; only English was
+  bundled then (Simplified Chinese was added later, see the 2026-10-29 record), and what T24.03 still
+  owed is listed in the record. Recorded in the same file as MS07–MS09.
 - [MS09: Rust event-logic hot update — a shared business core, typed local IPC, the candidate build,
   state migration, the controlled replacement and the vector regression](log/log-20261016-4.md):
   `app::logic` (`core` — a pure event/state → state/action reduction whose seam is a value, not a live

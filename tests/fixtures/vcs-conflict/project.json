@@ -1,0 +1,9 @@
+{
+  "format": 2,
+  "project": { "id": "3f2b", "name": "VCS conflict fixture" },
+  "pages": [{ "document": "pages/main.json" }],
+  "targets": [{ "name": "desktop" }],
+  "generated": [
+    { "output": "src/generated/main.rs", "from": "pages/main.json" }
+  ]
+}

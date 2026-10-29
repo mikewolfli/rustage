@@ -12,9 +12,14 @@ use super::*;
 pub struct ReleaseOptions {
     /// The operations: `freeze:<revision>:<generator>`, `format:<name>`, `component:<name>:<version>`,
     /// `support:<revision>`, `freeze-check`, `artifact:<name>:<digest>:<size>:<signed|unsigned>`,
-    /// `license:<text>`, `verify-file:<path>`, `sbom:<file>`, `update:<from>:<to>`,
+    /// `license:<text>`, `package-license:<name>@<version>:<licence>`, `verify-file:<path>`,
+    /// `sbom:<file>`, `sbom-lock:<Cargo.lock>:<file>`, `update:<from>:<to>`,
     /// `verify-update:<path>`, `install`, `rollback`, `channel:<stable|candidate>`,
     /// `maintenance:<branch>:<matrix>`, `limit:<text>`, `show`.
+    ///
+    /// `journal:<file>` makes every later transition write its record to `<file>`;
+    /// `journal-recover:<file>` marks a recorded `Installing` state as `Interrupted` and answers the
+    /// record; `journal-clear:<file>` removes the file.
     pub ops: Vec<String>,
 }
 

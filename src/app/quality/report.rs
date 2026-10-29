@@ -16,6 +16,7 @@ use rust_widgets::platform::profile::{SurfacePolicy, surface_policy};
 use rust_widgets::widget::WidgetFactory;
 use rust_widgets::widget::capability::TargetSpec;
 
+use crate::app::quality::visual::VisualEvidence;
 use crate::app::targets::snapshot::{Level, target_profile};
 use crate::project::record::json::{Json, JsonObject};
 
@@ -1054,6 +1055,8 @@ pub struct TestResult {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Tests {
     results: BTreeMap<String, TestResult>,
+    /// The document revision the results were recorded at, when a run recorded them.
+    revision: Option<u64>,
 }
 
 impl Tests {
@@ -1086,6 +1089,28 @@ impl Tests {
             status: TestStatus::NotRun,
             seconds: None,
         });
+    }
+
+    /// The revision the results were recorded at, when a run recorded them.
+    pub fn revision(&self) -> Option<u64> {
+        self.revision
+    }
+
+    /// Records the revision a run just ran at.
+    ///
+    /// Re-listing a suite does not move this: discovery is not a run, so a result stays attributed
+    /// to the revision that produced it.
+    pub fn set_revision(&mut self, revision: u64) {
+        self.revision = Some(revision);
+    }
+
+    /// Whether the results belong to an older revision than `current`.
+    ///
+    /// A stale result is not wrong, it is old: the document changed after it was produced, so it
+    /// must not be reported as the current run's outcome. A suite that never ran has no revision and
+    /// is not stale — it is simply not run, which [`Self::tally`] already says.
+    pub fn is_stale(&self, current: u64) -> bool {
+        self.revision.is_some_and(|revision| revision != current)
     }
 
     /// The results in name order.
@@ -1142,10 +1167,22 @@ impl Tests {
             .filter(|result| result.status == TestStatus::NotRun)
             .map(|result| result.name.as_str())
             .collect();
+        let mut properties = Vec::new();
+        if let Some(revision) = self.revision {
+            properties.push(format!(
+                "<property name=\"revision\" value=\"{revision}\"/>"
+            ));
+        }
         if !not_run.is_empty() {
-            xml.push_str(&format!(
-                "  <properties><property name=\"not-run\" value=\"{}\"/></properties>\n",
+            properties.push(format!(
+                "<property name=\"not-run\" value=\"{}\"/>",
                 xml_escape(&not_run.join(", "))
+            ));
+        }
+        if !properties.is_empty() {
+            xml.push_str(&format!(
+                "  <properties>{}</properties>\n",
+                properties.concat()
             ));
         }
         xml.push_str("</testsuite>\n");
@@ -1162,36 +1199,6 @@ fn xml_escape(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// The environment a visual baseline was captured in.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct VisualCondition {
-    /// The platform or host name.
-    pub platform: String,
-    /// The display scale, as a percentage.
-    pub scale: u32,
-    /// A stable font-set identifier (a digest, not a font name that can drift).
-    pub font_digest: String,
-}
-
-impl VisualCondition {
-    /// Whether two captures are comparable.
-    pub fn compare(&self, other: &Self) -> Result<(), String> {
-        if self.platform != other.platform {
-            return Err(format!(
-                "platform differs: {} vs {}",
-                self.platform, other.platform
-            ));
-        }
-        if self.scale != other.scale {
-            return Err(format!("scale differs: {} vs {}", self.scale, other.scale));
-        }
-        if self.font_digest != other.font_digest {
-            return Err("font set differs".to_owned());
-        }
-        Ok(())
-    }
-}
-
 /// The evidence bundle written for one revision.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Evidence {
@@ -1203,8 +1210,8 @@ pub struct Evidence {
     pub center: Center,
     /// The test results.
     pub tests: Tests,
-    /// The visual condition, when a capture exists.
-    pub visual: Option<VisualCondition>,
+    /// The visual evidence, which distinguishes "not collected" from a comparison.
+    pub visual: VisualEvidence,
 }
 
 impl Evidence {
@@ -1249,13 +1256,7 @@ impl Evidence {
         root.insert("target", Json::string(&self.target));
         root.insert("problems", Json::Array(problems));
         root.insert("tests", Json::Array(tests));
-        if let Some(visual) = &self.visual {
-            let mut object = JsonObject::new();
-            object.insert("platform", Json::string(&visual.platform));
-            object.insert("scale", Json::number(visual.scale as u64));
-            object.insert("font", Json::string(&visual.font_digest));
-            root.insert("visual", Json::Object(object));
-        }
+        root.insert("visual", self.visual.json());
         Json::Object(root).render()
     }
 }
@@ -1265,8 +1266,9 @@ mod tests {
     use super::{
         BindingFact, BindingTarget, BindingType, Center, DesignFacts, Evidence, Extent, Filter,
         Frame, LayoutFact, Level, Overlap, Problem, Provenance, Severity, Source, TestStatus,
-        Tests, VisualCondition, contrast,
+        Tests, contrast,
     };
+    use crate::app::quality::VisualCondition;
     use rust_widgets::widget::WidgetFactory;
     use rust_widgets::widget::capability::TargetSpec;
 
@@ -1376,6 +1378,7 @@ mod tests {
             platform: "macos".to_owned(),
             scale: 200,
             font_digest: "abc".to_owned(),
+            resources: 0,
         };
         let second = VisualCondition {
             scale: 100,
@@ -1395,11 +1398,12 @@ mod tests {
             target: "desktop".to_owned(),
             center,
             tests,
-            visual: None,
+            visual: crate::app::quality::VisualEvidence::NotCollected,
         };
         let json = evidence.json();
         assert!(json.contains("\"status\": \"failed\""), "{json}");
         assert!(json.contains("\"source\": \"test\""), "{json}");
+        assert!(json.contains("\"state\": \"not-collected\""), "{json}");
     }
 
     #[test]

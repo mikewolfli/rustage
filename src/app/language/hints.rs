@@ -11,8 +11,8 @@
 //!   [`Capabilities`] and the [`HierarchyKind`] and refuses — [`Hierarchy::refusal`] — when the
 //!   service did not offer call or type hierarchy. There is no path that shows an unnegotiated one.
 //! * **A hint layer is versioned like everything else.** [`Hints`] reuses the one
-//!   [`Pending`](crate::app::language::features::Pending) rule, so a layer for an old version is
-//!   [`Delivery::Stale`](crate::app::language::features::Delivery::Stale) and never becomes the shown layer.
+//!   [`Pending`] rule, so a layer for an old version is
+//!   [`Delivery::Stale`] and never becomes the shown layer.
 //! * **A hint is dismissible by kind.** [`Switches`] answers which kinds are on, and
 //!   [`Hints::dismiss`] turns one off, so a person can stop the noise without stopping the service.
 //! * **A hint is a decoration, never a write.** [`Hints`] holds no document and has no edit path, so a

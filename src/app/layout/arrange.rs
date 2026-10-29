@@ -9,7 +9,7 @@
 //! document**, and every operation is translated into a value the current layout can actually hold:
 //!
 //! * **Every change carries its value.** [`Change`] names a node, a property and a
-//!   [`Value`](crate::app::layout::layout_plan::Value) — an alignment is `align = centre`, a gap is
+//!   [`Value`] — an alignment is `align = centre`, a gap is
 //!   `gap = 8`, a match is `width = 40` — so a change is a real edit, not a property name.
 //! * **An edit is pure and reversible.** [`apply_change`] validates one change, produces a new
 //!   [`Document`], and records the [`Inverse`] needed to restore the old value (or clear a value

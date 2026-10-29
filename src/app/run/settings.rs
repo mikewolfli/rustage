@@ -121,6 +121,53 @@ pub(super) fn settings(options: &crate::cli::SettingsOptions) -> bool {
                     "import needs <layer>:<key>=<value>[,...], got {argument:?}"
                 )),
             },
+            "export" => {
+                if argument.is_empty() {
+                    return super::report(
+                        "export needs <file>: the file a person reads when a value is wrong"
+                            .to_owned(),
+                    );
+                }
+                let text = profile.encode();
+                if let Err(error) = std::fs::write(argument, &text) {
+                    return super::report(format!("cannot write {argument}: {error}"));
+                }
+                // Read the file back, so the report cannot claim an export the file does not hold.
+                let read_back = match std::fs::read_to_string(argument) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return super::report(format!("cannot read {argument}: {error}"));
+                    }
+                };
+                let mut check = profile.empty_like();
+                match check.decode(&read_back) {
+                    Ok(_) if check == profile => {}
+                    Ok(_) => {
+                        return super::report(format!(
+                            "{argument} does not read back as the exported profile"
+                        ));
+                    }
+                    Err(fault) => {
+                        return super::report(format!("{argument}:{fault}"));
+                    }
+                }
+                let count = text.lines().count().saturating_sub(1);
+                Ok(vec![format!("exported {count} setting(s) to {argument}")])
+            }
+            "import-file" => {
+                let text = match std::fs::read_to_string(argument) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return super::report(format!("cannot read {argument}: {error}"));
+                    }
+                };
+                match profile.decode(&text) {
+                    Ok(lines) => Ok(lines),
+                    Err(fault) => {
+                        return super::report(format!("{argument}:{fault}"));
+                    }
+                }
+            }
             "show" => {
                 let mut lines = profile.render();
                 lines.push(format!("keymap bindings: {}", keymap.bindings.len()));

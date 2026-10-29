@@ -2457,13 +2457,21 @@ dependencies = [
 
 [[package]]
 name = "rust-widgets-font"
-version = "3.0.0"
-source = "git+https://github.com/mikewolfli/rust-widgets?rev=177716410bc714cb0b1131d0c8f7065076f10583#177716410bc714cb0b1131d0c8f7065076f10583"
+version = "3.1.0"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=d44ca0e9003365282815f586bdbf152dcebf749a#d44ca0e9003365282815f586bdbf152dcebf749a"
+
+[[package]]
+name = "rust-widgets-suites"
+version = "3.1.0"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=d44ca0e9003365282815f586bdbf152dcebf749a#d44ca0e9003365282815f586bdbf152dcebf749a"
+dependencies = [
+ "rust_widgets",
+]
 
 [[package]]
 name = "rust_widgets"
-version = "3.0.0"
-source = "git+https://github.com/mikewolfli/rust-widgets?rev=177716410bc714cb0b1131d0c8f7065076f10583#177716410bc714cb0b1131d0c8f7065076f10583"
+version = "3.1.0"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=d44ca0e9003365282815f586bdbf152dcebf749a#d44ca0e9003365282815f586bdbf152dcebf749a"
 dependencies = [
  "aes",
  "cbc",
@@ -2506,6 +2514,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "portable-pty",
+ "rust-widgets-suites",
  "rust_widgets",
  "sha2",
 ]

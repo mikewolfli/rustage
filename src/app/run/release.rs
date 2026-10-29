@@ -3,10 +3,13 @@
 
 //! The `--release` command: freeze, artifacts, SBOM, updates and maintenance (task F25).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::app::release::update_journal::{Journal, Record};
 use crate::app::release::{
-    Artifact, Channel, Component, Freeze, Maintenance, Repository, Sbom, Signature, Update,
+    Artifact, Channel, Component, Freeze, Maintenance, Migration, Repository, Sbom, Signature,
+    Update, lockfile,
 };
 use crate::contracts::revision::FormatVersion;
 
@@ -14,11 +17,17 @@ use crate::contracts::revision::FormatVersion;
 pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
     let mut freeze = Freeze::new();
     let mut sbom = Sbom::new();
+    let mut licences: Vec<String> = Vec::new();
+    // Licences supplied for lockfile packages, keyed by `name@version`.
+    let mut package_licences: BTreeMap<String, String> = BTreeMap::new();
     let mut artifact: Option<Artifact> = None;
-    let mut licenses: Vec<String> = Vec::new();
     let mut update: Option<Update> = None;
     let mut channel = Channel::Candidate;
     let mut maintenance: Option<Maintenance> = None;
+    // The journal a declared `journal:<file>` writes every transition to, with the last record it
+    // wrote, so an op that changes nothing does not rewrite the file.
+    let mut journal: Option<Journal> = None;
+    let mut journalled: Option<Record> = None;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -125,7 +134,7 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                             digest: (*digest).to_owned(),
                             size,
                             signature,
-                            licenses: licenses.clone(),
+                            licenses: licences.clone(),
                         });
                         Ok(vec![format!("artifact {name} ({signature:?})")])
                     }
@@ -135,9 +144,80 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                 }
             }
             "license" => {
-                licenses.push(argument.to_owned());
+                licences.push(argument.to_owned());
                 Ok(vec![format!("license {argument}")])
             }
+            "package-license" => match argument.split_once(':') {
+                Some((identity, licence)) if !identity.is_empty() => {
+                    package_licences.insert(identity.to_owned(), licence.to_owned());
+                    Ok(vec![format!("package licence {identity}: {licence}")])
+                }
+                _ => Err(format!(
+                    "package-license needs <name>@<version>:<licence>, got {argument:?}"
+                )),
+            },
+            "sbom-lock" => match argument.split_once(':') {
+                Some((lock_path, output)) => {
+                    let text = match std::fs::read_to_string(lock_path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            return super::report(format!("cannot read {lock_path}: {error}"));
+                        }
+                    };
+                    let packages = match lockfile::parse(&text) {
+                        Ok(packages) => packages,
+                        Err(reason) => return super::report(reason),
+                    };
+                    let (mut derived, coverage) = lockfile::sbom(&packages, &package_licences);
+                    // The artifact this release produced belongs in the bill of materials too, with
+                    // the digest the release actually declared — that is the artifact↔SBOM link.
+                    if let Some(artifact) = &artifact {
+                        let version = if freeze.package_version.is_empty() {
+                            env!("CARGO_PKG_VERSION").to_owned()
+                        } else {
+                            freeze.package_version.clone()
+                        };
+                        let licence = if artifact.licenses.is_empty() {
+                            "MIT".to_owned()
+                        } else {
+                            artifact.licenses.join(" AND ")
+                        };
+                        if let Err(reason) = derived.add(Component {
+                            name: artifact.name.clone(),
+                            version,
+                            license: licence,
+                            source: "release artifact".to_owned(),
+                            digest: Some(artifact.digest.clone()),
+                        }) {
+                            return super::report(reason);
+                        }
+                        let linked = derived.components.values().any(|component| {
+                            component.digest.as_deref() == Some(artifact.digest.as_str())
+                        });
+                        if !linked {
+                            return super::report(format!(
+                                "the SBOM does not carry the artifact digest {}",
+                                artifact.digest
+                            ));
+                        }
+                    }
+                    if let Err(error) = std::fs::write(output, derived.json()) {
+                        return super::report(format!("cannot write {output}: {error}"));
+                    }
+                    let mut lines = vec![coverage.render()];
+                    if coverage.is_complete() {
+                        lines.push("every package has a digest and a recorded licence".to_owned());
+                    }
+                    lines.push(format!(
+                        "wrote {} component(s) to {output}",
+                        derived.components.len()
+                    ));
+                    Ok(lines)
+                }
+                None => Err(format!(
+                    "sbom-lock needs <Cargo.lock>:<output>, got {argument:?}"
+                )),
+            },
             "verify-file" => {
                 let bytes = match std::fs::read(argument) {
                     Ok(bytes) => bytes,
@@ -169,10 +249,10 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                 let component = Component {
                     name: "rustage".to_owned(),
                     version: freeze.generator.clone(),
-                    license: if licenses.is_empty() {
+                    license: if licences.is_empty() {
                         "MIT".to_owned()
                     } else {
-                        licenses.join(" AND ")
+                        licences.join(" AND ")
                     },
                     source: freeze.revision.clone(),
                     digest: if digest.is_empty() {
@@ -222,12 +302,108 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                 Some(update) => update.install().map(|backup| vec![backup]),
                 None => Err("plan an update first".to_owned()),
             },
+            "confirm" => match &mut update {
+                Some(update) => update.confirm().map(|()| vec![update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
+            "interrupt" => match &mut update {
+                Some(update) => update.interrupt().map(|()| vec![update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
+            "begin-install" => match &mut update {
+                Some(update) => update
+                    .begin_install()
+                    .map(|backup| vec![format!("backup {backup}"), update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
+            "complete-install" => match &mut update {
+                Some(update) => update.complete_install().map(|()| vec![update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
+            "resume" => match &mut update {
+                Some(update) => update.resume().map(|()| vec![update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
+            "recover" => match &mut update {
+                Some(update) => update.recover().map(|()| vec![update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
+            "migration" => match &mut update {
+                Some(update) => match argument.split_once(':') {
+                    Some((from, rest)) => match rest.split_once(':') {
+                        Some((to, steps)) => match (from.parse::<u32>(), to.parse::<u32>()) {
+                            (Ok(from), Ok(to)) => {
+                                let steps: Vec<String> = steps
+                                    .split('|')
+                                    .filter(|step| !step.trim().is_empty())
+                                    .map(str::to_owned)
+                                    .collect();
+                                match Migration::plan(from, to, steps) {
+                                    Ok(migration) => {
+                                        let line = migration.render();
+                                        match update.set_migration(migration) {
+                                            Ok(()) => Ok(vec![line]),
+                                            Err(reason) => Err(reason),
+                                        }
+                                    }
+                                    Err(reason) => Err(reason),
+                                }
+                            }
+                            _ => Err(format!(
+                                "migration needs <from-format>:<to-format>:<step>[|<step>...], got {argument:?}"
+                            )),
+                        },
+                        None => Err(format!(
+                            "migration needs <from-format>:<to-format>:<step>[|<step>...], got {argument:?}"
+                        )),
+                    },
+                    None => Err(format!(
+                        "migration needs <from-format>:<to-format>:<step>[|<step>...], got {argument:?}"
+                    )),
+                },
+                None => Err("plan an update first".to_owned()),
+            },
+            "ack-migration" => match &mut update {
+                Some(update) => update
+                    .acknowledge_migration()
+                    .map(|()| vec![update.render()]),
+                None => Err("plan an update first".to_owned()),
+            },
             "rollback" => match &mut update {
                 Some(update) => update
                     .rollback()
                     .map(|()| vec!["update rolled back".to_owned()]),
                 None => Err("plan an update first".to_owned()),
             },
+            "journal" => {
+                if argument.is_empty() {
+                    return super::report("journal needs <file>".to_owned());
+                }
+                let declared = Journal::at(argument);
+                let line = format!("journal {}", declared.path().display());
+                journal = Some(declared);
+                journalled = None;
+                Ok(vec![line])
+            }
+            "journal-recover" => {
+                if argument.is_empty() {
+                    return super::report("journal-recover needs <file>".to_owned());
+                }
+                match Journal::at(argument).recover_interrupted() {
+                    Ok(Some(record)) => Ok(record.render()),
+                    Ok(None) => Ok(vec!["no interrupted install".to_owned()]),
+                    Err(reason) => Err(reason),
+                }
+            }
+            "journal-clear" => {
+                if argument.is_empty() {
+                    return super::report("journal-clear needs <file>".to_owned());
+                }
+                match Journal::at(argument).clear() {
+                    Ok(()) => Ok(vec![format!("journal {argument} cleared")]),
+                    Err(reason) => Err(reason),
+                }
+            }
             "channel" => match Channel::parse(argument) {
                 Some(parsed) => {
                     channel = parsed;
@@ -290,6 +466,17 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
             Ok(lines) => {
                 for line in lines {
                     println!("{line}");
+                }
+                // A declared journal records every transition, so a process that dies mid-install
+                // leaves an `Installing` record for the next one to recover.
+                if let (Some(journal), Some(update)) = (&journal, &update) {
+                    let record = Record::of(update);
+                    if journalled.as_ref() != Some(&record) {
+                        if let Err(reason) = journal.write(&record) {
+                            return super::report(reason);
+                        }
+                        journalled = Some(record);
+                    }
                 }
             }
             Err(reason) => return super::report(reason),

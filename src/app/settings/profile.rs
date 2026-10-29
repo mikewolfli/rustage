@@ -10,8 +10,13 @@
 //! profile reports a diff and a conflict instead of overwriting silently.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Where a setting came from.
+///
+/// The order is the precedence: a later variant wins where it has a value. `Machine` sits between
+/// `User` and `Session` because a value that belongs to this machine (a tool path, a display) is
+/// more specific than the user profile but still yields to a value set for this session only.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Layer {
     /// The built-in default.
@@ -20,6 +25,8 @@ pub enum Layer {
     Project,
     /// The user's profile.
     User,
+    /// This machine's settings file (not synced with the user profile).
+    Machine,
     /// This session only.
     Session,
 }
@@ -31,6 +38,7 @@ impl Layer {
             Self::Default => "default",
             Self::Project => "project",
             Self::User => "user",
+            Self::Machine => "machine",
             Self::Session => "session",
         }
     }
@@ -41,10 +49,20 @@ impl Layer {
             "default" => Some(Self::Default),
             "project" => Some(Self::Project),
             "user" => Some(Self::User),
+            "machine" => Some(Self::Machine),
             "session" => Some(Self::Session),
             _ => None,
         }
     }
+
+    /// Every layer, lowest precedence first.
+    pub const ALL: [Self; 5] = [
+        Self::Default,
+        Self::Project,
+        Self::User,
+        Self::Machine,
+        Self::Session,
+    ];
 }
 
 /// What a setting accepts.
@@ -97,6 +115,35 @@ pub struct Value {
     pub layer: Layer,
     /// The value.
     pub text: String,
+}
+
+/// A refused settings line: where it is, and why.
+///
+/// Roadmap T24.01 asks that an invalid setting have a **location**. A profile is applied by
+/// somebody reading a file, so "font size is wrong" is not actionable while "line 4" is.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Fault {
+    /// The 1-based line the refusal is on; 0 means the file as a whole (a missing header).
+    pub line: usize,
+    /// Why the line was refused.
+    pub reason: String,
+}
+
+impl Fault {
+    /// The refusal in one line.
+    pub fn message(&self) -> String {
+        if self.line == 0 {
+            self.reason.clone()
+        } else {
+            format!("line {}: {}", self.line, self.reason)
+        }
+    }
+}
+
+impl fmt::Display for Fault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message())
+    }
 }
 
 /// A settings profile with its schema.
@@ -203,7 +250,7 @@ impl Settings {
                     theirs.map(|(value, _)| value)
                 ));
             }
-            for layer in [Layer::Default, Layer::Project, Layer::User, Layer::Session] {
+            for layer in Layer::ALL {
                 let mine = self
                     .values
                     .get(key)
@@ -241,6 +288,83 @@ impl Settings {
             imported.push(key.clone());
         }
         Ok(imported)
+    }
+
+    /// The profile as its file form: every layer of every key, not only the effective value.
+    ///
+    /// Exporting only the effective value would turn a layered profile into a flat one and lose the
+    /// provenance that [`Self::effective`] reports, so every value line is written.
+    pub fn encode(&self) -> String {
+        let mut text = String::from("rustage-settings 1\n");
+        for (key, values) in &self.values {
+            for value in values {
+                text.push_str(&escape(key));
+                text.push('\t');
+                text.push_str(value.layer.name());
+                text.push('\t');
+                text.push_str(&escape(&value.text));
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    /// Applies a profile from its file form.
+    ///
+    /// The schema must already be declared: a file names keys, and this profile decides whether a
+    /// key and its value are accepted. Values are staged first and committed only when the whole file
+    /// reads, so a bad line leaves the profile exactly as it was; the refusal names its line.
+    pub fn decode(&mut self, text: &str) -> Result<Vec<String>, Fault> {
+        let mut lines = text.lines();
+        match lines.next() {
+            Some(header) if header.trim() == "rustage-settings 1" => {}
+            Some(header) => {
+                return Err(Fault {
+                    line: 0,
+                    reason: format!("expected the `rustage-settings 1` header, found {header:?}"),
+                });
+            }
+            None => {
+                return Err(Fault {
+                    line: 0,
+                    reason: "the settings file is empty".to_owned(),
+                });
+            }
+        }
+        let mut staged = Self {
+            schema: self.schema.clone(),
+            values: self.values.clone(),
+        };
+        let mut applied = Vec::new();
+        for (index, line) in lines.enumerate() {
+            let number = index + 2;
+            if line.is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.splitn(3, '\t').collect();
+            let [key, layer, value] = fields.as_slice() else {
+                return Err(Fault {
+                    line: number,
+                    reason: "a setting line is <key>\\t<layer>\\t<value>".to_owned(),
+                });
+            };
+            let Some(layer) = Layer::parse(layer) else {
+                return Err(Fault {
+                    line: number,
+                    reason: format!("{layer:?} is not a settings layer"),
+                });
+            };
+            let (key, value) = (unescape(key), unescape(value));
+            if let Err(reason) = staged.set(layer, &key, &value) {
+                return Err(Fault {
+                    line: number,
+                    reason,
+                });
+            }
+            applied.push(format!("{key} at {} ({number})", layer.name()));
+        }
+        self.values = staged.values;
+        Ok(applied)
     }
 
     /// The profile in one line per effective value.
@@ -290,6 +414,43 @@ impl Settings {
             .map(|(old, new)| format!("{old} -> {new}"))
             .collect())
     }
+}
+
+/// Writes a `\t`, a newline or a backslash as an escape the settings line form can carry.
+fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Reads back what [`escape`] wrote.
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            out.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// A keymap profile.
@@ -431,6 +592,86 @@ mod tests {
             .expect("a migrate");
         assert_eq!(settings.effective("editor.size"), Some(("18", Layer::User)));
         assert!(settings.effective("editor.font_size").is_none());
+    }
+
+    #[test]
+    fn the_machine_layer_overrides_the_user_profile_but_yields_to_the_session() {
+        let mut settings = profile();
+        settings
+            .set(Layer::User, "editor.font_size", "16")
+            .expect("a user value");
+        settings
+            .set(Layer::Machine, "editor.font_size", "20")
+            .expect("a machine value");
+        assert_eq!(
+            settings.effective("editor.font_size"),
+            Some(("20", Layer::Machine))
+        );
+        settings
+            .set(Layer::Session, "editor.font_size", "24")
+            .expect("a session value");
+        assert_eq!(
+            settings.effective("editor.font_size"),
+            Some(("24", Layer::Session))
+        );
+    }
+
+    #[test]
+    fn an_exported_profile_reads_back_with_every_layer_and_its_escapes() {
+        let mut settings = profile();
+        settings
+            .set(Layer::Default, "editor.font_size", "14")
+            .expect("a default");
+        settings
+            .set(Layer::Machine, "editor.theme", "dark")
+            .expect("a machine value");
+        settings.schema_key("editor.title", Kind::Text);
+        settings
+            .set(Layer::Project, "editor.title", "a\tb\nc\\d")
+            .expect("a text value");
+
+        let text = settings.encode();
+        assert!(text.contains("editor.theme\tmachine\tdark"), "{text}");
+
+        let mut read_back = settings.empty_like();
+        let applied = read_back.decode(&text).expect("a readable profile");
+        assert_eq!(read_back, settings);
+        assert_eq!(applied.len(), 3);
+        assert_eq!(
+            read_back.effective("editor.title"),
+            Some(("a\tb\nc\\d", Layer::Project))
+        );
+    }
+
+    #[test]
+    fn a_bad_line_names_its_line_and_leaves_the_profile_untouched() {
+        let mut settings = profile();
+        settings
+            .set(Layer::User, "editor.font_size", "16")
+            .expect("a value");
+        let before = settings.clone();
+        let text = "rustage-settings 1\neditor.font_size\tuser\t18\neditor.font_size\tuser\thuge\n";
+        let fault = settings
+            .decode(text)
+            .expect_err("the value is not an integer");
+        assert_eq!(fault.line, 3);
+        assert!(fault.message().contains("line 3"), "{}", fault.message());
+        // The first line was valid, but nothing is committed when the file as a whole is refused.
+        assert_eq!(settings, before);
+    }
+
+    #[test]
+    fn an_unknown_key_or_a_missing_header_is_refused_with_its_location() {
+        let mut settings = profile();
+        let fault = settings
+            .decode("rustage-settings 1\neditor.unknown\tuser\tx\n")
+            .expect_err("no such key");
+        assert_eq!(fault.line, 2);
+        assert!(fault.message().contains("no setting"), "{fault}");
+
+        let fault = settings.decode("nonsense\n").expect_err("no header");
+        assert_eq!(fault.line, 0);
+        assert!(fault.message().contains("header"), "{fault}");
     }
 
     #[test]

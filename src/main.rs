@@ -40,7 +40,14 @@ fn main() {
     let command = match cli::parse(arguments) {
         Ok(command) => command,
         Err(error) => {
-            eprintln!("rustage: {error}\nTry `rustage --help` for usage.");
+            // The process's own refusal prefix is identified vocabulary (`shell.error.prefix`), so a
+            // Chinese-reading person sees it in the language the rest of the process speaks.
+            let message = format!("{error}\nTry `rustage --help` for usage.");
+            eprintln!(
+                "{}",
+                app::locale::catalog::Catalog::current()
+                    .fill("shell.error.prefix", &[("message", message.as_str())])
+            );
             std::process::exit(cli::ExitCode::Usage.code());
         }
     };

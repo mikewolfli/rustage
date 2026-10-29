@@ -810,11 +810,14 @@ pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
 
 /// Orders configured tasks (task T16.05).
 pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
-    use crate::app::build::tasks::{Task, cache_key, cleanup, default_task, order};
+    use crate::app::build::tasks::{
+        Task, cache_key, cleanup, cleanup_plan, default_task, order, schedule,
+    };
 
     let mut tasks: Vec<Task> = Vec::new();
     let mut fingerprints: Vec<(String, String)> = Vec::new();
     let mut declared_default: Option<String> = None;
+    let mut root = ".".to_owned();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<(), String> = match verb {
@@ -824,6 +827,8 @@ pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
                         name: name.to_owned(),
                         command: vec![command.to_owned()],
                         depends_on: Vec::new(),
+                        pre: Vec::new(),
+                        post: Vec::new(),
                         directory: None,
                         inputs: Vec::new(),
                         outputs: Vec::new(),
@@ -842,6 +847,34 @@ pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
                 },
                 None => Err(format!("after needs <name>:<dependency>, got {argument:?}")),
             },
+            "pre" => match argument.split_once(':') {
+                Some((name, task)) => match tasks.iter_mut().find(|defined| defined.name == name) {
+                    Some(defined) => {
+                        defined.pre.push(task.to_owned());
+                        Ok(())
+                    }
+                    None => Err(format!("task {name:?} is not defined yet")),
+                },
+                None => Err(format!("pre needs <name>:<task>, got {argument:?}")),
+            },
+            "post" => match argument.split_once(':') {
+                Some((name, task)) => match tasks.iter_mut().find(|defined| defined.name == name) {
+                    Some(defined) => {
+                        defined.post.push(task.to_owned());
+                        Ok(())
+                    }
+                    None => Err(format!("task {name:?} is not defined yet")),
+                },
+                None => Err(format!("post needs <name>:<task>, got {argument:?}")),
+            },
+            "root" => {
+                if argument.trim().is_empty() {
+                    Err("root needs a path".to_owned())
+                } else {
+                    root = argument.to_owned();
+                    Ok(())
+                }
+            }
             "input" => match argument.split_once(':') {
                 Some((name, path)) => match tasks.iter_mut().find(|task| task.name == name) {
                     Some(task) => {
@@ -878,6 +911,9 @@ pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
             "order" | "show" => Ok(()),
             "key" => Ok(()),
             "cleanup" => Ok(()),
+            "schedule" => Ok(()),
+            "clean-preview" => Ok(()),
+            "clean" => Ok(()),
             other => Err(format!("{other:?} is not a tasks operation")),
         };
         if let Err(reason) = step {
@@ -888,6 +924,10 @@ pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
         Ok(ordered) => ordered,
         Err(reason) => return report(reason),
     };
+    let waves = match schedule(&tasks) {
+        Ok(waves) => waves,
+        Err(reason) => return report(reason),
+    };
     let default = match default_task(&tasks, declared_default.as_deref()) {
         Ok(default) => default,
         Err(reason) => return report(reason),
@@ -895,6 +935,12 @@ pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
     for line in crate::app::build::tasks::render(&tasks, &ordered, &default) {
         println!("{line}");
     }
+    // A wave is what may run at once; the order above is what runs.
+    for (index, wave) in waves.iter().enumerate() {
+        println!("wave {}: {}", index + 1, wave.join(", "));
+    }
+    // Only a task whose scope was shown in this invocation may be cleaned.
+    let mut previewed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         match verb {
@@ -906,6 +952,41 @@ pub(super) fn tasks(options: &crate::cli::TasksOptions) -> bool {
                 Some(task) => println!("cleanup {argument}: {:?}", cleanup(task)),
                 None => return report(format!("no task {argument:?}")),
             },
+            "clean-preview" => {
+                if argument.is_empty() {
+                    return report("clean-preview needs a task".to_owned());
+                }
+                let plan = cleanup_plan(std::path::Path::new(&root), &tasks, &[argument]);
+                for line in plan.render() {
+                    println!("{line}");
+                }
+                if !plan.problems.is_empty() {
+                    return report(plan.problems.join("; "));
+                }
+                previewed.insert(argument.to_owned());
+            }
+            "clean" => {
+                if argument.is_empty() {
+                    return report("clean needs a task".to_owned());
+                }
+                if !previewed.contains(argument) {
+                    return report(format!(
+                        "clean {argument} needs clean-preview:{argument} first, so the scope is shown \
+                         before anything is removed"
+                    ));
+                }
+                let plan = cleanup_plan(std::path::Path::new(&root), &tasks, &[argument]);
+                let (removed, failed) = plan.apply();
+                for path in &removed {
+                    println!("removed {path}");
+                }
+                for failure in &failed {
+                    println!("failed {failure}");
+                }
+                if !failed.is_empty() {
+                    return report(format!("{} path(s) could not be removed", failed.len()));
+                }
+            }
             _ => {}
         }
     }
@@ -1263,6 +1344,11 @@ pub(super) fn e2e(options: &crate::cli::E2eOptions) -> bool {
         }
         match verb {
             "skip" => walk.skip_missing(),
+            "walk" => {
+                if let Err(reason) = walk_stages(&mut walk, argument) {
+                    return report(reason);
+                }
+            }
             "show" => {}
             other => return report(format!("{other:?} is not an e2e operation")),
         }
@@ -1276,6 +1362,119 @@ pub(super) fn e2e(options: &crate::cli::E2eOptions) -> bool {
     walk.is_success()
 }
 
+/// Runs the walk against a real project directory: check, build, then run.
+///
+/// `argument` is `<directory>:<program>`. Every stage is the real `cargo` invocation and the real
+/// binary; a failing check records its first error line as the feedback, so the loop ends at the
+/// compiler's own words rather than at a claimed success.
+fn walk_stages(walk: &mut crate::app::build::e2e::Report, argument: &str) -> Result<(), String> {
+    use crate::app::build::e2e::{Outcome, Stage};
+    let (directory, program) = argument
+        .split_once(':')
+        .ok_or_else(|| format!("walk needs <directory>:<program>, got {argument:?}"))?;
+    if directory.trim().is_empty() || program.trim().is_empty() {
+        return Err("walk needs <directory>:<program>, got an empty field".to_owned());
+    }
+    if !std::path::Path::new(directory).join("Cargo.toml").is_file() {
+        return Err(format!(
+            "{} has no Cargo.toml, so it is not a project to walk",
+            directory
+        ));
+    }
+
+    let check = cargo(directory, &["check", "--quiet"]);
+    match &check {
+        Ok(()) => walk.record(Stage::Check, Outcome::Ok, "cargo check"),
+        Err(line) => {
+            walk.record(Stage::Check, Outcome::Failed(line.clone()), "cargo check");
+            // The compiler's own line is the feedback: it names the file and the line number.
+            walk.record(Stage::Feedback, Outcome::Failed(line.clone()), line.clone());
+            return Ok(());
+        }
+    }
+
+    match cargo(directory, &["build", "--quiet"]) {
+        Ok(()) => walk.record(Stage::Build, Outcome::Ok, "cargo build"),
+        Err(line) => {
+            walk.record(Stage::Build, Outcome::Failed(line.clone()), "cargo build");
+            walk.record(Stage::Feedback, Outcome::Failed(line.clone()), line.clone());
+            return Ok(());
+        }
+    }
+
+    let binary = std::path::Path::new(directory)
+        .join("target")
+        .join("debug")
+        .join(program);
+    match std::process::Command::new(&binary)
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            walk.record(
+                Stage::Run,
+                Outcome::Ok,
+                format!("{} exited 0 ({})", binary.display(), stdout),
+            );
+            walk.record(
+                Stage::Feedback,
+                Outcome::Ok,
+                "the build reported no problem".to_owned(),
+            );
+            Ok(())
+        }
+        Ok(output) => {
+            let reason = format!(
+                "{} exited {}: {}",
+                binary.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            walk.record(Stage::Run, Outcome::Failed(reason.clone()), reason);
+            Ok(())
+        }
+        Err(error) => {
+            let reason = format!("cannot run {}: {error}", binary.display());
+            walk.record(Stage::Run, Outcome::Failed(reason.clone()), reason);
+            Ok(())
+        }
+    }
+}
+
+/// Runs one cargo command in a directory, answering the first error line it printed.
+fn cargo(directory: &str, arguments: &[&str]) -> Result<(), String> {
+    let output = std::process::Command::new("cargo")
+        .args(arguments)
+        .args(["--color", "never", "--manifest-path"])
+        .arg(std::path::Path::new(directory).join("Cargo.toml"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot run cargo: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    // The compiler's own words: its first `error…` line, plus the `--> file:line` line under it.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("error"))
+        .unwrap_or(0);
+    let mut message = lines
+        .get(start)
+        .map_or("cargo failed".to_owned(), |line| line.trim().to_owned());
+    if let Some(location) = lines
+        .iter()
+        .skip(start + 1)
+        .find(|line| line.trim_start().starts_with("-->"))
+    {
+        message.push(' ');
+        message.push_str(location.trim());
+    }
+    Err(message)
+}
+
 /// Builds a typed task graph and matches its output (task T16.09).
 pub(super) fn dag(options: &crate::cli::DagOptions) -> bool {
     use crate::app::build::dag::{Dag, Node, Order, Ready, match_line, matcher};
@@ -1283,6 +1482,10 @@ pub(super) fn dag(options: &crate::cli::DagOptions) -> bool {
     let mut dag = Dag::default();
     let mut matchers = Vec::new();
     let mut ready: Vec<Ready> = Vec::new();
+    // The problems the matchers read, and the target/revision they are recorded against.
+    let mut found_problems: Vec<crate::app::build::dag::Problem> = Vec::new();
+    let mut target = "desktop".to_owned();
+    let mut revision: u64 = 0;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<(), String> = match verb {
@@ -1387,6 +1590,7 @@ pub(super) fn dag(options: &crate::cli::DagOptions) -> bool {
                 for m in &matchers {
                     if let Some(problem) = match_line(m, argument) {
                         println!("{}", problem.render());
+                        found_problems.push(problem);
                         found = true;
                     }
                 }
@@ -1395,6 +1599,21 @@ pub(super) fn dag(options: &crate::cli::DagOptions) -> bool {
                 }
                 Ok(())
             }
+            "target" => {
+                if argument.trim().is_empty() {
+                    Err("target needs a name".to_owned())
+                } else {
+                    target = argument.to_owned();
+                    Ok(())
+                }
+            }
+            "revision" => match argument.parse() {
+                Ok(value) => {
+                    revision = value;
+                    Ok(())
+                }
+                Err(_) => Err(format!("{argument:?} is not a revision")),
+            },
             "waves" | "show" => Ok(()),
             "ready" => match argument.split_once(':') {
                 Some((name, text)) => match ready.iter().find(|r| r.task == name) {
@@ -1417,6 +1636,28 @@ pub(super) fn dag(options: &crate::cli::DagOptions) -> bool {
             for (index, wave) in waves.iter().enumerate() {
                 println!("wave {index}: {}", wave.join(", "));
             }
+            // A matched problem is a build problem with a source, a target and a revision, so it
+            // goes into the same centre the compiler's own diagnostics use — a log line with no
+            // owner or version is the thing T16.09 exists to stop.
+            let mut center = crate::app::quality::Center::new();
+            for problem in &found_problems {
+                center.add(crate::app::quality::Problem {
+                    source: crate::app::quality::Source::Build,
+                    target: target.clone(),
+                    revision,
+                    node: None,
+                    location: Some(format!("{}:{}", problem.file, problem.line)),
+                    severity: crate::app::quality::Severity::Error,
+                    message: format!("{}: {}", problem.owner, problem.message),
+                });
+            }
+            for line in center.render(&crate::app::quality::Filter::default()) {
+                println!("{line}");
+            }
+            println!(
+                "matched problems: {} (source build, target {target}, revision {revision})",
+                center.render(&crate::app::quality::Filter::default()).len()
+            );
             true
         }
         Err(reason) => report(reason),

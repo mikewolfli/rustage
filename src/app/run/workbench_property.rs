@@ -21,8 +21,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rust_widgets::widget::WidgetFactory;
-
 use crate::app::layout::layout_plan::Origin;
 use crate::app::style::multi_property::{
     Common, NodeProperties, common, reset as reset_setting, value_of,
@@ -633,7 +631,9 @@ fn contract_kind(contract: &NodeContract) -> Result<(PropertyName, PropertyType)
 /// "what does a fresh control hold" through different entry points: a property without a measured
 /// default is still editable, it just has no starting value to show.
 fn resolve_contract(control: &str, property: &PropertyName) -> Result<Schema, String> {
-    let factory = WidgetFactory::shared();
+    // The host factory, not `WidgetFactory::shared()`: the parent crate's table is immutable and
+    // does not own suite controls such as `form`/`form_set`, so the Inspector could not read them.
+    let factory = crate::app::contract::factory();
     let contract = factory
         .property_schema(control, property.as_str())
         .map_err(|error| format!("the contract has no such property ({error:?})"))?;
@@ -787,6 +787,23 @@ mod tests {
     }
 
     #[test]
+    fn a_suite_control_resolves_through_the_host_factory() {
+        // `form` is installed by `rust-widgets-suites` and is absent from the parent crate's
+        // immutable `WidgetFactory::shared()` table. The Inspector must read the host table, or
+        // a form node would be reported as "schema unavailable" instead of editable.
+        let state = PropertyState::for_control("form", "title", "");
+        assert_eq!(state.control(), Some("form"));
+        assert_eq!(state.schema_unavailable(), None);
+        assert_eq!(state.value_text(), "");
+        assert_eq!(state.contract_default().as_deref(), Some(""));
+
+        // A form-set property resolves too, including through its alias.
+        let state = PropertyState::for_control("formset", "current_index", "");
+        assert_eq!(state.schema_unavailable(), None);
+        assert_eq!(state.value_text(), "0");
+    }
+
+    #[test]
     fn a_token_the_contract_does_not_publish_is_refused() {
         let mut state = PropertyState::for_control("button", "elide", "");
         let reason = state.apply("loud").expect_err("not a declared token");
@@ -924,7 +941,7 @@ mod tests {
         let scene = CanvasState::demo();
         let root = node_named(&scene, "window");
         let button = node_named(&scene, "button");
-        let entries = vec![
+        let entries = [
             (root, scene.contract(root).expect("window"), "window"),
             (button, scene.contract(button).expect("button"), "button"),
         ];
@@ -959,7 +976,7 @@ mod tests {
         let scene = CanvasState::demo();
         let button = node_named(&scene, "button");
         let label = node_named(&scene, "label");
-        let entries = vec![
+        let entries = [
             (button, scene.contract(button).expect("button"), "shared"),
             (label, scene.contract(label).expect("label"), "shared"),
         ];

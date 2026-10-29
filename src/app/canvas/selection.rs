@@ -15,7 +15,7 @@
 //!   the other.
 //! * **Overlapping nodes can be selected.** [`Selection::click`] picks the topmost; [`Selection::cycle`]
 //!   walks down through the nodes under a point, so a node under a bigger one is still reachable.
-//! * **Navigation is the scene's hierarchy.** [`Selection::parent_of`]/[`children_of`] read the scene's
+//! * **Navigation is the scene's hierarchy.** [`Selection::parent_of`]/[`Selection::children_of`] read the scene's
 //!   parent links, so the tree and the canvas cannot disagree about who is whose child.
 
 #![allow(dead_code)]

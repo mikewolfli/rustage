@@ -10,8 +10,10 @@
 //!   [`Discover::NotRepository`] let a caller keep designing and say which fact is missing.
 //! * **Status is read fresh.** [`Repository::status`] runs `git status` on every call, so an
 //!   external change cannot be mistaken for a cached clean tree.
-//! * **Dirty means stop.** Switching branches, creating a branch from a dirty tree and stashing
-//!   require a clean worktree; the refusal names how many paths changed rather than dropping work.
+//! * **Dirty means stop unless the caller says how.** Creating a branch and stashing require a
+//!   clean worktree, and a plain switch refuses one too; [`Repository::switch_branch_stashing`] is
+//!   the explicit alternative that sets the work aside, names the stash, and restores it when the
+//!   switch fails. No path is dropped silently.
 //! * **Destructive commands are bounded.** Merge/rebase/cherry-pick report their conflict and name
 //!   the matching abort; nothing here pushes, force-updates a ref, deletes a worktree, or rewrites
 //!   public history.
@@ -24,10 +26,15 @@
 //!   line/hunk selection. A text resolution of a generated file is refused when it would cross a
 //!   hand-written boundary, and no resolution is reported as complete until the caller's
 //!   regeneration step has passed.
+//! * **A commit is previewed before it happens.** [`Repository::commit_preview`] reads only the
+//!   index, reports what stays out, names an open buffer with unsaved changes, and scans the staged
+//!   text for secrets ([`super::secrets`]). Nothing here stages, writes or commits to produce it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use crate::app::vcs::secrets::{self, Secret};
 
 /// Why a directory is not a repository this module can drive.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -625,6 +632,15 @@ pub struct Worktree {
     pub branch: Option<String>,
 }
 
+/// What a branch switch did.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Switched {
+    /// What Git reported.
+    pub message: String,
+    /// The message of the stash that holds what the switch set aside, when the tree was dirty.
+    pub stash: Option<String>,
+}
+
 /// A discovered repository.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Repository {
@@ -1043,6 +1059,43 @@ impl Repository {
         self.require_clean("switching branches")?;
         self.run(&["switch", name])
             .map(|_| format!("switched to {name}"))
+    }
+
+    /// Switches branches, setting a dirty worktree aside first.
+    ///
+    /// The stash is not an afterthought: it is named in the answer so the work is findable, and a
+    /// switch that fails after the stash is popped again. If that restore fails too, the error says
+    /// where the work still is instead of reporting only the switch failure.
+    pub fn switch_branch_stashing(&self, name: &str) -> Result<Switched, String> {
+        if name.trim().is_empty() {
+            return Err("a branch name is required".to_owned());
+        }
+        let status = self.status()?;
+        if status.is_clean() {
+            return self.run(&["switch", name]).map(|_| Switched {
+                message: format!("switched to {name}"),
+                stash: None,
+            });
+        }
+        let message = format!("rustage: switch to {name}");
+        self.stash(&message)?;
+        match self.run(&["switch", name]) {
+            Ok(_) => Ok(Switched {
+                message: format!("switched to {name}"),
+                stash: Some(message),
+            }),
+            Err(reason) => match self.stash_pop(0) {
+                Ok(_) => Err(format!(
+                    "{reason}; the {} path(s) set aside for the switch were restored",
+                    status.entries.len()
+                )),
+                Err(restore) => Err(format!(
+                    "{reason}; the {} path(s) are still in stash@{{0}} ({message}) but restoring \
+                     them failed: {restore}",
+                    status.entries.len()
+                )),
+            },
+        }
     }
 
     /// The worktrees Git reports.
@@ -1866,6 +1919,416 @@ fn strip_css_comments(text: &str) -> String {
     out
 }
 
+/// One commit in the history, as Git printed it (T20.04).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Commit {
+    /// The full hash.
+    pub hash: String,
+    /// The author's name.
+    pub author: String,
+    /// The author's e-mail.
+    pub email: String,
+    /// The author time, in seconds since the Unix epoch (UTC).
+    pub time: i64,
+    /// The first line of the message.
+    pub subject: String,
+}
+
+impl Commit {
+    /// The first seven characters of the hash.
+    pub fn short(&self) -> &str {
+        let end = self.hash.len().min(7);
+        &self.hash[..end]
+    }
+}
+
+/// What restoring one path from a revision would do, without doing it (T20.04).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RestorePreview {
+    /// The revision the content comes from.
+    pub revision: String,
+    /// The path, as Git knows it.
+    pub path: String,
+    /// The bytes the revision holds.
+    pub bytes: usize,
+    /// Whether the working copy differs from them.
+    pub differs: bool,
+    /// Whether the working copy has no such file.
+    pub missing: bool,
+}
+
+impl RestorePreview {
+    /// The preview in lines: what would happen, then that nothing was written.
+    pub fn render(&self) -> Vec<String> {
+        let state = if self.missing {
+            "the working copy has no such file".to_owned()
+        } else if self.differs {
+            "the working copy differs".to_owned()
+        } else {
+            "the working copy is identical".to_owned()
+        };
+        vec![
+            format!(
+                "restore preview: {} from {} ({} byte(s))",
+                self.path, self.revision, self.bytes
+            ),
+            state,
+            "preview only: nothing was written".to_owned(),
+        ]
+    }
+}
+
+impl Repository {
+    /// The commit history, newest first, at most `limit` entries.
+    pub fn log(&self, limit: Option<usize>) -> Result<Vec<Commit>, String> {
+        let limit = limit.unwrap_or(20);
+        if limit == 0 {
+            return Err("a history needs at least one commit".to_owned());
+        }
+        let text = self.run(&[
+            "log",
+            "--no-color",
+            &format!("--max-count={limit}"),
+            "--format=%H%x1f%an%x1f%ae%x1f%at%x1f%s",
+        ])?;
+        let mut commits = Vec::new();
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\u{1f}').collect();
+            let [hash, author, email, time, subject] = fields.as_slice() else {
+                return Err(format!(
+                    "git log printed {} field(s), not 5: {line:?}",
+                    fields.len()
+                ));
+            };
+            let time: i64 = time
+                .parse()
+                .map_err(|_| format!("the author time {time:?} is not a number"))?;
+            commits.push(Commit {
+                hash: (*hash).to_owned(),
+                author: (*author).to_owned(),
+                email: (*email).to_owned(),
+                time,
+                subject: (*subject).to_owned(),
+            });
+        }
+        Ok(commits)
+    }
+
+    /// What one commit changed, or one path's content at that commit.
+    ///
+    /// Without a path this is `git show`, so it is a diff; with one it is the file's content at that
+    /// revision. Both are read-only.
+    pub fn commit_show(&self, revision: &str, path: Option<&str>) -> Result<String, String> {
+        if revision.trim().is_empty() {
+            return Err("a revision is needed".to_owned());
+        }
+        match path {
+            Some(path) if path.trim().is_empty() => Err("the path is empty".to_owned()),
+            Some(path) => self.run_exact(&["show", &format!("{revision}:{path}")]),
+            None => self.run(&["show", "--no-color", revision]),
+        }
+    }
+
+    /// The hunks of one path's unstaged text change, in the order Git printed them.
+    ///
+    /// A binary change has no hunks; an empty answer means there is nothing to choose from, not
+    /// that the file is unchanged.
+    pub fn diff_hunks(&self, path: &str) -> Result<Vec<String>, String> {
+        if path.trim().is_empty() {
+            return Err("a path is needed".to_owned());
+        }
+        let text = self.run(&["diff", "--no-color", "--", path])?;
+        Ok(hunks_of(&text))
+    }
+
+    /// Stages one hunk of a path's unstaged change, leaving the rest in the worktree.
+    ///
+    /// `index` is 1-based, because it is a number a person reads. The patch is the file header Git
+    /// itself printed plus exactly that hunk, applied with `git apply --cached`, so the index gains
+    /// the selected change and the working copy is untouched.
+    pub fn stage_hunk(&self, path: &str, index: usize) -> Result<String, String> {
+        if path.trim().is_empty() {
+            return Err("a path is needed".to_owned());
+        }
+        let text = self.run(&["diff", "--no-color", "--", path])?;
+        let hunks = hunks_of(&text);
+        if hunks.is_empty() {
+            return Err(format!("{path:?} has no unstaged text change to stage"));
+        }
+        if index == 0 || index > hunks.len() {
+            return Err(format!(
+                "hunk {index} does not exist; {path:?} has {} hunk(s)",
+                hunks.len()
+            ));
+        }
+        let header: String = text
+            .lines()
+            .take_while(|line| !line.starts_with("@@"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        if header.trim().is_empty() {
+            return Err(format!("{path:?} has no file header to stage"));
+        }
+        let patch = format!("{header}{}", hunks[index - 1]);
+        self.apply_to_index(&patch)?;
+        Ok(format!(
+            "staged hunk {index} of {path} ({} hunk(s) were unstaged)",
+            hunks.len()
+        ))
+    }
+
+    /// Applies a patch to the index only.
+    fn apply_to_index(&self, patch: &str) -> Result<(), String> {
+        use std::io::Write;
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["apply", "--cached", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("cannot run git apply: {error}"))?;
+        {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .ok_or_else(|| "git apply got no input pipe".to_owned())?;
+            stdin
+                .write_all(patch.as_bytes())
+                .map_err(|error| format!("cannot write the patch: {error}"))?;
+        }
+        let output = child
+            .wait_with_output()
+            .map_err(|error| format!("cannot wait for git apply: {error}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            Err(format!(
+                "git apply --cached exited with {}: {stderr}",
+                output.status
+            ))
+        }
+    }
+
+    /// What restoring `path` from `revision` would produce, without writing anything.
+    pub fn restore_preview(&self, revision: &str, path: &str) -> Result<RestorePreview, String> {
+        if revision.trim().is_empty() {
+            return Err("a revision is needed".to_owned());
+        }
+        if path.trim().is_empty() {
+            return Err("a path is needed".to_owned());
+        }
+        let content = self.run_exact(&["show", &format!("{revision}:{path}")])?;
+        let working = std::fs::read(self.root.join(path));
+        let (differs, missing) = match working {
+            Ok(bytes) => (bytes != content.as_bytes(), false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (true, true),
+            Err(error) => {
+                return Err(format!("cannot read {path}: {error}"));
+            }
+        };
+        Ok(RestorePreview {
+            revision: revision.to_owned(),
+            path: path.to_owned(),
+            bytes: content.len(),
+            differs,
+            missing,
+        })
+    }
+}
+
+/// What a commit would do, before it is made (T20.03).
+///
+/// The preview is the whole of the acceptance line in one value: what is staged, what is
+/// deliberately left out, which open buffers have unsaved changes, and every secret the staged
+/// content contains. Nothing is staged, written or committed by building one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CommitPreview {
+    /// The branch the commit would land on.
+    pub branch: String,
+    /// The paths that would go in, taken from the index only.
+    pub staged: Vec<String>,
+    /// Changed paths that are not staged, so they stay out of this commit.
+    pub not_staged: Vec<String>,
+    /// Untracked paths, which also stay out.
+    pub untracked: Vec<String>,
+    /// Staged paths whose open buffer has unsaved changes.
+    pub dirty: Vec<String>,
+    /// Secrets found in the staged content.
+    pub secrets: Vec<Secret>,
+    /// Staged paths whose content could not be read as text.
+    pub unscanned: Vec<String>,
+}
+
+impl CommitPreview {
+    /// Whether committing this would be authorized.
+    ///
+    /// Two things stop it: no staged path (there is nothing to commit) and a secret in the staged
+    /// content. A dirty buffer is a warning, not a refusal — the person may have staged exactly what
+    /// they meant to, and the preview says so out loud.
+    pub fn can_commit(&self) -> bool {
+        !self.staged.is_empty() && self.secrets.is_empty()
+    }
+
+    /// The preview in lines: the counts, then what is left out, then the verdict.
+    pub fn render(&self) -> Vec<String> {
+        let mut lines = vec![format!(
+            "commit preview on {}: {} staged, {} not staged, {} untracked",
+            self.branch,
+            self.staged.len(),
+            self.not_staged.len(),
+            self.untracked.len()
+        )];
+        if !self.staged.is_empty() {
+            lines.push(format!("staged: {}", self.staged.join(", ")));
+        }
+        for path in &self.dirty {
+            lines.push(format!(
+                "warning: {path} has unsaved changes; the staged copy may differ from what is on \
+                 screen"
+            ));
+        }
+        if !self.not_staged.is_empty() {
+            lines.push(format!(
+                "not staged (left out): {}",
+                self.not_staged.join(", ")
+            ));
+        }
+        if !self.untracked.is_empty() {
+            lines.push(format!(
+                "untracked (left out): {}",
+                self.untracked.join(", ")
+            ));
+        }
+        if !self.unscanned.is_empty() {
+            lines.push(format!(
+                "not scanned (not text): {}",
+                self.unscanned.join(", ")
+            ));
+        }
+        for secret in &self.secrets {
+            lines.push(format!("secret: {}", secret.render()));
+        }
+        if self.staged.is_empty() {
+            lines.push("nothing is staged, so there is nothing to commit".to_owned());
+        } else if !self.secrets.is_empty() {
+            lines.push(format!(
+                "refused: {} secret(s) would be committed",
+                self.secrets.len()
+            ));
+        } else {
+            lines.push(format!(
+                "ready: {} staged path(s), no secret found",
+                self.staged.len()
+            ));
+        }
+        lines
+    }
+}
+
+impl Repository {
+    /// The index content of a path, as the bytes it holds.
+    fn index_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["show", &format!(":{path}")])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| format!("cannot run git: {error}"))?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+        }
+    }
+
+    /// What a commit would do, with `dirty` naming the open documents that have unsaved changes.
+    ///
+    /// Only the index is read: the staged content is what would be committed, so that is what is
+    /// scanned. A staged path whose index content cannot be read as text is reported as unscanned
+    /// rather than as clean.
+    pub fn commit_preview(&self, dirty: &[String]) -> Result<CommitPreview, String> {
+        let status = self.status()?;
+        let mut preview = CommitPreview {
+            branch: status.branch.clone(),
+            staged: Vec::new(),
+            not_staged: Vec::new(),
+            untracked: Vec::new(),
+            dirty: Vec::new(),
+            secrets: Vec::new(),
+            unscanned: Vec::new(),
+        };
+        for entry in &status.entries {
+            if entry.is_untracked() {
+                preview.untracked.push(entry.path.clone());
+                continue;
+            }
+            if entry.index != ' ' && entry.index != '?' {
+                preview.staged.push(entry.path.clone());
+            }
+            if entry.worktree != ' ' && entry.worktree != '?' {
+                preview.not_staged.push(entry.path.clone());
+            }
+        }
+        for path in &preview.staged {
+            if dirty.iter().any(|open| open == path) {
+                preview.dirty.push(path.clone());
+            }
+        }
+        for path in &preview.staged {
+            // A rename row is `old -> new`; the content that goes in is the new path's.
+            let target = match path.rsplit_once(" -> ") {
+                Some((_, target)) => target,
+                None => path.as_str(),
+            };
+            let content = match self.index_bytes(target) {
+                Ok(bytes) => bytes,
+                // A deletion has no index content to scan; a path Git will not resolve is also not
+                // text we can read, and both are reported rather than called clean.
+                Err(_) => {
+                    preview.unscanned.push(path.clone());
+                    continue;
+                }
+            };
+            let Ok(text) = std::str::from_utf8(&content) else {
+                preview.unscanned.push(path.clone());
+                continue;
+            };
+            preview.secrets.extend(secrets::scan(target, text));
+        }
+        Ok(preview)
+    }
+}
+
+/// Splits a unified diff into its hunks, each keeping the lines Git printed.
+fn hunks_of(text: &str) -> Vec<String> {
+    let mut hunks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        if line.starts_with("@@") {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            current = Some(format!("{line}\n"));
+            continue;
+        }
+        if let Some(hunk) = current.as_mut() {
+            hunk.push_str(line);
+            hunk.push('\n');
+        }
+    }
+    if let Some(hunk) = current {
+        hunks.push(hunk);
+    }
+    hunks
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ConflictKind, Discover, HunkChoice, Repository};
@@ -2058,6 +2521,66 @@ mod tests {
             .expect_err("a dirty switch");
         assert!(reason.contains("clean worktree"), "{reason}");
         assert!(reason.contains("1 path"), "{reason}");
+    }
+
+    #[test]
+    fn a_stashing_switch_keeps_the_work_and_lands_on_the_branch() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        let base = repository.status().expect("a status").branch;
+        repository.create_branch("feature").expect("a branch");
+        std::fs::write(directory.join("a.txt"), "feature\n").expect("an edit");
+        repository.stage("a.txt").expect("a stage");
+        repository.commit("feature work").expect("a commit");
+        repository.switch_branch(&base).expect("back to base");
+        std::fs::write(directory.join("a.txt"), "unsaved work\n").expect("an edit");
+
+        let switched = repository
+            .switch_branch_stashing("feature")
+            .expect("a switch");
+        assert!(switched.stash.is_some(), "{switched:?}");
+        assert_eq!(repository.status().expect("a status").branch, "feature");
+        assert!(repository.status().expect("a status").is_clean());
+        assert_eq!(
+            std::fs::read_to_string(directory.join("a.txt")).expect("the file"),
+            "feature\n"
+        );
+        let stash = repository.stash_list().expect("a list").join("\n");
+        assert!(stash.contains("rustage: switch to feature"), "{stash}");
+    }
+
+    #[test]
+    fn a_switch_that_fails_after_stashing_restores_the_work() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        std::fs::write(directory.join("a.txt"), "unsaved work\n").expect("an edit");
+        let reason = repository
+            .switch_branch_stashing("no-such-branch")
+            .expect_err("a refused switch");
+        assert!(reason.contains("restored"), "{reason}");
+        assert_eq!(
+            std::fs::read_to_string(directory.join("a.txt")).expect("the file"),
+            "unsaved work\n"
+        );
+        assert!(!repository.status().expect("a status").is_clean());
+    }
+
+    #[test]
+    fn a_clean_tree_switches_without_a_stash() {
+        let Some((_directory, repository)) = repository() else {
+            return;
+        };
+        repository.create_branch("feature").expect("a branch");
+        let base = repository
+            .branches()
+            .expect("branches")
+            .into_iter()
+            .find(|name| name != "feature")
+            .expect("the base branch");
+        let switched = repository.switch_branch_stashing(&base).expect("a switch");
+        assert_eq!(switched.stash, None, "{switched:?}");
     }
 
     #[test]
@@ -2341,5 +2864,231 @@ mod tests {
             "ours\n",
             "abort restores the pre-merge checkout, not the merge base"
         );
+    }
+
+    #[test]
+    fn the_history_names_each_commit_and_its_time() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        let history = repository.log(Some(5)).expect("a history");
+        assert_eq!(history.len(), 1, "{history:?}");
+        assert_eq!(history[0].subject, "initial");
+        assert_eq!(history[0].author, "rustage");
+        // The time is a fact; the written form is the interface's (T24.03).
+        assert!(history[0].time > 1_600_000_000, "{}", history[0].time);
+        assert_eq!(history[0].short().len(), 7);
+        assert!(repository.log(Some(0)).is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_commit_preview_reports_staged_left_out_dirty_and_secrets() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        write(&directory, "a.txt", "two\n");
+        git(&directory, &["add", "a.txt"]);
+        // A further edit after staging: the index holds `two`, the worktree holds `three`.
+        write(&directory, "a.txt", "three\n");
+        // An untracked file: it stays out too.
+        write(&directory, "b.txt", "b\n");
+        // A staged file that holds a secret.
+        write(
+            &directory,
+            "c.txt",
+            "api_key = a8f5f167f44f4964e6c998dee827110c\n",
+        );
+        git(&directory, &["add", "c.txt"]);
+
+        let preview = repository
+            .commit_preview(&["a.txt".to_owned()])
+            .expect("a preview");
+        assert_eq!(preview.staged, vec!["a.txt", "c.txt"]);
+        assert_eq!(preview.not_staged, vec!["a.txt"]);
+        assert_eq!(preview.untracked, vec!["b.txt"]);
+        assert_eq!(preview.dirty, vec!["a.txt"]);
+        assert_eq!(preview.secrets.len(), 1, "{preview:?}");
+        assert_eq!(preview.secrets[0].path, "c.txt");
+        assert_eq!(preview.secrets[0].line, 1);
+        assert!(!preview.can_commit());
+
+        let report = preview.render().join("\n");
+        assert!(report.contains("has unsaved changes"), "{report}");
+        assert!(report.contains("not staged (left out): a.txt"), "{report}");
+        assert!(report.contains("untracked (left out): b.txt"), "{report}");
+        assert!(report.contains("secret: c.txt:1"), "{report}");
+        assert!(report.contains("refused: 1 secret(s)"), "{report}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_clean_staged_change_is_ready_and_binary_content_is_not_called_clean() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        write(&directory, "a.txt", "two\n");
+        std::fs::write(directory.join("logo.png"), [0xffu8, 0xfe, 0x00, 0x01])
+            .expect("a binary file");
+        git(&directory, &["add", "a.txt", "logo.png"]);
+
+        let preview = repository.commit_preview(&[]).expect("a preview");
+        assert_eq!(preview.staged, vec!["a.txt", "logo.png"]);
+        assert!(preview.secrets.is_empty(), "{preview:?}");
+        assert_eq!(preview.unscanned, vec!["logo.png"]);
+        assert!(preview.can_commit());
+        let report = preview.render().join("\n");
+        assert!(
+            report.contains("not scanned (not text): logo.png"),
+            "{report}"
+        );
+        assert!(report.contains("ready: 2 staged path(s)"), "{report}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_preview_with_nothing_staged_cannot_commit() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        write(&directory, "a.txt", "changed\n");
+        let preview = repository.commit_preview(&[]).expect("a preview");
+        assert!(preview.staged.is_empty());
+        assert!(!preview.can_commit());
+        assert!(preview.render().join("\n").contains("nothing is staged"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn one_hunk_can_be_staged_while_the_rest_stay_in_the_worktree() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        // Three changes far enough apart that Git prints three hunks.
+        let baseline: Vec<String> = (1..=30).map(|number| format!("line {number}\n")).collect();
+        write(&directory, "a.txt", &baseline.concat());
+        git(&directory, &["add", "a.txt"]);
+        git(&directory, &["commit", "-q", "-m", "baseline"]);
+        let mut lines = baseline;
+        lines[1] = "line 2 changed\n".to_owned();
+        lines[14] = "line 15 changed\n".to_owned();
+        lines[28] = "line 29 changed\n".to_owned();
+        let text: String = lines.concat();
+        write(&directory, "a.txt", &text);
+
+        let hunks = repository.diff_hunks("a.txt").expect("hunks");
+        assert_eq!(hunks.len(), 3, "{hunks:?}");
+        assert!(hunks[0].starts_with("@@"), "{hunks:?}");
+
+        let staged = repository.stage_hunk("a.txt", 1).expect("a staged hunk");
+        assert!(staged.contains("staged hunk 1 of a.txt"), "{staged}");
+        let index = git_text(&directory, &["diff", "--cached", "-U0", "--", "a.txt"]);
+        assert!(index.contains("line 2 changed"), "{index}");
+        assert!(!index.contains("line 15 changed"), "{index}");
+        assert!(!index.contains("line 29 changed"), "{index}");
+
+        // The working copy still holds all three edits.
+        let worktree = std::fs::read_to_string(directory.join("a.txt")).expect("a file");
+        assert!(worktree.contains("line 15 changed"));
+        assert!(worktree.contains("line 29 changed"));
+
+        // A hunk number outside the printed range is refused rather than applied to another one.
+        assert!(repository.stage_hunk("a.txt", 0).is_err());
+        assert!(repository.stage_hunk("a.txt", 4).is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_binary_change_has_no_hunks_to_stage() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        std::fs::write(directory.join("logo.png"), [0xffu8, 0xfe, 0x00]).expect("a binary file");
+        git(&directory, &["add", "logo.png"]);
+        git(&directory, &["commit", "-q", "-m", "binary"]);
+        std::fs::write(directory.join("logo.png"), [0xffu8, 0xfe, 0x01]).expect("a binary change");
+
+        assert!(repository.diff_hunks("logo.png").expect("hunks").is_empty());
+        let error = repository
+            .stage_hunk("logo.png", 1)
+            .expect_err("nothing to stage");
+        assert!(error.contains("no unstaged text change"), "{error}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_commit_shows_its_diff_and_a_paths_content_at_that_revision() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        write(&directory, "a.txt", "two\n");
+        git(&directory, &["add", "a.txt"]);
+        git(&directory, &["commit", "-q", "-m", "second"]);
+
+        let diff = repository.commit_show("HEAD", None).expect("a diff");
+        assert!(diff.contains("second"), "{diff}");
+        assert!(diff.contains("-one"), "{diff}");
+        assert!(diff.contains("+two"), "{diff}");
+
+        let content = repository
+            .commit_show("HEAD", Some("a.txt"))
+            .expect("a file at a revision");
+        assert_eq!(content, "two\n");
+        assert!(repository.commit_show("", None).is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn restoring_a_path_is_previewed_and_nothing_is_written() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        write(&directory, "a.txt", "changed\n");
+        let preview = repository
+            .restore_preview("HEAD", "a.txt")
+            .expect("a preview");
+        assert!(preview.differs);
+        assert!(!preview.missing);
+        assert_eq!(preview.bytes, "one\n".len());
+        let lines = preview.render().join("\n");
+        assert!(lines.contains("the working copy differs"), "{lines}");
+        assert!(lines.contains("nothing was written"), "{lines}");
+        // The preview is a preview: the working copy still holds the change.
+        assert_eq!(
+            std::fs::read_to_string(directory.join("a.txt")).expect("a file"),
+            "changed\n"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn an_identical_working_copy_and_a_missing_one_are_told_apart() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        let same = repository
+            .restore_preview("HEAD", "a.txt")
+            .expect("a preview");
+        assert!(!same.differs && !same.missing);
+        assert!(same.render()[1].contains("identical"));
+
+        std::fs::remove_file(directory.join("a.txt")).expect("a remove");
+        let gone = repository
+            .restore_preview("HEAD", "a.txt")
+            .expect("a preview");
+        assert!(gone.differs && gone.missing);
+        assert!(gone.render()[1].contains("no such file"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_path_absent_from_the_revision_is_refused_rather_than_previewed_empty() {
+        let Some((directory, repository)) = repository() else {
+            return;
+        };
+        assert!(repository.restore_preview("HEAD", "ghost.txt").is_err());
+        assert!(repository.restore_preview("", "a.txt").is_err());
+        assert!(repository.restore_preview("HEAD", "").is_err());
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

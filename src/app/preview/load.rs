@@ -19,10 +19,11 @@
 //!   count it became.
 //! * **A stop that leaves anything behind is residue, not a pass.** [`Load::drive`] records the live
 //!   controls left after the last stop, and [`Load::residual`] reports them.
-//! * **What is not measured is named.** There is no portable resident-memory or thread-count reading
-//!   here, so [`Load::unmeasured`] states that rather than printing a plausible number. The bounded
-//!   proxy is the set of counters a cycle does carry: live mounted controls, engine generations,
-//!   render instances and child process handles.
+//! * **What is not measured is named.** [`sample_process`] reads this process's resident set and
+//!   thread count from the operating system (`ps` on macOS, `/proc/self/status` on Linux), once
+//!   after the first cycle and once after the last, so growth is measured over the cycles that
+//!   follow startup. A platform with no reader says so through [`Load::unmeasured`] instead of
+//!   printing a plausible number.
 //! * **Invalid input is kept, not dropped.** Every rejected operation is recorded with its index and
 //!   its text, and the report counts them, so a load run cannot quietly discard what it could not
 //!   read.
@@ -36,7 +37,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use rust_widgets::core::{ObjectId, Rect};
-use rust_widgets::widget::{Widget, WidgetFactory, runtime};
+use rust_widgets::widget::{Widget, runtime};
 
 use crate::app::preview::preview_service::{Document, Preview};
 
@@ -224,6 +225,87 @@ pub struct Residue {
     pub clean: bool,
 }
 
+/// One reading of this process's resident memory and thread count.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sample {
+    /// Resident set size, in bytes.
+    pub rss_bytes: u64,
+    /// Threads the operating system reports for this process.
+    pub threads: u64,
+}
+
+/// The most the resident set may grow between the first and last measured cycle.
+///
+/// This bounds *growth* across a run, not the process itself: fonts, the runtime and the initial
+/// pages are loaded before the first cycle and are not something a rebuild is supposed to add.
+/// The value is deliberately generous — a coarse RSS reading is evidence of a large leak, not of a
+/// few allocations, and a tight bound would make the check flaky without making it stronger.
+pub const RSS_GROWTH_CEILING_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Reads this process's resident memory and thread count from the operating system.
+///
+/// The reading is the *whole process*, not one subsystem: the driver's counters say whether this
+/// session returned to its starting counts, and this says whether the process's memory and threads
+/// did. Neither substitutes for the other, and both must be reported for T14.08.
+#[cfg(target_os = "macos")]
+pub fn sample_process() -> Result<Sample, String> {
+    fn ps(arguments: &[&str]) -> Result<String, String> {
+        let output = std::process::Command::new("ps")
+            .args(arguments)
+            .output()
+            .map_err(|error| format!("cannot run ps: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("ps exited with {}", output.status));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    let pid = std::process::id().to_string();
+    let rss = ps(&["-o", "rss=", "-p", &pid])?;
+    let rss_kb: u64 = rss
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| format!("ps printed {rss:?} instead of a resident size"))?;
+    // `ps -M` prints one header line followed by one row per thread, so the thread count is the
+    // number of non-empty rows after the header.
+    let threads = ps(&["-M", "-p", &pid])?;
+    let rows = threads
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    Ok(Sample {
+        rss_bytes: rss_kb.saturating_mul(1024),
+        threads: u64::try_from(rows.saturating_sub(1)).unwrap_or(u64::MAX),
+    })
+}
+
+/// Reads this process's resident memory and thread count from `/proc`.
+#[cfg(target_os = "linux")]
+pub fn sample_process() -> Result<Sample, String> {
+    let status = std::fs::read_to_string("/proc/self/status")
+        .map_err(|error| format!("cannot read /proc/self/status: {error}"))?;
+    let field = |name: &str| -> Option<u64> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+    };
+    let rss_kb = field("VmRSS:").ok_or_else(|| "no VmRSS field in /proc/self/status".to_owned())?;
+    let threads = field("Threads:").ok_or_else(|| "no Threads field".to_owned())?;
+    Ok(Sample {
+        rss_bytes: rss_kb.saturating_mul(1024),
+        threads,
+    })
+}
+
+/// This platform has no process sampler, so the run says so instead of inventing numbers.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn sample_process() -> Result<Sample, String> {
+    Err("this platform has no resident-memory/thread reader".to_owned())
+}
+
 /// Many cycles across many viewports, with what the driver could not read.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Load {
@@ -232,6 +314,8 @@ pub struct Load {
     invalid: Vec<(u32, String)>,
     budget_ms: u32,
     operations: u32,
+    baseline: Option<Sample>,
+    after: Option<Sample>,
 }
 
 impl Load {
@@ -351,7 +435,9 @@ impl Load {
         cycles: u32,
         document: &Document,
     ) -> Result<(), String> {
-        let factory = WidgetFactory::new_with_defaults();
+        // The host factory (library defaults plus installed suites), the same table the catalog and
+        // the Inspector read, so the load run exercises what the designer actually mounts.
+        let factory = crate::app::contract::factory();
         let create = |node: &rust_widgets::view::Node| -> Option<ObjectId> {
             let widget: Box<dyn Widget> = factory.create(
                 &node.widget,
@@ -391,7 +477,14 @@ impl Load {
                 u32::try_from(left).unwrap_or(u32::MAX),
                 preview.is_clean(),
             );
+            // The reading after the first cycle is the baseline: it already includes whatever one
+            // mount loads once (font data, first-use runtime tables), so growth is measured over
+            // the cycles that follow rather than over process startup.
+            if step == 0 {
+                self.baseline = sample_process().ok();
+            }
         }
+        self.after = sample_process().ok();
         Ok(())
     }
 
@@ -482,17 +575,56 @@ impl Load {
             .collect()
     }
 
+    /// The process reading taken after the first cycle, when the platform has a reader.
+    pub fn baseline(&self) -> Option<Sample> {
+        self.baseline
+    }
+
+    /// The process reading taken after the last cycle, when the platform has a reader.
+    pub fn after(&self) -> Option<Sample> {
+        self.after
+    }
+
+    /// How much the resident set grew across the measured cycles, in bytes.
+    pub fn rss_growth_bytes(&self) -> Option<i64> {
+        let before = i64::try_from(self.baseline?.rss_bytes).unwrap_or(i64::MAX);
+        let after = i64::try_from(self.after?.rss_bytes).unwrap_or(i64::MAX);
+        Some(after - before)
+    }
+
+    /// How many threads the process gained; negative when it gave one back.
+    pub fn thread_growth(&self) -> Option<i64> {
+        let before = i64::try_from(self.baseline?.threads).unwrap_or(i64::MAX);
+        let after = i64::try_from(self.after?.threads).unwrap_or(i64::MAX);
+        Some(after - before)
+    }
+
+    /// Whether the process's memory and threads stayed within their bounds.
+    ///
+    /// `None` means the platform has no reader, which is reported through [`Self::unmeasured`] and
+    /// must not be turned into a pass. A thread the run never gave back fails the check; the
+    /// resident set may grow up to [`RSS_GROWTH_CEILING_BYTES`] without counting as a leak.
+    pub fn resources_steady(&self) -> Option<bool> {
+        let rss = self.rss_growth_bytes()?;
+        let threads = self.thread_growth()?;
+        let ceiling = i64::try_from(RSS_GROWTH_CEILING_BYTES).unwrap_or(i64::MAX);
+        Some(threads <= 0 && rss <= ceiling)
+    }
+
     /// The facts this run does not measure, stated rather than assumed.
     pub fn unmeasured(&self) -> Vec<&'static str> {
-        vec![
-            "resident memory: no allocator hook is installed, so the bounded proxy is the set of \
-             counters this run carries (live mounted controls, engine generations, render instances, \
-             child process handles)",
-            "thread count: the standard library exposes no portable counter, and the driver starts \
-             no thread of its own",
+        let mut facts = Vec::new();
+        if self.baseline.is_none() || self.after.is_none() {
+            facts.push(
+                "resident memory: no process reading was taken, so no claim is made about it",
+            );
+            facts.push("thread count: no process reading was taken, so no claim is made about it");
+        }
+        facts.push(
             "signal subscriptions: this session holds none; the dispatcher's handles identify \
              records, not connected slots",
-        ]
+        );
+        facts
     }
 
     /// Whether the driver measured any latency at all.
@@ -567,6 +699,14 @@ impl Load {
             return format!(
                 "{over} cycle(s) took longer than the {}-ms budget",
                 self.budget_ms
+            );
+        }
+        if self.resources_steady() == Some(false) {
+            let rss = self.rss_growth_bytes().unwrap_or(0);
+            let threads = self.thread_growth().unwrap_or(0);
+            return format!(
+                "the process grew across the run: {rss} byte(s) of resident memory and {threads} \
+                 thread(s)"
             );
         }
         "the run did not pass".to_owned()
@@ -648,6 +788,18 @@ impl Load {
                 self.budget_ms
             ));
         }
+        match (self.baseline, self.after) {
+            (Some(before), Some(after)) => lines.push(format!(
+                "resources: rss {} -> {} bytes (growth {}); threads {} -> {} (growth {})",
+                before.rss_bytes,
+                after.rss_bytes,
+                self.rss_growth_bytes().unwrap_or(0),
+                before.threads,
+                after.threads,
+                self.thread_growth().unwrap_or(0)
+            )),
+            _ => lines.push("resources: not measured".to_owned()),
+        }
         for (index, text) in &self.invalid {
             lines.push(format!("invalid {index}: {text}"));
         }
@@ -703,6 +855,23 @@ mod tests {
         );
         assert!(load.passed());
 
+        // The process reading is the second half of T14.08: the counters above say the session
+        // returned to its starting counts, and the sample says where the process was. The growth
+        // assertion lives in `tests/preview_load.rs`, because this unit test shares its process with
+        // the rest of the suite, and a thread another test starts would be counted here.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            assert!(load.baseline().is_some(), "a process reading was taken");
+            assert!(load.after().is_some());
+            assert!(
+                !load
+                    .unmeasured()
+                    .iter()
+                    .any(|fact| fact.contains("resident memory")),
+                "memory was measured on this platform"
+            );
+        }
+
         let series = load.series("phone").expect("a series");
         // The counts are the session's, not the caller's: a mount created the root and the node,
         // and each cycle stopped at the same generation.
@@ -721,6 +890,25 @@ mod tests {
             "the driver measured wall time around mount and update"
         );
         assert_eq!(series.peak_controls(), Some(2));
+    }
+
+    #[test]
+    fn a_declared_run_does_not_claim_a_process_reading() {
+        let mut load = Load::new();
+        load.repeat("phone", 10, 12, 40, None);
+        assert_eq!(load.resources_steady(), None);
+        assert!(load.rss_growth_bytes().is_none());
+        assert!(
+            load.unmeasured()
+                .iter()
+                .any(|fact| fact.contains("resident memory")),
+            "an unsampled run must say so"
+        );
+        assert!(
+            load.render()
+                .iter()
+                .any(|line| line == "resources: not measured")
+        );
     }
 
     #[test]

@@ -16,8 +16,8 @@
 //! * **A sample refuses secrets.** [`sample`] answers the offending field names instead of storing
 //!   them, so a credential cannot be captured into the project by a preview run.
 //! * **The values are the project's value vocabulary.** A field holds a
-//!   [`PropertyValue`](crate::contracts::model::PropertyValue), so the data a preview binds is the
-//!   same shape the rest of the designer already speaks.
+//!   [`PropertyValue`], so the data a preview binds is the same shape the rest of the designer
+//!   already speaks.
 
 #![allow(dead_code)]
 

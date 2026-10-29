@@ -22,12 +22,11 @@
 //!   denied permission is [`Status::Denied`] with [`SupervisorError::Denied`]: the caller cannot
 //!   mistake either for a successful call.
 //!
-//! **The process path is a seam, not a claim.** [`Handler`] is the typed boundary a real child
-//! process would implement: the worker thread that calls it enforces the timeout and the restart
-//! budget, but a real process-backed handler (spawn, framed read/write, process-group teardown) is
-//! not implemented here and remains unverified. [`LocalHarness`] is the in-process handler the
-//! `--extension supervise` path and the tests use; it proves the supervision rules, not that a
-//! child process obeys them.
+//! **The process path is implemented as well as the in-process one.** [`Handler`] is the typed
+//! boundary; [`LocalHarness`] proves the supervision rules in-process, and [`ChildHandler`] is the
+//! same boundary over a real child process's stdin/stdout (a [`DuplexProcess`]), started only from an
+//! [`ExecutionPermit`]. The supervisor's timeout, restart budget and teardown are therefore exercised
+//! against a real process too, not only against a closure.
 
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,6 +34,9 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::host::permission::ExecutionPermit;
+use crate::host::subprocess::{DuplexProcess, ProcessSpec};
 
 /// The limits a supervisor enforces.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -314,6 +316,62 @@ impl HandlerFailure {
 pub trait Handler: Send {
     /// Answers one request.
     fn request(&mut self, request: &[u8]) -> Result<Vec<u8>, HandlerFailure>;
+}
+
+/// A [`Handler`] backed by a real child process.
+///
+/// The child exchanges one frame per line over its standard input and output
+/// ([`crate::host::subprocess::DuplexProcess`]), so a request must be one line of UTF-8: a frame
+/// that already contains a newline is refused as [`HandlerFailure::Protocol`] instead of being
+/// truncated into two frames. A closed pipe, a read error or an answer that does not arrive within
+/// `answer_timeout` is [`HandlerFailure::Crashed`], so a dead extension is never reported as an empty
+/// answer. Dropping the handler closes the child's input and reaps the process group.
+///
+/// The process starts only through an [`ExecutionPermit`]: on this path as on every other, a
+/// permission decision precedes the external effect.
+pub struct ChildHandler {
+    process: DuplexProcess,
+    answer_timeout: Duration,
+}
+
+impl ChildHandler {
+    /// Wraps a freshly started child process.
+    ///
+    /// `answer_timeout` should be longer than the supervisor's [`Limits::call_timeout`], so a slow
+    /// answer is reported by the supervisor as [`SupervisorError::Timeout`] first. A read timeout is
+    /// still mapped to [`HandlerFailure::Crashed`] when it does happen, because the handler cannot
+    /// tell a hung child from a dead one.
+    pub fn spawn(
+        spec: ProcessSpec,
+        permit: &ExecutionPermit,
+        answer_timeout: Duration,
+    ) -> Result<Self, HandlerFailure> {
+        DuplexProcess::spawn(spec, permit)
+            .map(|process| Self {
+                process,
+                answer_timeout,
+            })
+            .map_err(|error| HandlerFailure::Crashed {
+                reason: error.message(),
+            })
+    }
+}
+
+impl Handler for ChildHandler {
+    fn request(&mut self, request: &[u8]) -> Result<Vec<u8>, HandlerFailure> {
+        let text = std::str::from_utf8(request).map_err(|error| HandlerFailure::Protocol {
+            reason: format!("the request is not UTF-8: {error}"),
+        })?;
+        if text.contains(['\n', '\r']) {
+            return Err(HandlerFailure::Protocol {
+                reason: "a request frame is one line and may not contain a newline".to_owned(),
+            });
+        }
+        match self.process.request(text, self.answer_timeout) {
+            Ok(answer) => Ok(answer.into_bytes()),
+            Err(reason) => Err(HandlerFailure::Crashed { reason }),
+        }
+    }
 }
 
 /// A supervisor for one extension id.
@@ -1118,5 +1176,83 @@ mod tests {
             "the channel is bounded"
         );
         let _ = release.send(());
+    }
+
+    fn command_permit() -> crate::host::permission::ExecutionPermit {
+        use crate::contracts::permission::{EffectClass, Principal};
+        use crate::host::permission::{PermissionService, Scope};
+        PermissionService::new()
+            .permit(EffectClass::Command, Scope::Session, Principal::Human)
+            .expect("the host's own session may run a command")
+    }
+
+    #[test]
+    fn a_real_child_process_answers_a_line() {
+        let handler = super::ChildHandler::spawn(
+            crate::host::subprocess::ProcessSpec::new("cat", "/bin/cat"),
+            &command_permit(),
+            Duration::from_secs(5),
+        )
+        .expect("a real child process");
+        let mut handler = handler;
+        assert_eq!(
+            handler.request(b"hello").expect("an answer"),
+            b"hello".to_vec()
+        );
+    }
+
+    #[test]
+    fn a_child_that_exits_is_a_crash_not_an_empty_answer() {
+        let mut handler = super::ChildHandler::spawn(
+            crate::host::subprocess::ProcessSpec::new("exit", "/bin/sh")
+                .arg("-c")
+                .arg("exit 0"),
+            &command_permit(),
+            Duration::from_secs(5),
+        )
+        .expect("a real child process");
+        match handler.request(b"hello") {
+            Err(HandlerFailure::Crashed { reason }) => {
+                assert!(!reason.trim().is_empty(), "a crash carries a reason");
+            }
+            other => panic!("expected a crash, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_a_newline_is_refused_before_it_is_written() {
+        let mut handler = super::ChildHandler::spawn(
+            crate::host::subprocess::ProcessSpec::new("cat", "/bin/cat"),
+            &command_permit(),
+            Duration::from_secs(5),
+        )
+        .expect("a real child process");
+        assert!(matches!(
+            handler.request(b"one\ntwo"),
+            Err(HandlerFailure::Protocol { .. })
+        ));
+        // The process is still usable: the bad frame was refused before it reached the pipe.
+        assert_eq!(
+            handler.request(b"three").expect("an answer"),
+            b"three".to_vec()
+        );
+    }
+
+    #[test]
+    fn a_child_is_not_started_without_a_command_permit() {
+        use crate::contracts::permission::{EffectClass, Principal};
+        use crate::host::permission::{PermissionService, Scope};
+        let permit = PermissionService::new()
+            .permit(EffectClass::FileWrite, Scope::Session, Principal::Human)
+            .expect("a human may write a file");
+        let error = match super::ChildHandler::spawn(
+            crate::host::subprocess::ProcessSpec::new("cat", "/bin/cat"),
+            &permit,
+            Duration::from_secs(1),
+        ) {
+            Ok(_) => panic!("a file-write permit must not authorize a command"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, HandlerFailure::Crashed { .. }));
     }
 }

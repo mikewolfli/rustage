@@ -13,9 +13,8 @@
 //!   set the build knows about; a tag the system names that is not in it is [`Language::from_locale`]
 //!   answering `None`, so "unknown" is distinguishable from "known but not bundled".
 //! * **Which languages are bundled is explicit.** [`Language::bundled`] answers whether this build
-//!   carries a pack for one; today only English does, and Simplified Chinese is a known language
-//!   whose pack arrives with T24.03's Chinese resource work. A request for an unbundled language is
-//!   refused where it is made, never silently answered in English.
+//!   carries a pack for one; English and Simplified Chinese do (T24.03). A request for an unbundled
+//!   language is refused where it is made, never silently answered in English.
 //! * **The system's language is read, not assumed.** [`Language::system`] reads the conventional
 //!   locale variables and reports what it recognised, so "follow the system" has a value behind it.
 //! * **Direction is a property of the language, not of the text.** [`Direction`] is here so a
@@ -83,11 +82,12 @@ impl Language {
 
     /// Whether this build carries a language pack for it.
     ///
-    /// Only English is bundled so far; Simplified Chinese is a known language whose pack arrives with
-    /// T24.03's Chinese resource work, and saying so is the point — an unbundled language must not be
-    /// offered as if it were translated.
+    /// Both known languages are bundled: English is derived from the identified vocabulary and
+    /// Simplified Chinese is translated against the same keys (T24.03). A language added to
+    /// [`Self::ALL`] before its pack exists must answer `false` here, so it is refused where it is
+    /// requested instead of being offered as if it were translated.
     pub const fn bundled(self) -> bool {
-        matches!(self, Self::English)
+        matches!(self, Self::English | Self::SimplifiedChinese)
     }
 
     /// The language a tag names, when this build knows it.
@@ -193,9 +193,9 @@ mod tests {
     }
 
     #[test]
-    fn only_english_is_bundled_so_far() {
+    fn both_known_languages_are_bundled() {
         assert!(Language::English.bundled());
-        assert!(!Language::SimplifiedChinese.bundled());
+        assert!(Language::SimplifiedChinese.bundled());
         assert!(DEFAULT.bundled(), "the fallback must always be available");
     }
 

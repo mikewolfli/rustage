@@ -205,6 +205,10 @@ fn walk(entries: &mut Vec<Entry>, prefix: &str, items: &[Item]) {
 /// [`crate::app::locale::catalog::Catalog::for_language`] before it reaches here, so this answers an
 /// empty pack rather than inventing text.
 ///
+/// The English pack is derived from [`entries`] so it cannot omit a string the interface shows. The
+/// Simplified Chinese pack is translated against the same keys, and its completeness (every key, no
+/// extra key) is checked in this module's tests rather than at runtime.
+///
 /// The pack is derived on demand, which is right for the command line and for the reports that are
 /// the vocabulary's only consumers today. A windowed consumer that looks text up per frame would hold
 /// one [`Catalog`] instead of deriving one per lookup — that is T24.06's concern, and it is stated
@@ -212,8 +216,17 @@ fn walk(entries: &mut Vec<Entry>, prefix: &str, items: &[Item]) {
 pub fn pack(language: Language) -> Pack {
     let mut pack = Pack::new(language);
     if language.bundled() {
-        for entry in entries() {
-            pack.insert(entry.key, entry.english);
+        match language {
+            Language::English => {
+                for entry in entries() {
+                    pack.insert(entry.key, entry.english);
+                }
+            }
+            Language::SimplifiedChinese => {
+                for (key, text) in super::zh_hans::MESSAGES {
+                    pack.insert(key, text);
+                }
+            }
         }
     }
     pack
@@ -318,7 +331,7 @@ pub fn coverage() -> Coverage {
 #[cfg(test)]
 mod tests {
     use super::{SHELL, Source, TEMPLATES, coverage, entries, pack};
-    use crate::app::locale::catalog::{Catalog, Pack};
+    use crate::app::locale::catalog::Catalog;
     use crate::host::locale::Language;
 
     #[test]
@@ -398,12 +411,69 @@ mod tests {
     }
 
     #[test]
-    fn an_unbundled_language_gets_no_invented_text() {
-        assert_eq!(
-            pack(Language::SimplifiedChinese),
-            Pack::new(Language::SimplifiedChinese)
-        );
-        assert!(pack(Language::SimplifiedChinese).is_empty());
+    fn the_chinese_pack_translates_every_identified_key() {
+        let catalog = Catalog::from_pack(pack(Language::SimplifiedChinese));
+        for entry in entries() {
+            assert!(
+                catalog.text(&entry.key).is_found(),
+                "{} has no Chinese text",
+                entry.key
+            );
+        }
+        // No extra key: the two tables are the same set, not merely a covering pair.
+        assert_eq!(catalog.pack().len(), entries().len());
+    }
+
+    #[test]
+    fn the_chinese_pack_has_no_key_the_vocabulary_does_not_identify() {
+        let identified: std::collections::BTreeSet<String> =
+            entries().into_iter().map(|entry| entry.key).collect();
+        for (key, _) in crate::app::locale::zh_hans::MESSAGES {
+            assert!(
+                identified.contains(key),
+                "{key} is translated but not identified"
+            );
+        }
+    }
+
+    #[test]
+    fn the_chinese_pack_keeps_every_placeholder_and_is_sorted_by_key() {
+        fn placeholders(text: &str) -> std::collections::BTreeSet<String> {
+            let mut found = std::collections::BTreeSet::new();
+            let mut rest = text;
+            while let Some(start) = rest.find('{') {
+                let after = &rest[start + 1..];
+                let Some(end) = after.find('}') else { break };
+                found.insert(after[..end].to_owned());
+                rest = &after[end + 1..];
+            }
+            found
+        }
+
+        let translated: std::collections::BTreeMap<&str, &str> =
+            crate::app::locale::zh_hans::MESSAGES
+                .iter()
+                .copied()
+                .collect();
+        let mut previous: Option<&str> = None;
+        for (key, text) in crate::app::locale::zh_hans::MESSAGES {
+            if let Some(previous) = previous {
+                assert!(previous < key, "{key} is out of order after {previous}");
+            }
+            previous = Some(key);
+            assert!(!text.trim().is_empty(), "{key} has no text");
+        }
+        for entry in entries() {
+            let text = translated
+                .get(entry.key.as_str())
+                .unwrap_or_else(|| panic!("{} is not translated", entry.key));
+            assert_eq!(
+                placeholders(text),
+                placeholders(&entry.english),
+                "{} changes its placeholders",
+                entry.key
+            );
+        }
     }
 
     #[test]

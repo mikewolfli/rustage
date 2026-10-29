@@ -15,8 +15,8 @@
 //!   an *unknown* system language fall back to [`Language::DEFAULT`] with the request recorded — the
 //!   two are different facts and are reported differently.
 //! * **A pack round-trips through its written form.** [`Pack::encode`] and [`Pack::decode`] are the one
-//!   pair that reads and writes the pack file, so the English pack `--locale-report` produces can be
-//!   read back and checked against what was produced.
+//!   pair that reads and writes the pack file, so every pack `--locale-report` produces (English and
+//!   Simplified Chinese) can be read back and checked against what was produced.
 
 #![allow(dead_code)]
 
@@ -552,18 +552,35 @@ mod tests {
     }
 
     #[test]
-    fn an_unbundled_language_is_refused_not_approximated() {
-        let refusal = Catalog::for_language(Language::SimplifiedChinese).expect_err("a refusal");
-        assert_eq!(refusal.language, Language::SimplifiedChinese);
-        assert!(refusal.message().contains("not included"));
-        assert!(Catalog::for_language(Language::English).is_ok());
+    fn every_bundled_language_has_a_catalog() {
+        for language in Language::ALL {
+            assert!(language.bundled(), "{} is bundled", language.name());
+            let catalog = Catalog::for_language(language).expect("a bundled catalog");
+            assert_eq!(catalog.language(), language);
+            assert!(
+                !catalog.pack().is_empty(),
+                "{} has no text",
+                language.name()
+            );
+        }
     }
 
     #[test]
-    fn an_explicit_request_for_an_unbundled_language_is_refused() {
+    fn an_explicit_request_for_chinese_is_chosen_and_reads_chinese() {
         let selection = select(Some("zh-Hans"));
-        assert!(selection.is_refused());
-        assert!(selection.render().contains("not available"));
+        assert_eq!(
+            selection,
+            Selection::Chosen {
+                language: Language::SimplifiedChinese
+            }
+        );
+        let catalog = Catalog::for_language(Language::SimplifiedChinese).expect("a catalog");
+        assert_eq!(
+            catalog.fill("diag.command.unknown", &[("id", "file.save")]),
+            "没有命令 file.save"
+        );
+        // A menu label the interface shows is translated too, not only the diagnostics.
+        assert_eq!(catalog.text("menu.file.title").render(), "文件");
     }
 
     #[test]
@@ -583,10 +600,15 @@ mod tests {
     }
 
     #[test]
-    fn a_system_language_that_is_not_bundled_falls_back_with_the_request_recorded() {
-        // Whatever the machine is set to, selecting with no explicit request must never be a refusal.
+    fn following_the_system_never_refuses_and_answers_a_bundled_language() {
+        // Whatever the machine is set to, selecting with no explicit request must never be a refusal,
+        // and the language it lands on must be one this build can actually speak.
         let selection = select(None);
         assert!(!selection.is_refused());
-        assert_eq!(selection.language(), Language::English);
+        assert!(
+            selection.language().bundled(),
+            "{} has no pack",
+            selection.language().name()
+        );
     }
 }

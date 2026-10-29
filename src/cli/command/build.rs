@@ -75,8 +75,13 @@ impl RunOptions {
 #[derive(Debug, PartialEq, Eq)]
 pub struct TasksOptions {
     /// The operations: `task:<name>:<command>` (repeatable), `after:<name>:<dependency>` (repeatable),
-    /// `input:<name>:<path>` (repeatable), `fingerprint:<path>:<value>`, `output:<name>:<path>`,
-    /// `default:<name>`, `order`, `key:<name>`, `cleanup:<name>`, `show`.
+    /// `pre:<name>:<task>`, `post:<name>:<task>`, `input:<name>:<path>` (repeatable),
+    /// `fingerprint:<path>:<value>`, `output:<name>:<path>`, `root:<path>`, `default:<name>`,
+    /// `order`, `schedule`, `key:<name>`, `cleanup:<name>`, `clean-preview:<name>`, `clean:<name>`,
+    /// `show`.
+    ///
+    /// `schedule` prints the waves that may run at once; `clean` deletes only what `clean-preview`
+    /// showed in the same invocation (T16.05).
     pub ops: Vec<String>,
 }
 
@@ -123,7 +128,13 @@ impl ExternalOptions {
 #[derive(Debug, PartialEq, Eq)]
 pub struct E2eOptions {
     /// The operations: `generate:<ok|fail>:<note>`, `check:<ok|fail>:<note>`, `build:<ok|fail>:<note>`,
-    /// `run:<ok|fail>:<note>`, `feedback:<ok|fail>:<note>`, `skip`, `show`.
+    /// `run:<ok|fail>:<note>`, `feedback:<ok|fail>:<note>`, `walk:<directory>:<program>`, `skip`,
+    /// `show`.
+    ///
+    /// `walk` performs the walk for real against a cargo project: `cargo check`, `cargo build`, then
+    /// the built binary; a failing check records the compiler's own first error line as the feedback.
+    /// Generation is not part of it (the generator has its own tests), and a walk with `skip` is not
+    /// a success — a stage that did not run is not a stage that passed (T16.08).
     pub ops: Vec<String>,
 }
 
@@ -140,7 +151,10 @@ pub struct DagOptions {
     /// The operations: `node:<name>`, `after:<name>:<dependency>`, `together:<name>:<dependency>`,
     /// `background:<name>:<marker>`, `terminal:<name>:<terminal>`, `default:<name>`,
     /// `pattern:<owner>:<pattern>:<file-group>:<line-group>:<message-group>`, `match:<line>`, `waves`,
-    /// `ready:<name>:<text>`, `show`.
+    /// `target:<name>`, `revision:<n>`, `ready:<name>:<text>`, `show`.
+    ///
+    /// A matched line keeps the tool that read it and is recorded in the problem centre as a build
+    /// problem for the current target and revision (T16.09).
     pub ops: Vec<String>,
 }
 

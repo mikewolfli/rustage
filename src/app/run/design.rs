@@ -17,10 +17,11 @@ use super::*;
 /// entry this task removes.
 pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
     use crate::app::canvas::widget_catalog::Catalog;
-    use rust_widgets::widget::WidgetFactory;
 
     let profile = contract_profile(&options.ops);
-    let mut catalog = match Catalog::from_contract(WidgetFactory::shared(), &profile) {
+    // The host factory (library defaults plus installed suites), not `WidgetFactory::shared()`:
+    // the shared table is immutable and does not own the form suite's names.
+    let mut catalog = match Catalog::from_host_contract(&profile) {
         Ok(catalog) => catalog,
         Err(refusal) => return report(refusal.message()),
     };
@@ -187,30 +188,6 @@ fn contract_profile(ops: &[String]) -> String {
         .filter(|profile| !profile.is_empty())
         .unwrap_or_else(|| rust_widgets::widget::capability::TargetSpec::current().profile)
         .to_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::contract_profile;
-
-    #[test]
-    fn the_catalog_profile_defaults_to_the_library_build_and_can_be_named() {
-        // With no instruction, the only conclusive profile is the one the library was built for.
-        assert_eq!(
-            contract_profile(&[]),
-            rust_widgets::widget::capability::TargetSpec::current().profile
-        );
-        // A named profile is the target, and an empty name is not a profile.
-        assert_eq!(contract_profile(&["profile:mini".to_owned()]), "mini");
-        assert_eq!(
-            contract_profile(&["show".to_owned(), "profile:mobile".to_owned()]),
-            "mobile"
-        );
-        assert_eq!(
-            contract_profile(&["profile:".to_owned()]),
-            rust_widgets::widget::capability::TargetSpec::current().profile
-        );
-    }
 }
 
 /// Drives the design scene: instances, hit tests and selection (task T09.02).
@@ -1322,4 +1299,28 @@ pub(super) fn parse_pair(argument: &str) -> Result<(usize, usize), String> {
             .map_err(|_| format!("{value:?} is not a whole number"))
     };
     Ok((number(first)?, number(second)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contract_profile;
+
+    #[test]
+    fn the_catalog_profile_defaults_to_the_library_build_and_can_be_named() {
+        // With no instruction, the only conclusive profile is the one the library was built for.
+        assert_eq!(
+            contract_profile(&[]),
+            rust_widgets::widget::capability::TargetSpec::current().profile
+        );
+        // A named profile is the target, and an empty name is not a profile.
+        assert_eq!(contract_profile(&["profile:mini".to_owned()]), "mini");
+        assert_eq!(
+            contract_profile(&["show".to_owned(), "profile:mobile".to_owned()]),
+            "mobile"
+        );
+        assert_eq!(
+            contract_profile(&["profile:".to_owned()]),
+            rust_widgets::widget::capability::TargetSpec::current().profile
+        );
+    }
 }

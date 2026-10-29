@@ -37,12 +37,12 @@ pub use command::{
     SchemaOptions, SearchHealthOptions, SearchOptions, SessionLogOptions, SettingsOptions,
     SnippetOptions, StateKeepOptions, StatesOptions, StructuralOptions, StructureOptions,
     StyleBoundaryOptions, StyleOptions, TableOptions, TabsOptions, TargetCapabilityOptions,
-    TargetCertificationOptions, TargetConfigOptions, TargetLocalOptions, TargetMatrixOptions,
-    TargetMobileOptions, TargetQueueOptions, TargetRestrictedOptions, TasksOptions,
-    TerminalOptions, TextOptions, TokensOptions, ToolchainOptions, TreeOptions, ValidateOptions,
-    VariantsOptions, VcsOptions, ViewOptions, ViewportOptions, VisualOptions, WindowsOptions,
-    WorkbenchOptions, WorkspaceAction, WorkspaceEditOptions, WorkspaceOptions, WriteGuardOptions,
-    help_text, log_level_of, parse, parse_display, ui_language_of,
+    TargetCertificationOptions, TargetConfigOptions, TargetI18nOptions, TargetLocalOptions,
+    TargetMatrixOptions, TargetMobileOptions, TargetQueueOptions, TargetRestrictedOptions,
+    TasksOptions, TerminalOptions, TextOptions, TokensOptions, ToolchainOptions, TreeOptions,
+    ValidateOptions, VariantsOptions, VcsOptions, ViewOptions, ViewportOptions, VisualOptions,
+    WindowsOptions, WorkbenchOptions, WorkspaceAction, WorkspaceEditOptions, WorkspaceOptions,
+    WriteGuardOptions, help_text, log_level_of, parse, parse_display, ui_language_of,
 };
 
 /// The process exit codes, defined once in the host and re-exported so a command-line caller and a

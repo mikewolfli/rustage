@@ -142,6 +142,8 @@ impl Dag {
 /// One problem a matcher found in output.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Problem {
+    /// The tool whose matcher read the line.
+    pub owner: String,
     /// The file the problem is in.
     pub file: String,
     /// The line, one-based.
@@ -151,9 +153,15 @@ pub struct Problem {
 }
 
 impl Problem {
-    /// The problem in one line.
+    /// The problem in one line, naming the tool that read it.
+    ///
+    /// The owner is part of the line because a log holds several tools' output: a problem with no
+    /// source is a problem nobody can act on (T16.09).
     pub fn render(&self) -> String {
-        format!("{}:{}: {}", self.file, self.line, self.message)
+        format!(
+            "{} {}:{}: {}",
+            self.owner, self.file, self.line, self.message
+        )
     }
 }
 
@@ -300,6 +308,7 @@ pub fn match_line(matcher: &Matcher, line: &str) -> Option<Problem> {
     let line_number: u32 = groups.get(matcher.line_group)?.parse().ok()?;
     let message = groups.get(matcher.message_group)?.clone();
     Some(Problem {
+        owner: matcher.owner.clone(),
         file,
         line: line_number,
         message,
@@ -403,7 +412,9 @@ mod tests {
         assert_eq!(problem.file, "src/main.rs");
         assert_eq!(problem.line, 12);
         assert_eq!(problem.message, "mismatched types");
-        assert_eq!(problem.render(), "src/main.rs:12: mismatched types");
+        // The tool that read the line is part of the finding, not lost with the matcher.
+        assert_eq!(problem.owner, "cargo");
+        assert_eq!(problem.render(), "cargo src/main.rs:12: mismatched types");
         // A line that is not a problem does not become one.
         assert!(match_line(&m, "Compiling demo").is_none());
     }

@@ -60,7 +60,6 @@
 #![allow(dead_code)]
 
 use rust_widgets::signal::ConnectionHandle;
-use rust_widgets::widget::WidgetFactory;
 use rust_widgets::widget::capability::{
     DesignerManifest, EventPayloadShape, EventSchema, PropertyValueKind, shape_token,
     value_kind_token,
@@ -271,7 +270,8 @@ impl Registry {
     /// library's answer, not an empty registry: an empty registry would read as "this control
     /// publishes no events".
     pub fn from_control(control: &str) -> Result<Self, String> {
-        let factory = WidgetFactory::shared();
+        // The host factory: suite controls are installed into it, and `shared()` cannot own them.
+        let factory = crate::app::contract::factory();
         let capability = factory
             .capability(control)
             .ok_or_else(|| format!("the library registers no control {control:?}"))?;

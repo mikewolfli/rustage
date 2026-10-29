@@ -12,4 +12,5 @@ pub mod protocol;
 pub mod schema_docs;
 pub mod service_health;
 pub mod session;
+pub mod target;
 pub mod workspace_edit;

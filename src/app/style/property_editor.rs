@@ -28,6 +28,7 @@
 
 use std::collections::BTreeMap;
 
+use rust_widgets::widget::WidgetFactory;
 use rust_widgets::widget::capability::designer_manifest::DesignerConstraint;
 use rust_widgets::widget::capability::{
     CapabilityValue, Constraint as ContractConstraint, DesignerManifest,
@@ -478,6 +479,49 @@ pub fn contract_value(kind: PropertyValueKind, value: &CapabilityValue) -> Optio
     }
 }
 
+/// Reads one property's schema, tokens, bounds and measured default from a widget factory.
+///
+/// The factory is a parameter rather than a reach for [`WidgetFactory::shared`]: the shared table
+/// is the parent crate's and does not carry controls installed by a package, so a suite control
+/// (`form`, `form_set`) would look like a property nobody declared. The host's own factory is
+/// [`crate::app::contract::factory`].
+///
+/// A factory that does not describe `control.property` is an error, and so is a declared kind this
+/// editor has no field for. Both are reported with the contract's own words so the panel can show
+/// the property as unavailable instead of inventing a field that would accept values the control
+/// refuses.
+pub fn resolve_contract(
+    factory: &WidgetFactory,
+    control: &str,
+    property: &str,
+) -> Result<Schema, String> {
+    let name = PropertyName::new(property).ok_or_else(|| {
+        format!("{control}: the property name {property:?} is not a property name")
+    })?;
+    let contract = factory
+        .property_schema(control, name.as_str())
+        .map_err(|error| format!("the contract has no such property ({error:?})"))?;
+    let kind = contract.value_kind;
+    let mut schema =
+        Schema::from_property_schema(control, &contract).map_err(|error| error.message())?;
+    let canonical = schema.entries().next().map(|(name, _)| name.clone());
+    if let Ok(default) = factory.default_property_value(control, name.as_str())
+        && let Some(value) = contract_value(kind, &default)
+        && let Some(name) = canonical
+    {
+        schema = schema.with_default(name, value);
+    }
+    Ok(schema)
+}
+
+/// [`resolve_contract`] over the host's own factory.
+///
+/// This is the property panel's entry point: the factory includes the installed suites, so a
+/// Form/FormSet property resolves here while it would not resolve through `WidgetFactory::shared`.
+pub fn resolve_host_contract(control: &str, property: &str) -> Result<Schema, String> {
+    resolve_contract(crate::app::contract::factory(), control, property)
+}
+
 /// How a value reads in a single-line field.
 pub fn render_value(value: &PropertyValue) -> String {
     match value {
@@ -630,9 +674,10 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Editor, PropertyType, Schema};
+    use super::{Editor, PropertyType, Schema, resolve_contract, resolve_host_contract};
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::{PropertyName, PropertyValue};
+    use rust_widgets::widget::WidgetFactory;
     use rust_widgets::widget::capability::{
         CapabilityValue, Constraint, DesignerManifest, DesignerProperty,
         PropertySchema as ContractPropertySchema, PropertyValueKind, RangeSpec,
@@ -996,5 +1041,88 @@ mod tests {
             },
         ));
         assert_eq!(editor.value(node(1), &text), None);
+    }
+
+    #[test]
+    fn a_form_property_schema_is_available_from_the_host_factory() {
+        let schema = resolve_host_contract("form", "title").expect("form.title is declared");
+        assert_eq!(
+            schema.kind_of(&name("title")),
+            Some(&PropertyType::Text {
+                max_len: usize::MAX,
+            })
+        );
+        // The suite's declared default is the measured one, not a guess.
+        assert_eq!(
+            schema.default_of(&name("title")),
+            Some(&PropertyValue::Text(String::new()))
+        );
+
+        // An enum's tokens come from the contract.
+        let position = resolve_host_contract("form", "label_position").expect("declared");
+        assert_eq!(
+            position.kind_of(&name("label_position")),
+            Some(&PropertyType::Enum {
+                variants: vec!["left".to_owned(), "top".to_owned()],
+            })
+        );
+
+        // An alias names the same control and resolves to the same schema.
+        let aliased = resolve_contract(crate::app::contract::factory(), "form_panel", "title")
+            .expect("the alias resolves");
+        assert_eq!(
+            aliased.kind_of(&name("title")),
+            schema.kind_of(&name("title"))
+        );
+    }
+
+    #[test]
+    fn a_form_set_property_schema_is_available_from_the_host_factory() {
+        let schema =
+            resolve_host_contract("form_set", "current_index").expect("form_set.current_index");
+        assert_eq!(
+            schema.kind_of(&name("current_index")),
+            Some(&PropertyType::Integer {
+                min: Some(0),
+                max: None,
+            })
+        );
+        assert_eq!(
+            schema.default_of(&name("current_index")),
+            Some(&PropertyValue::Integer(0))
+        );
+
+        let aliased = resolve_contract(crate::app::contract::factory(), "formset", "current_index")
+            .expect("the alias resolves");
+        assert_eq!(
+            aliased.kind_of(&name("current_index")),
+            schema.kind_of(&name("current_index"))
+        );
+    }
+
+    #[test]
+    fn a_property_the_contract_does_not_declare_is_unavailable_rather_than_guessed() {
+        let reason = resolve_host_contract("form", "not_a_property").expect_err("not declared");
+        assert!(reason.contains("no such property"), "{reason}");
+        assert!(reason.contains("UnknownProperty"), "{reason}");
+
+        // A declared property this editor has no field for is also unavailable, and the reason
+        // names the kind rather than silently choosing a different value family.
+        let reason = resolve_host_contract("form", "show_title").expect_err("a bool has no field");
+        assert!(reason.contains("bool"), "{reason}");
+        assert!(reason.contains("no editor schema"), "{reason}");
+
+        // A control the factory does not know is reported as such, not answered with a guess.
+        let reason = resolve_host_contract("not_a_widget", "title").expect_err("not declared");
+        assert!(reason.contains("UnknownWidget"), "{reason}");
+    }
+
+    #[test]
+    fn the_parent_shared_factory_does_not_own_the_suite_names() {
+        // This is the reason the host factory exists: `shared()` is the parent crate's immutable
+        // table, built before a host installs anything. If upstream ever starts owning these
+        // names, this fails loudly rather than leaving the rationale as folklore.
+        assert!(WidgetFactory::shared().capability("form").is_none());
+        assert!(WidgetFactory::shared().capability("form_set").is_none());
     }
 }

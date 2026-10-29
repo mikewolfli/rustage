@@ -1,0 +1,4 @@
+{"format":1,"page":{"id":1,"name":"Main","root":1},"nodes":[
+  {"id":1,"type":"window","children":[2],"properties":[]},
+  {"id":2,"type":"label","children":[],"properties":[{"name":"text","value":{"text":"Theirs page"}}]}
+]}

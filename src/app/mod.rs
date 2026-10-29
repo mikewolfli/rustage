@@ -32,6 +32,9 @@ pub mod canvas;
 pub mod collection;
 pub mod commands;
 pub mod component;
+// The host's own widget factory, which is the pinned library plus the installed suites. It is a
+// boundary module: every domain reads this table rather than rebuilding or mutating one.
+pub mod contract;
 pub mod data;
 pub mod debug;
 pub mod editor;

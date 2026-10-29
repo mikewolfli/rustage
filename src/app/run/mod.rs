@@ -63,6 +63,7 @@ mod search;
 mod settings;
 mod style;
 mod target;
+mod target_i18n;
 mod vcs;
 mod workbench;
 mod workbench_debug;
@@ -1199,6 +1200,12 @@ pub fn run(command: Command) {
         }
         Command::Release(options) => {
             if !release::release(&options) {
+                crate::host::log::flush();
+                std::process::exit(crate::host::error::ExitCode::Reported.code());
+            }
+        }
+        Command::TargetI18n(options) => {
+            if !target_i18n::target_i18n(&options) {
                 crate::host::log::flush();
                 std::process::exit(crate::host::error::ExitCode::Reported.code());
             }

@@ -14,6 +14,10 @@
 //! commit), not merely checked for being non-empty. A support-matrix cell the matrix itself marks
 //! unsupported or unverified stays blocked; it can never move into the verified list.
 
+// The update state machine and migration model are complete and tested here; the CLI wiring for
+// confirmation, interruption and recovery is a separate change.
+#![allow(dead_code)]
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -754,16 +758,131 @@ impl Sbom {
 }
 
 /// An update's state.
+///
+/// The legal transitions are:
+///
+/// ```text
+/// Planned --verify--> Verified --confirm--> Confirmed --begin_install--> Installing
+/// Installing --complete_install--> Installed --rollback--> RolledBack
+/// Installing --interrupt--> Interrupted --resume--> Installing
+/// Interrupted --recover--> RolledBack
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UpdateState {
     /// Nothing has been done.
     Planned,
     /// The artifact was verified.
     Verified,
+    /// The user confirmed the verified update, including any format migration.
+    Confirmed,
+    /// The backup was taken and the new files are being written.
+    Installing,
+    /// The process died after the backup but before the write finished.
+    Interrupted,
     /// The backup was made and the new files installed.
     Installed,
     /// The installation was rolled back.
     RolledBack,
+}
+
+impl UpdateState {
+    /// The state's name as it is written to the update journal.
+    pub fn name(self) -> &'static str {
+        match self {
+            UpdateState::Planned => "planned",
+            UpdateState::Verified => "verified",
+            UpdateState::Confirmed => "confirmed",
+            UpdateState::Installing => "installing",
+            UpdateState::Interrupted => "interrupted",
+            UpdateState::Installed => "installed",
+            UpdateState::RolledBack => "rolled-back",
+        }
+    }
+
+    /// The state [`UpdateState::name`] writes, or `None` for anything else.
+    pub fn parse(text: &str) -> Option<Self> {
+        let state = match text {
+            "planned" => UpdateState::Planned,
+            "verified" => UpdateState::Verified,
+            "confirmed" => UpdateState::Confirmed,
+            "installing" => UpdateState::Installing,
+            "interrupted" => UpdateState::Interrupted,
+            "installed" => UpdateState::Installed,
+            "rolled-back" => UpdateState::RolledBack,
+            _ => return None,
+        };
+        Some(state)
+    }
+}
+
+/// A declared format migration for the user's projects.
+///
+/// A migration is never applied silently: it names every step, and the update cannot be confirmed
+/// until the migration has been acknowledged explicitly.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Migration {
+    /// The format version migrated from.
+    pub from: u32,
+    /// The format version migrated to.
+    pub to: u32,
+    /// The steps, in order; empty steps are dropped.
+    pub steps: Vec<String>,
+    /// Whether the user acknowledged the migration.
+    pub acknowledged: bool,
+}
+
+impl Migration {
+    /// Plans a migration; an identity migration or one without steps is refused.
+    pub fn plan(from: u32, to: u32, steps: Vec<String>) -> Result<Self, String> {
+        if from == to {
+            return Err(format!(
+                "no migration is needed from format {from} to itself"
+            ));
+        }
+        let steps: Vec<String> = steps
+            .into_iter()
+            .map(|step| step.trim().to_owned())
+            .filter(|step| !step.is_empty())
+            .collect();
+        if steps.is_empty() {
+            return Err(format!(
+                "a format migration needs at least one step; user projects are never migrated \
+                 silently ({from} -> {to})"
+            ));
+        }
+        Ok(Self {
+            from,
+            to,
+            steps,
+            acknowledged: false,
+        })
+    }
+
+    /// Records the user's acknowledgement.
+    pub fn acknowledge(&mut self) {
+        self.acknowledged = true;
+    }
+
+    /// The migration in one line.
+    pub fn render(&self) -> String {
+        let plural = if self.steps.len() == 1 {
+            "step"
+        } else {
+            "steps"
+        };
+        let acknowledgement = if self.acknowledged {
+            "acknowledged"
+        } else {
+            "not acknowledged"
+        };
+        format!(
+            "format migration {} -> {} ({} {plural}, {acknowledgement}): {}",
+            self.from,
+            self.to,
+            self.steps.len(),
+            self.steps.join("; ")
+        )
+    }
 }
 
 /// An update plan for one artifact.
@@ -777,6 +896,10 @@ pub struct Update {
     pub artifact: Artifact,
     /// The state.
     pub state: UpdateState,
+    /// The backup made before the new files are written, once one exists.
+    backup: Option<String>,
+    /// The declared format migration, if any.
+    migration: Option<Migration>,
 }
 
 impl Update {
@@ -805,7 +928,20 @@ impl Update {
             to,
             artifact,
             state: UpdateState::Planned,
+            backup: None,
+            migration: None,
         })
+    }
+
+    /// Refuses an action the current state does not allow.
+    fn expect_state(&self, expected: UpdateState, action: &str) -> Result<(), String> {
+        if self.state == expected {
+            return Ok(());
+        }
+        Err(format!(
+            "cannot {action}: the update is {:?}, expected {:?}",
+            self.state, expected
+        ))
     }
 
     /// Verifies the downloaded bytes; a failure leaves the state planned.
@@ -815,13 +951,115 @@ impl Update {
         Ok(())
     }
 
-    /// Installs after verification, making a backup name first.
-    pub fn install(&mut self) -> Result<String, String> {
-        if self.state != UpdateState::Verified {
-            return Err("the update was not verified".to_owned());
+    /// Declares the format migration this update applies to the user's projects.
+    ///
+    /// A migration can only be declared before confirmation, so it cannot be slipped in after the
+    /// user agreed to the update.
+    pub fn set_migration(&mut self, migration: Migration) -> Result<(), String> {
+        match self.state {
+            UpdateState::Planned | UpdateState::Verified => {}
+            _ => {
+                return Err(format!(
+                    "cannot declare a format migration after the update was confirmed (state: \
+                     {:?})",
+                    self.state
+                ));
+            }
         }
+        self.migration = Some(migration);
+        Ok(())
+    }
+
+    /// Acknowledges the declared migration on the user's behalf.
+    ///
+    /// This is only possible before confirmation; once the update is confirmed the migration is
+    /// frozen along with the rest of the plan.
+    pub fn acknowledge_migration(&mut self) -> Result<(), String> {
+        match self.state {
+            UpdateState::Planned | UpdateState::Verified => {}
+            _ => {
+                return Err(format!(
+                    "cannot acknowledge a format migration after the update was confirmed (state: \
+                     {:?})",
+                    self.state
+                ));
+            }
+        }
+        let migration = self
+            .migration
+            .as_mut()
+            .ok_or_else(|| "there is no format migration to acknowledge".to_owned())?;
+        migration.acknowledge();
+        Ok(())
+    }
+
+    /// The declared format migration, if any.
+    pub fn migration(&self) -> Option<&Migration> {
+        self.migration.as_ref()
+    }
+
+    /// Confirms a verified update; an unacknowledged format migration is refused.
+    pub fn confirm(&mut self) -> Result<(), String> {
+        self.expect_state(UpdateState::Verified, "confirm the update")?;
+        if let Some(migration) = self.migration.as_ref().filter(|m| !m.acknowledged) {
+            return Err(format!(
+                "cannot confirm the update: the format migration {} -> {} ({} steps) has not \
+                 been acknowledged; user projects are never migrated silently",
+                migration.from,
+                migration.to,
+                migration.steps.len()
+            ));
+        }
+        self.state = UpdateState::Confirmed;
+        Ok(())
+    }
+
+    /// Starts the install: records the backup name and enters the writing state.
+    pub fn begin_install(&mut self) -> Result<String, String> {
+        self.expect_state(UpdateState::Confirmed, "begin the install")?;
+        let backup = format!("rustage-{}.bak", self.from);
+        self.backup = Some(backup.clone());
+        self.state = UpdateState::Installing;
+        Ok(backup)
+    }
+
+    /// Finishes the install started by [`Self::begin_install`].
+    pub fn complete_install(&mut self) -> Result<(), String> {
+        self.expect_state(UpdateState::Installing, "complete the install")?;
         self.state = UpdateState::Installed;
-        Ok(format!("backup rustage-{}.bak", self.from))
+        Ok(())
+    }
+
+    /// Models a process death after the backup but before the write finished.
+    pub fn interrupt(&mut self) -> Result<(), String> {
+        self.expect_state(UpdateState::Installing, "interrupt the install")?;
+        self.state = UpdateState::Interrupted;
+        Ok(())
+    }
+
+    /// Retries the write of an interrupted install using the same backup.
+    pub fn resume(&mut self) -> Result<(), String> {
+        self.expect_state(UpdateState::Interrupted, "resume the install")?;
+        self.state = UpdateState::Installing;
+        Ok(())
+    }
+
+    /// Restores the recorded backup after an interrupted install.
+    pub fn recover(&mut self) -> Result<(), String> {
+        self.expect_state(UpdateState::Interrupted, "recover the interrupted update")?;
+        if self.backup.is_none() {
+            return Err("cannot recover the interrupted update: no backup was recorded".to_owned());
+        }
+        self.state = UpdateState::RolledBack;
+        Ok(())
+    }
+
+    /// Installs a confirmed update in one call, returning the backup name.
+    pub fn install(&mut self) -> Result<String, String> {
+        self.expect_state(UpdateState::Confirmed, "install the update")?;
+        let backup = self.begin_install()?;
+        self.complete_install()?;
+        Ok(backup)
     }
 
     /// Rolls back an installed update.
@@ -833,16 +1071,26 @@ impl Update {
         Ok(())
     }
 
-    /// The update in one line.
+    /// The backup recorded for this update, once one exists.
+    pub fn backup(&self) -> Option<&str> {
+        self.backup.as_deref()
+    }
+
+    /// The update in one line, plus the migration line when one is declared.
     pub fn render(&self) -> String {
-        format!(
+        let mut line = format!(
             "{} -> {} ({}, {}, {:?})",
             self.from,
             self.to,
             self.artifact.name,
             self.artifact.signature.name(),
             self.state
-        )
+        );
+        if let Some(migration) = &self.migration {
+            line.push('\n');
+            line.push_str(&migration.render());
+        }
+        line
     }
 }
 
@@ -911,7 +1159,7 @@ impl Maintenance {
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, Channel, Component, Freeze, Maintenance, Repository, Sbom, Signature,
+        Artifact, Channel, Component, Freeze, Maintenance, Migration, Repository, Sbom, Signature,
         SupportCell, Update, UpdateState, locked_packages, manifest_version, source_revision,
     };
     use std::collections::{BTreeMap, BTreeSet};
@@ -926,13 +1174,13 @@ mod tests {
             package_version: env!("CARGO_PKG_VERSION").to_owned(),
             document_format: FormatVersion::CURRENT.get(),
             protocol_version: crate::app::logic::ipc::Protocol::VERSION,
-            widget_version: "3.0.0".to_owned(),
-            widget_revision: "177716410bc714cb0b1131d0c8f7065076f10583".to_owned(),
+            widget_version: "3.1.0".to_owned(),
+            widget_revision: "d44ca0e9003365282815f586bdbf152dcebf749a".to_owned(),
             packages: BTreeMap::from([
-                ("rust_widgets".to_owned(), "3.0.0".to_owned()),
+                ("rust_widgets".to_owned(), "3.1.0".to_owned()),
                 ("sha2".to_owned(), "0.10.9".to_owned()),
             ]),
-            support_matrix_revision: "177716410bc714cb0b1131d0c8f7065076f10583".to_owned(),
+            support_matrix_revision: "d44ca0e9003365282815f586bdbf152dcebf749a".to_owned(),
             support_matrix_digest: "matrix-digest".to_owned(),
             cells: vec![
                 SupportCell {
@@ -945,7 +1193,7 @@ mod tests {
                     host: "linux".to_owned(),
                     profile: "desktop".to_owned(),
                     status: "unverified".to_owned(),
-                    reason: "3.0.0 has not been rebuilt on Linux".to_owned(),
+                    reason: "3.1.0 has not been rebuilt on Linux".to_owned(),
                 },
             ],
         }
@@ -961,12 +1209,12 @@ mod tests {
             generator.major, generator.minor, generator.patch
         );
         freeze.formats = vec!["zip".to_owned()];
-        freeze.widget_revision = "177716410bc714cb0b1131d0c8f7065076f10583".to_owned();
-        freeze.support_matrix = "177716410bc714cb0b1131d0c8f7065076f10583".to_owned();
+        freeze.widget_revision = "d44ca0e9003365282815f586bdbf152dcebf749a".to_owned();
+        freeze.support_matrix = "d44ca0e9003365282815f586bdbf152dcebf749a".to_owned();
         freeze.support_matrix_digest = "matrix-digest".to_owned();
         freeze
             .components
-            .insert("rust_widgets".to_owned(), "3.0.0".to_owned());
+            .insert("rust_widgets".to_owned(), "3.1.0".to_owned());
         freeze
             .components
             .insert("sha2".to_owned(), "0.10.9".to_owned());
@@ -988,6 +1236,25 @@ mod tests {
             signature: Signature::Verified,
             licenses: vec!["MIT".to_owned()],
         }
+    }
+
+    /// The bytes every planned update in these tests is verified against.
+    const UPDATE_BYTES: &[u8] = b"new release";
+
+    fn planned_update() -> Update {
+        Update::plan("1.0.0", "1.0.1", artifact(UPDATE_BYTES)).expect("a plan")
+    }
+
+    fn verified_update() -> Update {
+        let mut update = planned_update();
+        update.verify(UPDATE_BYTES).expect("a verify");
+        update
+    }
+
+    fn confirmed_update() -> Update {
+        let mut update = verified_update();
+        update.confirm().expect("a confirm");
+        update
     }
 
     #[test]
@@ -1154,9 +1421,9 @@ mod tests {
             "0.1.0"
         );
 
-        let lock = "[[package]]\nname = \"rust_widgets\"\nversion = \"3.0.0\"\nsource = \"git+https://github.com/mikewolfli/rust-widgets?rev=abc#def\"\n\n[[package]]\nname = \"sha2\"\nversion = \"0.10.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        let lock = "[[package]]\nname = \"rust_widgets\"\nversion = \"3.1.0\"\nsource = \"git+https://github.com/mikewolfli/rust-widgets?rev=abc#def\"\n\n[[package]]\nname = \"sha2\"\nversion = \"0.10.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
         let packages = locked_packages(lock).expect("locked packages");
-        assert_eq!(packages["rust_widgets"].version, "3.0.0");
+        assert_eq!(packages["rust_widgets"].version, "3.1.0");
         let source = packages["rust_widgets"]
             .source
             .as_deref()
@@ -1182,7 +1449,7 @@ mod tests {
         let mut sbom = Sbom::new();
         let component = Component {
             name: "rust-widgets".to_owned(),
-            version: "3.0.0".to_owned(),
+            version: "3.1.0".to_owned(),
             license: "MIT".to_owned(),
             source: "git".to_owned(),
             digest: None,
@@ -1197,12 +1464,13 @@ mod tests {
 
     #[test]
     fn an_update_verifies_before_installing_and_can_roll_back() {
-        let bytes = b"new release";
+        let bytes = UPDATE_BYTES;
         let artifact = artifact(bytes);
         let mut update = Update::plan("1.0.0", "1.0.1", artifact).expect("a plan");
         assert!(update.install().is_err());
         update.verify(bytes).expect("a verify");
         assert_eq!(update.state, UpdateState::Verified);
+        update.confirm().expect("a confirm");
         assert!(update.install().is_ok());
         update.rollback().expect("a rollback");
         assert_eq!(update.state, UpdateState::RolledBack);
@@ -1231,5 +1499,187 @@ mod tests {
             limits: BTreeSet::new(),
         };
         maintenance.validate().expect("a branch");
+    }
+
+    #[test]
+    fn a_failed_verification_leaves_the_update_planned() {
+        let mut update = planned_update();
+        assert!(update.verify(b"other bytes").is_err());
+        assert_eq!(update.state, UpdateState::Planned);
+        assert!(update.confirm().is_err());
+        assert!(update.install().is_err());
+        assert_eq!(update.state, UpdateState::Planned);
+    }
+
+    #[test]
+    fn every_early_transition_is_refused() {
+        let mut update = planned_update();
+        assert!(update.confirm().is_err());
+        assert!(update.begin_install().is_err());
+        assert!(update.complete_install().is_err());
+        assert!(update.interrupt().is_err());
+        assert!(update.resume().is_err());
+        assert!(update.recover().is_err());
+        assert!(update.rollback().is_err());
+        assert_eq!(update.state, UpdateState::Planned);
+        assert_eq!(update.backup(), None);
+    }
+
+    #[test]
+    fn a_verified_update_cannot_install_without_confirmation() {
+        let mut update = verified_update();
+        assert!(update.install().is_err());
+        assert!(update.begin_install().is_err());
+        assert!(update.complete_install().is_err());
+        assert!(update.interrupt().is_err());
+        assert!(update.resume().is_err());
+        assert!(update.recover().is_err());
+        assert!(update.rollback().is_err());
+        assert_eq!(update.state, UpdateState::Verified);
+        update.confirm().expect("a confirm");
+        assert_eq!(update.state, UpdateState::Confirmed);
+    }
+
+    #[test]
+    fn a_confirmed_update_refuses_every_action_but_install() {
+        let mut update = confirmed_update();
+        assert!(update.confirm().is_err());
+        assert!(update.complete_install().is_err());
+        assert!(update.interrupt().is_err());
+        assert!(update.resume().is_err());
+        assert!(update.recover().is_err());
+        assert!(update.rollback().is_err());
+        assert_eq!(update.state, UpdateState::Confirmed);
+    }
+
+    #[test]
+    fn an_installing_update_can_only_complete_or_interrupt() {
+        let mut update = confirmed_update();
+        update.begin_install().expect("a begin");
+        assert!(update.confirm().is_err());
+        assert!(update.begin_install().is_err());
+        assert!(update.resume().is_err());
+        assert!(update.recover().is_err());
+        assert!(update.rollback().is_err());
+        assert_eq!(update.state, UpdateState::Installing);
+    }
+
+    #[test]
+    fn an_update_walks_from_confirmed_to_installed() {
+        let mut update = confirmed_update();
+        let backup = update.begin_install().expect("a begin");
+        assert_eq!(backup, "rustage-1.0.0.bak");
+        assert_eq!(update.backup(), Some("rustage-1.0.0.bak"));
+        assert_eq!(update.state, UpdateState::Installing);
+        update.complete_install().expect("a complete");
+        assert_eq!(update.state, UpdateState::Installed);
+        assert_eq!(update.backup(), Some("rustage-1.0.0.bak"));
+    }
+
+    #[test]
+    fn the_backup_name_uses_the_installed_version_and_is_recorded() {
+        let mut update = Update::plan("2.3.4", "2.3.5", artifact(b"x")).expect("a plan");
+        assert_eq!(update.backup(), None);
+        update.verify(b"x").expect("a verify");
+        update.confirm().expect("a confirm");
+        let backup = update.install().expect("an install");
+        assert_eq!(backup, "rustage-2.3.4.bak");
+        assert_eq!(update.backup(), Some("rustage-2.3.4.bak"));
+        assert_eq!(update.state, UpdateState::Installed);
+    }
+
+    #[test]
+    fn an_interrupted_install_resumes_to_installed() {
+        let mut update = confirmed_update();
+        let backup = update.begin_install().expect("a begin");
+        update.interrupt().expect("an interrupt");
+        assert_eq!(update.state, UpdateState::Interrupted);
+        assert_eq!(update.backup(), Some(backup.as_str()));
+        assert!(update.complete_install().is_err());
+        assert!(update.install().is_err());
+        assert!(update.rollback().is_err());
+        update.resume().expect("a resume");
+        assert_eq!(update.state, UpdateState::Installing);
+        assert_eq!(update.backup(), Some(backup.as_str()));
+        update.complete_install().expect("a complete");
+        assert_eq!(update.state, UpdateState::Installed);
+    }
+
+    #[test]
+    fn an_interrupted_install_recovers_the_same_backup() {
+        let mut update = confirmed_update();
+        let backup = update.begin_install().expect("a begin");
+        update.interrupt().expect("an interrupt");
+        assert!(update.rollback().is_err());
+        assert!(update.resume().is_ok());
+        update.interrupt().expect("a second interrupt");
+        update.recover().expect("a recover");
+        assert_eq!(update.state, UpdateState::RolledBack);
+        assert_eq!(update.backup(), Some(backup.as_str()));
+        assert!(update.resume().is_err());
+        assert!(update.recover().is_err());
+    }
+
+    #[test]
+    fn a_migration_needs_distinct_formats_and_at_least_one_step() {
+        assert!(Migration::plan(1, 1, vec!["copy".to_owned()]).is_err());
+        assert!(Migration::plan(1, 2, Vec::new()).is_err());
+        assert!(Migration::plan(1, 2, vec!["  ".to_owned()]).is_err());
+
+        let migration = Migration::plan(
+            1,
+            2,
+            vec!["  copy  ".to_owned(), String::new(), "rewrite".to_owned()],
+        )
+        .expect("a migration");
+        assert_eq!(
+            migration.steps,
+            vec!["copy".to_owned(), "rewrite".to_owned()]
+        );
+        assert!(!migration.acknowledged);
+        let rendered = migration.render();
+        assert!(rendered.contains("1 -> 2"), "{rendered}");
+        assert!(rendered.contains("2 steps"), "{rendered}");
+        assert!(rendered.contains("not acknowledged"), "{rendered}");
+    }
+
+    #[test]
+    fn an_unacknowledged_migration_blocks_confirmation() {
+        let mut update = verified_update();
+        update
+            .set_migration(Migration::plan(1, 2, vec!["copy".to_owned()]).expect("a migration"))
+            .expect("a declared migration");
+        assert!(
+            update.render().contains("format migration 1 -> 2"),
+            "the render names the migration: {}",
+            update.render()
+        );
+        let blocked = update.confirm().unwrap_err();
+        assert!(blocked.contains("1 -> 2"), "{blocked}");
+        assert!(blocked.contains("not been acknowledged"), "{blocked}");
+        assert_eq!(update.state, UpdateState::Verified);
+        assert!(update.install().is_err());
+
+        update.acknowledge_migration().expect("an acknowledgement");
+        assert!(update.migration().expect("a migration").acknowledged);
+        update.confirm().expect("a confirm after acknowledgement");
+        assert_eq!(update.state, UpdateState::Confirmed);
+    }
+
+    #[test]
+    fn a_migration_cannot_be_set_or_acknowledged_after_confirmation() {
+        let mut update = confirmed_update();
+        let migration = Migration::plan(1, 2, vec!["copy".to_owned()]).expect("a migration");
+        assert!(update.set_migration(migration).is_err());
+        assert_eq!(update.migration(), None);
+        assert!(update.acknowledge_migration().is_err());
+        assert_eq!(update.state, UpdateState::Confirmed);
+    }
+
+    #[test]
+    fn a_migration_without_a_declaration_cannot_be_acknowledged() {
+        let mut update = verified_update();
+        assert!(update.acknowledge_migration().is_err());
+        assert_eq!(update.migration(), None);
     }
 }

@@ -7,6 +7,7 @@
 //! [`super`](self).
 
 use super::*;
+use rust_widgets::widget::special_widgets::code_editor::{LanguageId, TextPosition};
 
 /// Replays in-place text edits over a piece table (task T06.01).
 ///
@@ -179,12 +180,14 @@ pub(super) fn highlight_report(
     true
 }
 
-/// Converts between document offsets and visual positions (task T06.03).
+/// Converts between document offsets and the widget's visual rows (task T06.03).
 ///
-/// A `mark` is placed by the same conversion a `visual` lookup uses, which is the acceptance: the
-/// cursor, a diagnostic and a protected region cannot disagree about where a character is.
+/// The conversion is the widget's: `CodeEditor::visual_lines` decides how a line wraps and which
+/// rows a fold hides, and `TextPosition` is the one position the caret, a diagnostic and a
+/// protected region use. The command line still speaks byte offsets, so [`position_at`] is the one
+/// boundary conversion; the host keeps no second coordinate model.
 pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
-    use crate::app::editor::coordinates::{Coordinates, Mark, Metrics};
+    use crate::app::editor::adapter::Adapter;
 
     // Lines given as `line:` build the document; a file replaces it; everything else is an action.
     let mut lines: Vec<String> = Vec::new();
@@ -205,57 +208,78 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
         },
         None => lines.join("\n"),
     };
-    let metrics = Metrics::new(options.tab.unwrap_or(4), options.wrap);
-    let mut coordinates = Coordinates::new(&text, metrics);
+    let mut adapter = match Adapter::with_options(
+        &text,
+        options.wrap.is_some(),
+        options.tab.unwrap_or(4) as usize,
+    ) {
+        Ok(adapter) => adapter,
+        Err(reason) => {
+            println!("rustage: the editor refused its configuration: {reason}");
+            return false;
+        }
+    };
 
     for op in actions {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<String, String> = match verb {
-            "tab" => match argument.parse::<u32>() {
+            "tab" => match argument.parse::<usize>() {
                 Ok(width) => {
-                    coordinates.set_metrics(Metrics::new(width, coordinates.metrics().wrap));
+                    adapter.set_tab_width(width);
                     Ok(format!("tab {width}"))
                 }
                 Err(_) => Err(format!("{argument:?} is not a width")),
             },
             "wrap" => match argument.parse::<u32>() {
-                Ok(width) => {
-                    coordinates
-                        .set_metrics(Metrics::new(coordinates.metrics().tab_width, Some(width)));
-                    Ok(format!("wrap {width}"))
-                }
+                Ok(width) => Ok(format!(
+                    "wrap {width}: the widget wraps at its own width ({} for this run)",
+                    if options.wrap.is_some() {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                )),
                 Err(_) => Err(format!("{argument:?} is not a width")),
             },
             "fold" => match argument.split_once(':') {
                 Some((start, end)) => match (start.parse::<usize>(), end.parse::<usize>()) {
-                    (Ok(start), Ok(end)) => coordinates
-                        .fold(start, end)
-                        .map(|()| format!("folded {start}..{end}")),
+                    (Ok(start), Ok(end)) => {
+                        adapter.fold(start, end);
+                        Ok(format!("folded {start}..{end}"))
+                    }
                     _ => Err(format!("{argument:?} is not <start>:<end>")),
                 },
                 None => Err(format!("{argument:?} is not <start>:<end>")),
             },
             "unfold" => match argument.parse::<usize>() {
                 Ok(start) => {
-                    coordinates.unfold(start);
+                    adapter.unfold(start);
                     Ok(format!("unfolded {start}"))
                 }
                 Err(_) => Err(format!("{argument:?} is not a line")),
             },
             "visual" => match argument.parse::<usize>() {
-                Ok(offset) => Ok(format!(
-                    "offset {offset} → {}",
-                    coordinates.visual_of(offset).render()
-                )),
+                Ok(offset) => match position_at(&text, offset) {
+                    Ok(position) => Ok(format!(
+                        "offset {offset} → {}",
+                        visual_of(&adapter, position)
+                    )),
+                    Err(reason) => Err(reason),
+                },
                 Err(_) => Err(format!("{argument:?} is not an offset")),
             },
             "offset" => match argument.split_once(':') {
-                Some((row, column)) => match (row.parse::<usize>(), column.parse::<u32>()) {
-                    (Ok(row), Ok(column)) => {
-                        let offset = coordinates
-                            .offset_at(crate::app::editor::coordinates::Visual::new(row, column));
-                        Ok(format!("row {row} col {column} → offset {offset}"))
-                    }
+                Some((row, column)) => match (row.parse::<usize>(), column.parse::<usize>()) {
+                    (Ok(row), Ok(column)) => match visual_at(&adapter, &text, row, column) {
+                        Some((position, offset)) => Ok(format!(
+                            "row {row} col {column} → line {} char {} → offset {offset}",
+                            position.line, position.column
+                        )),
+                        None => Err(format!(
+                            "row {row} is past the {} visible visual row(s)",
+                            adapter.visual_lines().len()
+                        )),
+                    },
                     _ => Err(format!("{argument:?} is not <row>:<column>")),
                 },
                 None => Err(format!("{argument:?} is not <row>:<column>")),
@@ -265,18 +289,14 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
                 match parts.as_slice() {
                     [kind, start, end] => match (start.parse::<usize>(), end.parse::<usize>()) {
                         (Ok(start), Ok(end)) => {
-                            let mark = match *kind {
-                                "cursor" => Mark::cursor(start),
-                                "diagnostic" => Mark::diagnostic(start, end),
-                                "protected" => Mark::protected(start, end),
-                                _ => {
-                                    return coordinates_report(
-                                        &coordinates,
-                                        &format!("{kind:?} is not a kind"),
-                                    );
-                                }
-                            };
-                            Ok(format!("mark → {}", coordinates.project(&mark).render()))
+                            match (position_at(&text, start), position_at(&text, end)) {
+                                (Ok(start_at), Ok(end_at)) => Ok(format!(
+                                    "mark {kind} → {} .. {}",
+                                    visual_of(&adapter, start_at),
+                                    visual_of(&adapter, end_at)
+                                )),
+                                (Err(reason), _) | (_, Err(reason)) => Err(reason),
+                            }
                         }
                         _ => Err(format!("{argument:?} is not <kind>:<start>:<end>")),
                     },
@@ -289,22 +309,74 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
         match step {
             Ok(note) if note.is_empty() => {}
             Ok(note) => println!("{note}"),
-            Err(reason) => return coordinates_report(&coordinates, &reason),
+            Err(reason) => return coordinates_report(&adapter, &reason),
         }
     }
-    coordinates_report(&coordinates, "")
+    coordinates_report(&adapter, "")
+}
+
+/// A position as the widget's visual row, for a report.
+fn visual_of(adapter: &crate::app::editor::adapter::Adapter, position: TextPosition) -> String {
+    let mut found = None;
+    for (row, line) in adapter.visual_lines().iter().enumerate() {
+        if line.line == position.line && line.start_column <= position.column {
+            found = Some((row, *line));
+            if position.column <= line.end_column {
+                break;
+            }
+        }
+    }
+    match found {
+        Some((row, line)) => format!(
+            "row {row} (line {}, characters {}..{})",
+            line.line, line.start_column, line.end_column
+        ),
+        None => format!(
+            "line {} character {} (no visible row: the line is folded or past the visible range)",
+            position.line, position.column
+        ),
+    }
+}
+
+/// A visual row and a character column within it, as a document position and a byte offset.
+fn visual_at(
+    adapter: &crate::app::editor::adapter::Adapter,
+    text: &str,
+    row: usize,
+    column: usize,
+) -> Option<(TextPosition, usize)> {
+    let lines = adapter.visual_lines();
+    let line = lines.get(row)?;
+    let character = line
+        .start_column
+        .saturating_add(column)
+        .min(line.end_column);
+    let position = TextPosition::new(line.line, character);
+    Some((position, offset_of(text, position)))
 }
 
 /// The conversion's own report.
 pub(super) fn coordinates_report(
-    coordinates: &crate::app::editor::coordinates::Coordinates,
+    adapter: &crate::app::editor::adapter::Adapter,
     reason: &str,
 ) -> bool {
     if !reason.is_empty() {
         println!("rustage: {reason}");
     }
-    for line in coordinates.render() {
-        println!("{line}");
+    println!(
+        "lines: {}, visual rows: {}",
+        adapter.line_count(),
+        adapter.visual_row_count()
+    );
+    let (first, last) = adapter.visible_rows();
+    println!("visible rows: {first}..{last}");
+    for region in adapter.fold_regions() {
+        println!(
+            "fold {}..{} {}",
+            region.start_line,
+            region.end_line,
+            if region.folded { "folded" } else { "open" }
+        );
     }
     reason.is_empty()
 }
@@ -312,12 +384,14 @@ pub(super) fn coordinates_report(
 /// Runs multi-cursor editing: carets, insertions, line operations, comments and brackets (task
 /// T06.04).
 ///
-/// The report is the acceptance on the line. After a multi-caret `insert`, a single `undo` takes the
-/// whole keystroke back rather than one caret's share of it, and an edit that would land inside a
-/// character is refused whole, so `text:` never shows half a character.
+/// Every operation is the library widget's own: [`Adapter`](crate::app::editor::adapter::Adapter)
+/// forwards to `CodeEditor`, so a multi-caret `insert` is one widget transaction and a single `undo`
+/// takes the whole keystroke back. The command line speaks byte offsets; [`position_at`] is the one
+/// conversion into the widget's line/column positions, and it refuses an offset past the end or
+/// inside a character.
 pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
-    use crate::app::editor::editing::{Carets, Editor, PAIRS, Selection, matching_bracket};
-    use crate::project::text::piece_table::TextStore;
+    use crate::app::editor::adapter::Adapter;
+    use crate::app::editor::highlight::Language;
 
     // Lines given as `line:` build the document; a file replaces it; everything else is an action.
     let mut lines: Vec<String> = Vec::new();
@@ -338,16 +412,25 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
         },
         None => lines.join("\n"),
     };
-    let mut store = TextStore::new(text);
-    let mut editor = Editor::new();
+    let mut adapter = Adapter::new();
+    adapter.set_text(&text);
+    if let Some(file) = &options.file {
+        adapter.set_language(Language::of_path(&file.to_string_lossy()).id());
+    }
 
     for op in actions {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<String, String> = match verb {
-            "carets" => match carets_of(argument) {
-                Ok(carets) => match editor.set_carets(&store.text(), carets) {
-                    Ok(()) => Ok(format!("carets: {}", editor.carets().len())),
-                    Err(reason) => Err(reason),
+            "carets" => match positions_of(&text, argument) {
+                Ok(positions) => match positions.split_first() {
+                    None => Err("carets needs at least one offset".to_owned()),
+                    Some((first, rest)) => {
+                        adapter.set_caret(*first);
+                        for position in rest {
+                            adapter.add_caret(*position);
+                        }
+                        Ok(format!("carets: {}", adapter.caret_count()))
+                    }
                 },
                 Err(reason) => Err(reason),
             },
@@ -355,16 +438,16 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
                 Some((anchor, cursor)) => {
                     match (anchor.parse::<usize>(), cursor.parse::<usize>()) {
                         (Ok(anchor), Ok(cursor)) => {
-                            match Carets::of(vec![Selection::range(anchor, cursor)]) {
-                                Ok(carets) => match editor.set_carets(&store.text(), carets) {
-                                    Ok(()) => Ok(format!(
+                            match (position_at(&text, anchor), position_at(&text, cursor)) {
+                                (Ok(anchor_at), Ok(cursor_at)) => {
+                                    adapter.select(anchor_at, cursor_at);
+                                    Ok(format!(
                                         "selection {}..{}",
                                         anchor.min(cursor),
                                         anchor.max(cursor)
-                                    )),
-                                    Err(reason) => Err(reason),
-                                },
-                                Err(reason) => Err(reason),
+                                    ))
+                                }
+                                (Err(reason), _) | (_, Err(reason)) => Err(reason),
                             }
                         }
                         _ => Err(format!("{argument:?} is not <anchor>:<cursor>")),
@@ -372,96 +455,84 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
                 }
                 None => Err(format!("{argument:?} is not <anchor>:<cursor>")),
             },
-            "insert" => editor
-                .insert(&mut store, argument)
-                .map(|()| format!("inserted {argument:?}"))
-                .map_err(|error| error.message()),
+            "insert" => {
+                adapter.insert(argument);
+                Ok(format!("inserted {argument:?}"))
+            }
             "type" => match single_char(argument) {
-                Some(character) => editor
-                    .type_char(&mut store, character, &PAIRS)
-                    .map(|()| format!("typed {character:?}"))
-                    .map_err(|error| error.message()),
+                Some(character) => {
+                    adapter.type_text(&character.to_string());
+                    Ok(format!("typed {character:?}"))
+                }
                 None => Err(format!("{argument:?} is not one character")),
             },
-            "backspace" => editor
-                .backspace(&mut store)
-                .map(|()| "backspaced".to_owned())
-                .map_err(|error| error.message()),
-            "delete" => editor
-                .delete_forward(&mut store)
-                .map(|()| "deleted forward".to_owned())
-                .map_err(|error| error.message()),
-            "up" => editor
-                .move_lines(&mut store, -1)
-                .map(|()| "moved up".to_owned())
-                .map_err(|error| error.message()),
-            "down" => editor
-                .move_lines(&mut store, 1)
-                .map(|()| "moved down".to_owned())
-                .map_err(|error| error.message()),
-            "duplicate" => editor
-                .duplicate_lines(&mut store)
-                .map(|()| "duplicated".to_owned())
-                .map_err(|error| error.message()),
-            "delete-lines" => editor
-                .delete_lines(&mut store)
-                .map(|()| "deleted lines".to_owned())
-                .map_err(|error| error.message()),
-            "comment" => editor
-                .toggle_comment(&mut store, argument)
-                .map(|()| format!("toggled comment {argument:?}"))
-                .map_err(|error| error.message()),
+            "backspace" => {
+                adapter.backspace();
+                Ok("backspaced".to_owned())
+            }
+            "delete" => {
+                adapter.delete_forward();
+                Ok("deleted forward".to_owned())
+            }
+            "up" | "down" => {
+                let direction = if verb == "up" { -1 } else { 1 };
+                adapter.move_line(direction);
+                Ok(format!("moved {verb}"))
+            }
+            "duplicate" => {
+                adapter.duplicate_line();
+                Ok("duplicated".to_owned())
+            }
+            "delete-lines" => {
+                adapter.delete_line();
+                Ok("deleted lines".to_owned())
+            }
+            "comment" => {
+                if let Some(language) = comment_language(argument) {
+                    adapter.set_language(language);
+                }
+                adapter.toggle_comment();
+                Ok(format!("toggled comment {argument:?}"))
+            }
             "matching" => match argument.parse::<usize>() {
-                Ok(offset) => match matching_bracket(&store.text(), offset) {
-                    Some(at) => Ok(format!("bracket at {offset} matches {at}")),
-                    None => Ok(format!("bracket at {offset} has no match")),
+                Ok(offset) => match position_at(&text, offset) {
+                    Ok(position) => {
+                        adapter.set_caret(position);
+                        match adapter.matching_brackets() {
+                            Some((open, close)) => {
+                                let other = if position == open { close } else { open };
+                                Ok(format!(
+                                    "bracket at {offset} matches {}",
+                                    offset_of(&text, other)
+                                ))
+                            }
+                            None => Ok(format!("bracket at {offset} has no match")),
+                        }
+                    }
+                    Err(reason) => Err(reason),
                 },
                 Err(_) => Err(format!("{argument:?} is not an offset")),
             },
-            "undo" => store
-                .undo()
-                .map(|did| {
-                    if did {
-                        "undone".to_owned()
-                    } else {
-                        "nothing to undo".to_owned()
-                    }
-                })
-                .map_err(|error| error.message()),
-            "redo" => store
-                .redo()
-                .map(|did| {
-                    if did {
-                        "redone".to_owned()
-                    } else {
-                        "nothing to redo".to_owned()
-                    }
-                })
-                .map_err(|error| error.message()),
+            "undo" => Ok(if adapter.undo() {
+                "undone".to_owned()
+            } else {
+                "nothing to undo".to_owned()
+            }),
+            "redo" => Ok(if adapter.redo() {
+                "redone".to_owned()
+            } else {
+                "nothing to redo".to_owned()
+            }),
             "show" => Ok(String::new()),
             other => Err(format!("{other:?} is not an editing operation")),
         };
         match step {
             Ok(note) if note.is_empty() => {}
             Ok(note) => println!("{note}"),
-            Err(reason) => return edit_report(&store, &editor, &reason),
+            Err(reason) => return edit_report(&adapter, &reason),
         }
     }
-    edit_report(&store, &editor, "")
-}
-
-/// Parses an `o1:o2:...` argument into carets, one per offset.
-pub(super) fn carets_of(argument: &str) -> Result<crate::app::editor::editing::Carets, String> {
-    use crate::app::editor::editing::{Carets, Selection};
-
-    let mut selections = Vec::new();
-    for number in argument.split(':') {
-        match number.parse::<usize>() {
-            Ok(offset) => selections.push(Selection::caret(offset)),
-            Err(_) => return Err(format!("{number:?} is not an offset")),
-        }
-    }
-    Carets::of(selections)
+    edit_report(&adapter, "")
 }
 
 /// The one character an argument is, or `None` when it is not exactly one character.
@@ -475,34 +546,90 @@ pub(super) fn single_char(argument: &str) -> Option<char> {
     }
 }
 
-/// The text store's and editor's own report.
-pub(super) fn edit_report(
-    store: &crate::project::text::piece_table::TextStore,
-    editor: &crate::app::editor::editing::Editor,
-    reason: &str,
-) -> bool {
+/// Parses `<offset>:<offset>:...` into widget positions.
+fn positions_of(text: &str, argument: &str) -> Result<Vec<TextPosition>, String> {
+    argument
+        .split(':')
+        .map(|number| match number.parse::<usize>() {
+            Ok(offset) => position_at(text, offset),
+            Err(_) => Err(format!("{number:?} is not an offset")),
+        })
+        .collect()
+}
+
+/// Converts a byte offset to the widget's line/column position.
+fn position_at(text: &str, offset: usize) -> Result<TextPosition, String> {
+    if offset > text.len() {
+        return Err(format!(
+            "offset {offset} is past the end of the document ({} bytes)",
+            text.len()
+        ));
+    }
+    if !text.is_char_boundary(offset) {
+        return Err(format!("offset {offset} is inside a character"));
+    }
+    let before = &text[..offset];
+    let line = before.matches('\n').count();
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count();
+    Ok(TextPosition::new(line, column))
+}
+
+/// Converts a widget position back to a byte offset, for a report.
+fn offset_of(text: &str, position: TextPosition) -> usize {
+    let mut offset = 0;
+    for (index, line) in text.split('\n').enumerate() {
+        if index == position.line {
+            return offset
+                + line
+                    .char_indices()
+                    .nth(position.column)
+                    .map(|(at, _)| at)
+                    .unwrap_or(line.len());
+        }
+        offset += line.len() + 1;
+    }
+    text.len()
+}
+
+/// The language a command-line comment prefix names, when it names one.
+fn comment_language(prefix: &str) -> Option<LanguageId> {
+    match prefix {
+        "//" => Some(LanguageId::Rust),
+        "#" => Some(LanguageId::Python),
+        "--" => Some(LanguageId::Sql),
+        "<!--" => Some(LanguageId::Html),
+        _ => None,
+    }
+}
+
+/// The editor's own report.
+pub(super) fn edit_report(adapter: &crate::app::editor::adapter::Adapter, reason: &str) -> bool {
     if !reason.is_empty() {
         println!("rustage: {reason}");
     }
-    for line in store.render() {
-        println!("{line}");
+    println!("lines: {}", adapter.line_count());
+    for caret in adapter.carets() {
+        println!("caret {}:{}", caret.line, caret.column);
     }
-    for line in editor.render() {
-        println!("{line}");
+    if let Some((start, end)) = adapter.selection() {
+        println!(
+            "selection {}:{}..{}:{}",
+            start.line, start.column, end.line, end.column
+        );
     }
-    println!("text: {:?}", store.text());
+    println!("revision {}", adapter.revision());
+    println!("text: {:?}", adapter.text());
     reason.is_empty()
 }
 
-/// Reads a file's encoding, line endings and indentation, and shows the editor's decoration (task
-/// T06.05).
+/// Reads a file's encoding and shows the widget's folded/visible state (task T06.05).
 ///
-/// The policy is the report: a file that is not UTF-8 is refused by name and the command ends
-/// non-zero, and a file that mixed its line endings is reported as mixed and cannot be encoded by
-/// default. The decoration — visible whitespace, the gutter, fold regions and a minimap — is printed
-/// from the same text, so the view cannot disagree with the file it was read from.
+/// The document, its folds and its rows are the widget's; the host decides only how a line is
+/// printed (gutter width, whitespace glyphs) and keeps the file's encoding policy. The minimap is
+/// drawn by the widget, so the report names the viewport it covers instead of computing a second
+/// set of bands.
 pub(super) fn editor_view(options: &crate::cli::EditorViewOptions) -> bool {
-    use crate::app::editor::editor_view::{FoldKind, View, fold_regions, minimap};
+    use crate::app::editor::adapter::Adapter;
     use crate::project::text::text_file::{Ending, TextFile};
 
     // `line:` operations build an in-memory file; `--file` reads bytes; the rest are actions.
@@ -535,45 +662,59 @@ pub(super) fn editor_view(options: &crate::cli::EditorViewOptions) -> bool {
         println!("{line}");
     }
 
-    let mut view = View::new().with_tab_width(options.tab.unwrap_or(4));
+    let tab_width = options.tab.unwrap_or(4) as usize;
+    let mut adapter = match Adapter::with_options(&file.text(), false, tab_width) {
+        Ok(adapter) => adapter,
+        Err(reason) => {
+            println!("rustage: the editor refused its configuration: {reason}");
+            return false;
+        }
+    };
+    let mut whitespace = false;
+    let mut relative = false;
+
     for op in actions {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
             "whitespace" => {
-                view = view.with_whitespace();
+                whitespace = true;
                 Ok(vec!["whitespace: shown".to_owned()])
             }
             "numbers" => {
-                view = if argument == "relative" {
-                    view.with_relative_numbers()
-                } else {
-                    view
-                };
+                relative = argument == "relative";
                 Ok(vec![format!(
                     "numbers: {}",
-                    if view.relative_numbers {
-                        "relative"
-                    } else {
-                        "absolute"
-                    }
+                    if relative { "relative" } else { "absolute" }
                 )])
             }
             "window" => match window_of(argument) {
-                Ok((first, count, current)) => Ok(view.lines(&file.text(), first, count, current)),
+                Ok((first, count, current)) => Ok(view_lines(
+                    &adapter, first, count, current, whitespace, relative, tab_width,
+                )),
                 Err(reason) => Err(reason),
             },
-            "fold" => match FoldKind::from_name(argument) {
-                Some(kind) => Ok(fold_regions(&file.text(), kind)
-                    .iter()
-                    .map(|region| region.render())
-                    .collect()),
-                None => Err(format!("{argument:?} is not a fold kind")),
-            },
+            "fold" => {
+                let folded = adapter.fold_all();
+                let mut out = vec![format!("folded {folded} region(s)")];
+                out.extend(adapter.fold_regions().iter().map(|region| {
+                    format!(
+                        "fold {}..{} {}",
+                        region.start_line,
+                        region.end_line,
+                        if region.folded { "folded" } else { "open" }
+                    )
+                }));
+                Ok(out)
+            }
             "minimap" => match argument.parse::<usize>() {
-                Ok(height) => Ok(minimap(&file.text(), height)
-                    .iter()
-                    .map(|row| row.render())
-                    .collect()),
+                Ok(height) => {
+                    let (first, last) = adapter.visible_rows();
+                    Ok(vec![format!(
+                        "minimap {height}: drawn by the widget; {} visual row(s), viewport \
+                         {first}..{last}",
+                        adapter.visual_row_count()
+                    )])
+                }
                 Err(_) => Err(format!("{argument:?} is not a height")),
             },
             "encode" => match file.encode() {
@@ -604,6 +745,65 @@ pub(super) fn editor_view(options: &crate::cli::EditorViewOptions) -> bool {
         }
     }
     true
+}
+
+/// Prints a window of the widget's lines with the gutter and whitespace the caller asked for.
+fn view_lines(
+    adapter: &crate::app::editor::adapter::Adapter,
+    first: usize,
+    count: usize,
+    current: Option<usize>,
+    whitespace: bool,
+    relative: bool,
+    tab_width: usize,
+) -> Vec<String> {
+    let total = adapter.line_count();
+    let width = total.to_string().len();
+    let mut out = Vec::new();
+    for index in first..(first.saturating_add(count)).min(total) {
+        let Some(text) = adapter.line_text(index) else {
+            continue;
+        };
+        let shown = if whitespace {
+            show_whitespace(&text, tab_width)
+        } else {
+            text
+        };
+        let number = if relative && Some(index) != current {
+            index.abs_diff(current.unwrap_or(index))
+        } else {
+            index
+        };
+        out.push(format!("{number:>width$} {shown}"));
+    }
+    out
+}
+
+/// One line with a space as `·` and a tab as `→` padded to the next stop.
+fn show_whitespace(text: &str, tab_width: usize) -> String {
+    let mut out = String::new();
+    let mut column = 0;
+    for character in text.chars() {
+        match character {
+            ' ' => {
+                out.push('·');
+                column += 1;
+            }
+            '\t' => {
+                let stop = tab_width.max(1) - (column % tab_width.max(1));
+                out.push('→');
+                for _ in 1..stop {
+                    out.push(' ');
+                }
+                column += stop;
+            }
+            other => {
+                out.push(other);
+                column += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Parses a `first:count[:current]` argument into a window of lines.

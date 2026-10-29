@@ -9,7 +9,7 @@
 //!   environment and its directory, and [`Config::command`] is the one spelling of the argv, so the
 //!   run the designer starts and the run a person types are the same line.
 //! * **The program really runs.** [`Run::start`] starts it through
-//!   [`OwnedProcess`](crate::host::subprocess::OwnedProcess), which leads a process group of its own,
+//!   [`OwnedProcess`], which leads a process group of its own,
 //!   and keeps the process handle: [`Run::stop`] signals that group and [`Run::wait`] records how the
 //!   process really ended. No state is set to "running" without a process behind it.
 //! * **Independence is a flag, not a hope.** [`Config::standalone`] records that the program is the

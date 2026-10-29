@@ -12,7 +12,7 @@
 //! * **A fix is a write, and writes are guarded.** [`apply_action`] offers the action's edits to the
 //!   [T06.06](crate::project::text::protection) guard through [`WriteSource::Format`], so a fix that would
 //!   change a region a generator owns is refused **whole** rather than half-applied.
-//! * **A diagnostic on generated code says so.** [`mark_generated`] flags every diagnostic whose span
+//! * **A diagnostic on generated code says so.** [`DiagnosticSet::mark_generated`] flags every diagnostic whose span
 //!   falls inside a protected region, so a report can distinguish it from a person's own code.
 //! * **Freshness is the one rule of [T07.03](crate::app::language::features).** This module reuses
 //!   [`Pending`], so a diagnostic set or a token layer for an old version is

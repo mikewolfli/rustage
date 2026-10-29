@@ -14,7 +14,7 @@
 //!   [`Verdict::Cancelled`], which is never success — a partially written target that a cancel left
 //!   behind is reported stale rather than presented as the build.
 //! * **The run is a real, owned process.** [`execute`] starts cargo through
-//!   [`OwnedProcess`](crate::host::subprocess::OwnedProcess), which leads a process group of its own,
+//!   [`OwnedProcess`], which leads a process group of its own,
 //!   and polls the [`CancelToken`] on every turn: a cancel signals that group and reports
 //!   [`Verdict::Cancelled`] only when the request is what ended it. Nothing here calls
 //!   `Command::output`, and no cancel path invents an exit code.

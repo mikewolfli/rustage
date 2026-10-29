@@ -13,7 +13,7 @@
 //!   warning someone might ignore.
 //! * **A diagnostic belongs to a configuration generation.** Every [`Analysis::configure`] bumps the
 //!   [`Analysis::generation`], and replies are keyed by it through the one
-//!   [`Pending`](crate::app::language::features::Pending) rule, so a diagnostic computed for an earlier
+//!   [`Pending`] rule, so a diagnostic computed for an earlier
 //!   configuration is [`Delivery::Stale`] and is not marked current.
 //! * **A failed configuration does not stop editing.** An unknown target is recorded as
 //!   [`Analysis::failure`] and the configuration still moves on (which is why the old diagnostics go

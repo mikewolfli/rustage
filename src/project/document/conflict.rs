@@ -34,7 +34,8 @@
 //!   nothing) rather than reading a metadata bit that means something else, so "why can I not save"
 //!   has the OS's own answer.
 //! * **Gone and back.** A file that was deleted is [`Verdict::Gone`], and one that came back with
-//!   different bytes is [`Verdict::Replaced`]: the first is a delete somebody has to decide about
+//!   different bytes is [`Verdict::DiskOnly`] (or a merge/conflict when the document changed as well):
+//!   the first is a delete somebody has to decide about
 //!   (re-create it from the buffer, or let it go), the second is an external change like any other.
 //!
 //! **Attribution is not here.** Which process changed the file is the watcher's [`ChangeKind`], and

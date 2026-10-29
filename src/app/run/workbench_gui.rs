@@ -4,7 +4,7 @@
 //! The workbench window: the first real integration of the shell models (task F04/F21).
 //!
 //! The models already exist — [`Workbench`] (mode, document, target, status), [`Panels`] (which
-//! panels a host has and where), [`Groups`]/[`Tabs`] (editor groups and their documents), and
+//! panels a host has and where), [`Groups`]/[`Tabs`](crate::app::shell::tabs::Tabs) (editor groups and their documents), and
 //! [`Layout`] (captured/restored visibility and arrangement). This module is the missing
 //! presentation: a real window with a toolbar, docked list panels, editor tab strips, a status bar
 //! and a native menu bar, all driven by those models rather than by a second state.
@@ -32,10 +32,11 @@ use std::time::Duration;
 
 use rust_widgets::app::{ButtonHandle, WidgetHandle, WindowHandle};
 use rust_widgets::control_backend::get_control_backend_for_widget;
-use rust_widgets::core::Point;
+use rust_widgets::core::{Point, Rect};
 use rust_widgets::layout::{BoxLayout, Layout as _, LayoutConstraints, Orientation, SizePolicy};
 use rust_widgets::widget::capability::CapabilityValue;
 use rust_widgets::widget::runtime::{clear_focus, focus_widget, focused_widget, with_widget_mut};
+use rust_widgets::widget::special_widgets::code_editor::CodeEditor;
 
 use crate::app::canvas::scene::Rect as SceneRect;
 use crate::app::commands::command::{Context, Registry, built_in};
@@ -267,13 +268,20 @@ impl Gui {
             for button in view.tabs.iter().skip(documents.len()) {
                 rust_widgets::set_widget_visible(*button, false);
             }
-            rust_widgets::list_box_clear_items(view.editor);
-            if text.is_empty() {
-                let _ = rust_widgets::list_box_add_item(view.editor, "(the document is empty)");
-            } else {
-                for line in text.lines() {
-                    let _ = rust_widgets::list_box_add_item(view.editor, line);
+            let applied = with_widget_mut(view.editor, |widget| {
+                let any: &mut dyn std::any::Any = widget;
+                match any.downcast_mut::<CodeEditor>() {
+                    Some(editor) => {
+                        if editor.text() != *text {
+                            editor.set_text(text);
+                        }
+                        true
+                    }
+                    None => false,
                 }
+            });
+            if applied != Some(true) {
+                self.message = "the editor surface did not accept the document".to_owned();
             }
         }
         rust_widgets::set_widget_text(
@@ -2675,7 +2683,13 @@ pub(super) fn workbench_gui(
                 ));
             }
         }
-        let editor = handle.new_list_box(tx, CONTENT_Y + 30, ew, 535);
+        // The editor area is the library's own code editor, not a list of lines. The surface is
+        // mounted by its registered name; `sync_editors` reaches it through the widget runtime and
+        // downcasts to `CodeEditor` (the widget trait is `Any`), which is the only public path from
+        // a mounted surface back to its typed API.
+        let editor = handle
+            .mount_widget_by_name("code_editor", Rect::new(tx, CONTENT_Y + 30, ew, 535), "")
+            .expect("the library registers the code editor widget");
         all.push(editor.raw_id());
         if let Ok(mut gui) = gui.lock() {
             gui.placements.push((

@@ -7,7 +7,7 @@
 //! decided from its output, and a task knows which terminal it runs in"*.
 //!
 //! * **An edge carries its order.** A task either depends on another **in sequence** or **in
-//!   parallel**; [`waves`] turns the graph into the groups that may run together, so a task that must
+//!   parallel**; [`Dag::waves`] turns the graph into the groups that may run together, so a task that must
 //!   wait is not started alongside its dependency by mistake.
 //! * **A problem matcher is a real matcher.** [`Matcher`] compiles a line pattern with `(.*)` and
 //!   `(\d+)` groups into parts and matches a line against it — no regular-expression dependency, and

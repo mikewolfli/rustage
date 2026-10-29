@@ -11,7 +11,7 @@
 //!   identity, and a view is a [`Tab`](super::tabs::Tab) that reads it by name. Typing through any
 //!   view therefore shows up in every view *by construction*: there is no per-view copy for the text
 //!   to diverge into, which is what "edits synchronize" has to mean if it is to be checkable.
-//! * **A viewport belongs to the view.** Scroll and selection live on the [`Viewport`], and
+//! * **A viewport belongs to the view.** Scroll and selection live on the [`Viewport`](crate::app::canvas::viewport::Viewport), and
 //!   [`Groups::scroll`]/[`Groups::select`] touch exactly one view. Two views of one document share
 //!   the text and disagree about where they are looking; nothing in this module ever writes a second
 //!   view's viewport, so "one view drags the other" cannot happen.

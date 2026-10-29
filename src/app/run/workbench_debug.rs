@@ -14,7 +14,7 @@
 //! `target/rustage-debug/` and compiled by the real `rustc` on this host.
 //!
 //! The panel does not claim two-way source navigation: it shows the adapter's raw source position
-//! and says that no generated [`SourceMap`](crate::contracts::source_map::SourceMap) is loaded for
+//! and says that no generated [`SourceMap`] is loaded for
 //! this debuggee, rather than guessing a node from a nearby line.
 
 use std::path::{Path, PathBuf};

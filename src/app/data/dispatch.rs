@@ -7,8 +7,8 @@
 //! The acceptance line is *"replacing or removing a handler does not leave duplicate subscriptions,
 //! and an illegal action is refused"*. Both are about a handler that never quite goes away, so:
 //!
-//! * **The target is checked against the library's own rule table.** [`WIRE_RULES`] is consulted
-//!   through [`compatibility`](rust_widgets::widget::capability::compatibility), not re-expressed
+//! * **The target is checked against the library's own rule table.** `WIRE_RULES` is consulted
+//!   through [`compatibility`], not re-expressed
 //!   here. A command is a [`WireTarget::PayloadFreeCommand`], so only a payload-free event may reach
 //!   it; a property is a [`WireTarget::Property`] of the slot's own kind, so a payload-free event
 //!   cannot assign it and a payload of the wrong kind is refused rather than converted by guess.

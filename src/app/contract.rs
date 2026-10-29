@@ -7,7 +7,7 @@
 //! once built and therefore cannot be extended, so a control that lives in a package (the form
 //! suite is one) is invisible to every lookup that reaches for it. The host therefore builds its
 //! own factory once, installs the suites into it with
-//! [`rust_widgets_suites::install`](rust_widgets_suites::install), and hands that table to the
+//! [`rust_widgets_suites::install`], and hands that table to the
 //! catalog, the generator-facing lookups and the property panel.
 //!
 //! The factory is a `OnceLock`, not a `static mut`: `WidgetFactory` is immutable after

@@ -41,7 +41,20 @@ still need their window entry; both are work lists, not statements of implemente
 
 ## Records
 
-- [An end-to-end walk that really runs cargo, and stops at the compiler's own line](log/log-20261029-30.md):
+- [Branch switches that reload the project and refuse to carry target state across](log/log-20261029-1.md):
+  `--vcs switch` used to demand a clean worktree and then say only that it had switched. A switch now
+  reads the real project document on both sides (`project:<path>`) and reports what must be reloaded
+  and which target/profile state cannot be carried over; an unsaved buffer refuses the switch by
+  name, and `switch-stash:<branch>` sets a dirty worktree aside in a named stash, restoring it when
+  the switch itself fails. The record holds the nine new tests, a real temporary-repository
+  walkthrough, the archived-log link repair that keeps `check-docs` green, and the rustdoc link
+  cleanup (38 sites, five of them documentation that had drifted from the code) that makes
+  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` a gate again. The same round moved the host editor
+  onto the library widget: the hand-written Rust/JSON/CSS lexers are gone (the library highlighter
+  covers 20 languages), and a new adapter over `CodeEditor` drives `--edit-ops`, where a multi-caret
+  insert is one transaction and one undo.
+
+- [An end-to-end walk that really runs cargo, and stops at the compiler's own line](log/archived/log-20261029-30.md):
   `--e2e` used to record only what the caller *said* happened (`check:ok`, `build:fail:…`) — the right
   report shape, but no build. `--e2e walk:<directory>:<program>` now runs `cargo check`, then
   `cargo build`, then the built binary, each as a real process, and when the check fails it records
@@ -54,7 +67,7 @@ still need their window entry; both are work lists, not statements of implemente
   so this proves the walk executes, not that generated code compiles in a clean project; the gated,
   minutes-long version of that is the next item.
 
-- [Build-log problems with a source and a version, and a warning cleanup](log/log-20261029-29.md):
+- [Build-log problems with a source and a version, and a warning cleanup](log/archived/log-20261029-29.md):
   a matcher's finding kept its file, line and message but lost the tool that read it, and never
   reached the problem centre — so a log line had no source and no revision. `dag::Problem` now
   carries `owner` and renders as `cargo src/main.rs:12: mismatched types`; `--dag match:<line>` records
@@ -67,7 +80,7 @@ still need their window entry; both are work lists, not statements of implemente
   would cost more than the warning, so it stays an upstream item. About forty pre-existing rustdoc
   intra-doc link ambiguities are listed as separate backlog, not silently ignored.
 
-- [A design diff by path, and a code diff that says which half changed](log/log-20261029-28.md):
+- [A design diff by path, and a code diff that says which half changed](log/archived/log-20261029-28.md):
   a text diff of a design document answers the wrong question. `design-diff:<revision>:<path>`
   walks two parsed documents and names each change by its structural path — `changed $.title:
   "Checkout" -> "Checkout 2"`, `added $.pages[1]`, `removed $.tags` — with arrays compared by index
@@ -78,7 +91,7 @@ still need their window entry; both are work lists, not statements of implemente
   whose markers do not balance is refused rather than half-split. Attribution is per region, not per
   hunk, and the structured three-way comparison still lives elsewhere.
 
-- [Pre/post tasks, concurrent waves, and a cleanup that shows its scope first](log/log-20261029-27.md):
+- [Pre/post tasks, concurrent waves, and a cleanup that shows its scope first](log/archived/log-20261029-27.md):
   a task can now declare `pre` and `post` tasks; they join the ordering graph as "must finish before"
   and "runs after" edges, so a cycle through a post edge is refused like any other and an unknown name
   is named. `schedule` groups tasks into waves that may run at once (no edge inside a wave, ties broken
@@ -91,7 +104,7 @@ still need their window entry; both are work lists, not statements of implemente
   a precondition rather than good advice. Real run: 2 of 4 paths removed (9 bytes), the directory
   kept. Real concurrent execution is still absent and says so.
 
-- [Staging one hunk at a time](log/log-20261029-26.md): the last T20.03 gap was per-hunk staging —
+- [Staging one hunk at a time](log/archived/log-20261029-26.md): the last T20.03 gap was per-hunk staging —
   `stage:<path>` put every change in the index at once. `hunks:<path>` splits the unstaged diff on
   Git's own `@@` lines and `stage-hunk:<path>:<n>` applies Git's own file header plus exactly that
   hunk with `git apply --cached -`, so the index gains the selected change and the working copy keeps
@@ -101,7 +114,7 @@ still need their window entry; both are work lists, not statements of implemente
   with three far-apart edits stages only hunk 2 while hunks 1 and 3 stay in the worktree. Unstaging a
   single hunk and line-level selection are still missing.
 
-- [A commit that is previewed first, and secrets that stop it](log/log-20261029-25.md):
+- [A commit that is previewed first, and secrets that stop it](log/archived/log-20261029-25.md):
   T20.03's line is "a dirty-buffer notice; never commit unauthorized changes or secrets".
   `--vcs commit-preview` (and `commit`, which runs it first) reads only the index, so it reports
   exactly what would go in; changed-but-unstaged and untracked paths are listed as left out, and a
@@ -113,7 +126,7 @@ still need their window entry; both are work lists, not statements of implemente
   A finding **refuses** the commit instead of warning while it commits: the real fixture ends with
   one commit in the log, not two. Per-hunk staging is still missing and is listed as such.
 
-- [Dates, numbers and list order in the interface language](log/log-20261029-24.md): F24's last piece
+- [Dates, numbers and list order in the interface language](log/archived/log-20261029-24.md): F24's last piece
   was date/number/sorting localisation, held back in round 12 because the host had no date surface —
   printing one would have proved only that a formatter was called. Round 23 created a real surface
   (the commit time in `--vcs log`), so it is done against that. `locale::format::Rules` holds one
@@ -124,7 +137,7 @@ still need their window entry; both are work lists, not statements of implemente
   Dates are UTC because the build has no time-zone source; inventing an offset would make one commit
   render differently on two machines.
 
-- [Commit history, one commit's changes, and a restore that is only a preview](log/log-20261029-23.md):
+- [Commit history, one commit's changes, and a restore that is only a preview](log/archived/log-20261029-23.md):
   `--vcs log[:<n>]` reads the installed `git log` and refuses a line it cannot split into the five
   fields it asked for, rather than inventing one. `commit-show:<revision>[:<path>]` is either that
   commit's diff or the exact bytes one path held at that revision. `restore-preview:<revision>:<path>`
@@ -135,7 +148,7 @@ still need their window entry; both are work lists, not statements of implemente
   that line is deliberately language-neutral: it is now a real date surface for T24.03's
   localisation.
 
-- [Tool adapters: kept and explained, and a failure that stays where it happened](log/log-20261029-22.md):
+- [Tool adapters: kept and explained, and a failure that stays where it happened](log/archived/log-20261029-22.md):
   language, debug, build and deploy adapters are declared with their version, host range and the
   host capabilities they need. Registration checks all three against the host contract, and an
   incompatible adapter is *kept* in the list with a `disabled (reason)` that names both sides —
@@ -146,7 +159,7 @@ still need their window entry; both are work lists, not statements of implemente
   answering. The listing ends with which kinds have no usable adapter. There is no protocol
   handshake here — compatibility is the host contract, not the tool's own version.
 
-- [The test wizard: generated data vectors run once over both call seams](log/log-20261029-21.md):
+- [The test wizard: generated data vectors run once over both call seams](log/archived/log-20261029-21.md):
   T21.05's acceptance is that the IPC call and the static call *share* the core test vectors, so the
   wizard declares states, event payloads, transitions and page edges (each checked at the moment it
   is entered — an undeclared state, an event without a payload or a duplicate `state/event` is
@@ -160,7 +173,7 @@ still need their window entry; both are work lists, not statements of implemente
   surface, not a window, and the artifact is the host's vector file rather than generated `tests/`
   source.
 
-- [The extension manager panel, and a removal that names the project's dependencies](log/log-20261029-20.md):
+- [The extension manager panel, and a removal that names the project's dependencies](log/archived/log-20261029-20.md):
   an extension manifest may now declare the entry points it registers (`provides`), and the open
   project reports the names it references (`usage`). `--extension panel` renders one row per
   installed extension — id, version, licence, state, pin, source, how much it provides and how much
@@ -172,7 +185,7 @@ still need their window entry; both are work lists, not statements of implemente
   removal succeeds once the project stops naming it. The usage report is the caller's input because
   project documents do not record extension use yet (that needs T22.02's registration).
 
-- [A persisted update journal, so another process can recover an interrupted install](log/log-20261029-19.md):
+- [A persisted update journal, so another process can recover an interrupted install](log/archived/log-20261029-19.md):
   the update state machine lived in one process, which covers "the user pressed interrupt" but not
   the accident it exists for — the machine dying between the backup and the write. `--release
   journal:<file>` now writes a record (`from`/`to`, artifact, digest, size, signature, state, backup)
@@ -184,7 +197,7 @@ still need their window entry; both are work lists, not statements of implemente
   files. Update *discovery* still needs a signed source, which is blocked on the packaging identity
   decision (T25.02).
 
-- [Extension fault bisection and a redacted diagnostic bundle](log/log-20261029-18.md): startup failures
+- [Extension fault bisection and a redacted diagnostic bundle](log/archived/log-20261029-18.md): startup failures
   are narrowed over a caller-supplied probe that is one real process start per attempt, with the
   enabled ids in `RUSTAGE_EXTENSIONS`. One id whose removal fixes it is named; when no single removal
   helps but each half passes alone the finding is an interaction; a failure with everything disabled
@@ -194,7 +207,7 @@ still need their window entry; both are work lists, not statements of implemente
   export permit minted only by a local `FileWrite` decision. Sending needs a `Network` decision and is
   refused because no project network policy exists, and this build has no transport to send through.
 
-- [The test tree, ignored tests and targeted reruns](log/log-20261029-17.md): discovery now becomes a
+- [The test tree, ignored tests and targeted reruns](log/archived/log-20261029-17.md): discovery now becomes a
   module tree (`::` split, so it cannot disagree with the names libtest printed), with ignored and
   `[..]`-parameterized leaves marked from the listing rather than guessed. An automatic run uses the
   tree's non-ignored tests by exact path, and a tree whose every test is ignored runs nothing instead
@@ -204,7 +217,7 @@ still need their window entry; both are work lists, not statements of implemente
   moved on; JUnit export writes that revision as a property so the importer can check it. Coverage
   mapping and debug-at-breakpoint runs are still absent and are listed as such.
 
-- [Accessibility: automated checks separated from screen-reader acceptance](log/log-20261029-16.md): the
+- [Accessibility: automated checks separated from screen-reader acceptance](log/archived/log-20261029-16.md): the
   quality centre now builds a real library `A11yTree` from declared elements and checks accessible
   names, `labelled_by`/`control_for` associations, focus flags, roles, duplicate ids, unknown
   children, cycles, roots and reachability. Structural checks run before registration because the
@@ -215,7 +228,7 @@ still need their window entry; both are work lists, not statements of implemente
   manual result is not acceptance. No real screen-reader session was run on this machine, so the
   manual field carries no evidence yet.
 
-- [Visual evidence against the real baseline engine, and JUnit import](log/log-20261029-15.md): the quality
+- [Visual evidence against the real baseline engine, and JUnit import](log/archived/log-20261029-15.md): the quality
   centre now compares real pixels through `preview::visual_baseline` instead of comparing only the
   platform/scale/font of two conditions. `VisualEvidence` has four states — `NotCollected`,
   `Captured`, `MissingBaseline`, `Compared` — and only `Compared` can pass, so a check that collected
@@ -228,7 +241,7 @@ still need their window entry; both are work lists, not statements of implemente
   of being overwritten. Still absent: a real screen capture and an image decoder — the pixels are
   declared on the command line — and CDATA/DTD support in the importer.
 
-- [Real process memory/threads under 100 rebuild cycles, and the extension permission gate](log/log-20261029-14.md):
+- [Real process memory/threads under 100 rebuild cycles, and the extension permission gate](log/archived/log-20261029-14.md):
   `--quality load:100` drives 100 real mount/update/stop cycles and now also reads this process's
   resident set and thread count (`ps` on macOS, `/proc/self/status` on Linux) after the first and
   last cycle. The report names both growths, fails on a thread the run never gave back or RSS growth
@@ -241,7 +254,7 @@ still need their window entry; both are work lists, not statements of implemente
   policy exists, so a network-declaring package cannot be installed unauthorized. A per-call runtime
   gate still needs an extension executor that does not exist yet.
 
-- [Target-application i18n, the confirmed/interruptible update, and extension provenance](log/log-20261029-13.md):
+- [Target-application i18n, the confirmed/interruptible update, and extension provenance](log/archived/log-20261029-13.md):
   `app::language::target` consumes the library's `I18nManager` for the *generated* application's
   resources — plural categories, context, English fallback, key audit, file-backed hot reload and a
   character-count long-text preview — with a host-owned locale→direction table (`ar`, `he`, `fa`,
@@ -256,7 +269,7 @@ still need their window entry; both are work lists, not statements of implemente
   replaced version. Also keeps the previous round's Form/FormSet, zh-Hans, SBOM and settings work
   green. Parallel work used disjoint write scopes; CLI wiring was done after the merge.
 
-- [Form/FormSet host contract, the zh-Hans interface pack and a lockfile-derived SBOM](log/log-20261029-12.md):
+- [Form/FormSet host contract, the zh-Hans interface pack and a lockfile-derived SBOM](log/archived/log-20261029-12.md):
   the Inspector, the event registry and the `--quality` contract facts now read the host factory
   (library defaults plus `rust-widgets-suites`) instead of the parent crate's immutable
   `WidgetFactory::shared()`, so `form`/`form_set` properties and events resolve; the live Inspector

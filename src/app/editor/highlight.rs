@@ -25,33 +25,67 @@
 //! * **The theme is a seam, not part of the model.** A [`Span`] carries a [`Role`]; a [`Theme`] maps
 //!   roles to colours. The highlights never hold a colour, so a theme change repaints without
 //!   re-lexing, and the model does not depend on any theme.
+//! * **The grammar is the library's.** [`lex_line`] calls the widget's [`BuiltinHighlighter`] over
+//!   the library's [`LanguageId`]; this module owns the incremental cache and the role projection,
+//!   not a second lexer. The host therefore highlights the same languages the widget does.
 
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
-/// A language this build highlights.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Language {
-    /// No grammar: every line is plain text. Used for a file whose language is not recognised.
-    #[default]
-    Plain,
-    /// Rust.
-    Rust,
-    /// JSON.
-    Json,
-    /// CSS.
-    Css,
-}
+use rust_widgets::widget::special_widgets::code_editor::{
+    BuiltinHighlighter, LanguageId, LineState, SyntaxHighlighter, TokenKind,
+};
 
+/// A language this build highlights.
+///
+/// The grammar and the list of languages are the library's ([`LanguageId`]); this type only supplies
+/// the names a command line or a configuration file uses, so the host does not keep a second language
+/// table that could disagree with the widget's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Language(LanguageId);
+
+// The four names below keep the host's existing spelling (`Language::Rust`) instead of forcing every
+// caller onto an upper-case constant; the values are the library's own variants.
+#[allow(non_upper_case_globals)]
 impl Language {
+    /// No grammar: every line is plain text.
+    pub const Plain: Self = Self(LanguageId::PlainText);
+    /// Rust.
+    pub const Rust: Self = Self(LanguageId::Rust);
+    /// JSON.
+    pub const Json: Self = Self(LanguageId::Json);
+    /// CSS.
+    pub const Css: Self = Self(LanguageId::Css);
+
+    /// The library's own language identifier, which is the one the widget lexes with.
+    pub const fn id(self) -> LanguageId {
+        self.0
+    }
+
     /// The language's name, as a command line or a configuration file writes it.
     pub const fn name(self) -> &'static str {
-        match self {
-            Self::Plain => "plain",
-            Self::Rust => "rust",
-            Self::Json => "json",
-            Self::Css => "css",
+        match self.0 {
+            LanguageId::Rust => "rust",
+            LanguageId::Python => "python",
+            LanguageId::JavaScript => "javascript",
+            LanguageId::Go => "go",
+            LanguageId::CLike => "c",
+            LanguageId::Java => "java",
+            LanguageId::CSharp => "csharp",
+            LanguageId::Cpp => "cpp",
+            LanguageId::Kotlin => "kotlin",
+            LanguageId::Swift => "swift",
+            LanguageId::Html => "html",
+            LanguageId::Xml => "xml",
+            LanguageId::Json => "json",
+            LanguageId::Css => "css",
+            LanguageId::Yaml => "yaml",
+            LanguageId::Toml => "toml",
+            LanguageId::Shell => "shell",
+            LanguageId::Sql => "sql",
+            LanguageId::Markdown => "markdown",
+            LanguageId::PlainText => "plain",
         }
     }
 
@@ -68,82 +102,114 @@ impl Language {
         let extension = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         match extension.as_str() {
             "rs" => Self::Rust,
+            "py" => Self(LanguageId::Python),
+            "js" | "jsx" | "ts" | "tsx" | "mjs" => Self(LanguageId::JavaScript),
+            "go" => Self(LanguageId::Go),
+            "c" | "h" => Self(LanguageId::CLike),
+            "java" => Self(LanguageId::Java),
+            "cs" => Self(LanguageId::CSharp),
+            "cc" | "cpp" | "cxx" | "hpp" => Self(LanguageId::Cpp),
+            "kt" | "kts" => Self(LanguageId::Kotlin),
+            "swift" => Self(LanguageId::Swift),
+            "html" | "htm" => Self(LanguageId::Html),
+            "xml" => Self(LanguageId::Xml),
             "json" => Self::Json,
             "css" => Self::Css,
+            "yml" | "yaml" => Self(LanguageId::Yaml),
+            "toml" => Self(LanguageId::Toml),
+            "sh" | "bash" | "zsh" => Self(LanguageId::Shell),
+            "sql" => Self(LanguageId::Sql),
+            "md" | "markdown" => Self(LanguageId::Markdown),
             _ => Self::Plain,
         }
     }
 
-    /// Every language.
-    pub const ALL: [Self; 4] = [Self::Plain, Self::Rust, Self::Json, Self::Css];
+    /// Every language the library's lexer understands.
+    pub const ALL: [Self; 20] = [
+        Self(LanguageId::Rust),
+        Self(LanguageId::Python),
+        Self(LanguageId::JavaScript),
+        Self(LanguageId::Go),
+        Self(LanguageId::CLike),
+        Self(LanguageId::Java),
+        Self(LanguageId::CSharp),
+        Self(LanguageId::Cpp),
+        Self(LanguageId::Kotlin),
+        Self(LanguageId::Swift),
+        Self(LanguageId::Html),
+        Self(LanguageId::Xml),
+        Self(LanguageId::Json),
+        Self(LanguageId::Css),
+        Self(LanguageId::Yaml),
+        Self(LanguageId::Toml),
+        Self(LanguageId::Shell),
+        Self(LanguageId::Sql),
+        Self(LanguageId::Markdown),
+        Self(LanguageId::PlainText),
+    ];
 }
 
 /// What part of a line a span is, before any theme has a say.
+///
+/// This is a projection of the library's [`TokenKind`]: it keys the host's themes, while the kinds
+/// the widget distinguishes (identifier, operator, preprocessor, …) are mapped into it by
+/// [`Role::of`]. Nothing here classifies a word; the lexer is the library's.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Role {
     /// A comment.
     Comment,
     /// A string or character literal.
     String,
-    /// A keyword.
+    /// A keyword or preprocessor word.
     Keyword,
+    /// A type name.
+    Type,
+    /// A function or method name.
+    Function,
     /// A number.
     Number,
-    /// Punctuation.
+    /// Punctuation and operators.
     Punctuation,
 }
 
 impl Role {
+    /// The role a library token kind is drawn as, or `None` for text a theme leaves alone.
+    pub const fn of(kind: TokenKind) -> Option<Self> {
+        match kind {
+            TokenKind::Keyword | TokenKind::Preprocessor => Some(Self::Keyword),
+            TokenKind::Type => Some(Self::Type),
+            TokenKind::Function => Some(Self::Function),
+            TokenKind::String | TokenKind::Character => Some(Self::String),
+            TokenKind::Number => Some(Self::Number),
+            TokenKind::Comment | TokenKind::BlockComment => Some(Self::Comment),
+            TokenKind::Operator => Some(Self::Punctuation),
+            TokenKind::Identifier | TokenKind::Plain => None,
+        }
+    }
+
     /// The role's name.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Comment => "comment",
             Self::String => "string",
             Self::Keyword => "keyword",
+            Self::Type => "type",
+            Self::Function => "function",
             Self::Number => "number",
             Self::Punctuation => "punctuation",
         }
     }
 
     /// Every role a theme must have a colour for.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Comment,
         Self::String,
         Self::Keyword,
+        Self::Type,
+        Self::Function,
         Self::Number,
         Self::Punctuation,
     ];
-}
-
-/// The state a line is in at its edges: what a multi-line construct left open.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub enum LineState {
-    /// Nothing is open.
-    #[default]
-    Clean,
-    /// A block comment `/* … */` is open.
-    BlockComment,
-    /// A raw string is open, opened by `r` followed by this many `#` and a quote.
-    RawString {
-        /// How many `#` the opener had.
-        hashes: usize,
-    },
-}
-
-impl LineState {
-    /// The state's name.
-    pub fn name(&self) -> String {
-        match self {
-            Self::Clean => "clean".to_owned(),
-            Self::BlockComment => "in a block comment".to_owned(),
-            Self::RawString { hashes } => format!("in a raw string ({hashes} #)"),
-        }
-    }
-
-    /// Whether nothing is open.
-    pub const fn is_clean(&self) -> bool {
-        matches!(self, Self::Clean)
-    }
 }
 
 /// A line's start state, as the paint path sees it: known or not yet computed.
@@ -172,7 +238,17 @@ impl State {
     /// The state as one word.
     pub fn name(&self) -> String {
         match self {
-            Self::Known(state) => state.name(),
+            Self::Known(LineState::Clean) => "clean".to_owned(),
+            Self::Known(LineState::BlockComment) => "in a block comment".to_owned(),
+            Self::Known(LineState::MultiLineString) => "in a multi-line string".to_owned(),
+            Self::Known(LineState::MultiLineCharString) => {
+                "in a multi-line character string".to_owned()
+            }
+            Self::Known(LineState::RawString { hashes }) => {
+                format!("in a raw string ({hashes} #)")
+            }
+            Self::Known(LineState::RawStringTick) => "in a backtick raw string".to_owned(),
+            Self::Known(LineState::HtmlComment) => "in an HTML comment".to_owned(),
             Self::Unknown => "not lexed yet".to_owned(),
         }
     }
@@ -235,7 +311,7 @@ impl Theme {
         Self::named("light").expect("the light theme exists")
     }
 
-    fn of(name: &str, pairs: [(Role, &str); 5]) -> Self {
+    fn of(name: &str, pairs: [(Role, &str); 7]) -> Self {
         Self {
             name: name.to_owned(),
             colors: pairs
@@ -270,18 +346,22 @@ impl Default for Theme {
     }
 }
 
-const DARK: [(Role, &str); 5] = [
+const DARK: [(Role, &str); 7] = [
     (Role::Comment, "#7f848e"),
     (Role::String, "#98c379"),
     (Role::Keyword, "#c678dd"),
+    (Role::Type, "#e5c07b"),
+    (Role::Function, "#61afef"),
     (Role::Number, "#d19a66"),
     (Role::Punctuation, "#abb2bf"),
 ];
 
-const LIGHT: [(Role, &str); 5] = [
+const LIGHT: [(Role, &str); 7] = [
     (Role::Comment, "#a0a1a7"),
     (Role::String, "#50a14f"),
     (Role::Keyword, "#a626a4"),
+    (Role::Type, "#c18401"),
+    (Role::Function, "#4078f2"),
     (Role::Number, "#986801"),
     (Role::Punctuation, "#383a42"),
 ];
@@ -396,7 +476,7 @@ impl Highlights {
             return State::Known(LineState::Clean);
         }
         if line <= self.resolved {
-            return State::Known(self.cache[line - 1].ends.clone());
+            return State::Known(self.cache[line - 1].ends);
         }
         State::Unknown
     }
@@ -418,10 +498,10 @@ impl Highlights {
             let start = if index == 0 {
                 LineState::Clean
             } else {
-                self.cache[index - 1].ends.clone()
+                self.cache[index - 1].ends
             };
             let (spans, ends) = lex_line(self.language, &self.lines[index], &start);
-            let previous = std::mem::replace(&mut self.cache[index].ends, ends.clone());
+            let previous = std::mem::replace(&mut self.cache[index].ends, ends);
             self.cache[index].spans = spans;
             self.resolved += 1;
             self.lexed_lines += 1;
@@ -492,360 +572,21 @@ impl Highlights {
 }
 
 /// Lexes one line, given the state it starts in, and answers its spans and end state.
+///
+/// The lexer is the library's [`BuiltinHighlighter`], so the host and the widget cannot disagree
+/// about what a comment, a raw string or a keyword is. This function only projects the library's
+/// `TokenSpan`s onto the host's [`Role`]s and drops the spans a theme leaves uncoloured; it keeps
+/// no grammar of its own.
 pub fn lex_line(language: Language, line: &str, start: &LineState) -> (Vec<Span>, LineState) {
-    match language {
-        Language::Plain => (Vec::new(), LineState::Clean),
-        Language::Rust => lex_rust(line, start),
-        Language::Json => lex_json(line),
-        Language::Css => lex_css(line, start),
-    }
-}
-
-const RUST_KEYWORDS: [&str; 14] = [
-    "fn", "let", "mut", "pub", "use", "mod", "impl", "struct", "enum", "match", "if", "else",
-    "return", "for",
-];
-
-fn lex_rust(line: &str, start: &LineState) -> (Vec<Span>, LineState) {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut spans = Vec::new();
-    let mut at = 0;
-
-    match start {
-        LineState::BlockComment => match block_close(bytes, 0) {
-            Some(end) => {
-                spans.push(Span::new(0, end, Role::Comment));
-                at = end;
-            }
-            None => {
-                spans.push(Span::new(0, len, Role::Comment));
-                return (spans, LineState::BlockComment);
-            }
-        },
-        LineState::RawString { hashes } => {
-            let close = raw_close(*hashes);
-            match find(line, &close, 0) {
-                Some(position) => {
-                    spans.push(Span::new(0, position + close.len(), Role::String));
-                    at = position + close.len();
-                }
-                None => {
-                    spans.push(Span::new(0, len, Role::String));
-                    return (spans, LineState::RawString { hashes: *hashes });
-                }
-            }
-        }
-        LineState::Clean => {}
-    }
-
-    while at < len {
-        let byte = bytes[at];
-        if byte == b'/' && bytes.get(at + 1) == Some(&b'/') {
-            spans.push(Span::new(at, len, Role::Comment));
-            break;
-        }
-        if byte == b'/' && bytes.get(at + 1) == Some(&b'*') {
-            match block_close(bytes, at + 2) {
-                Some(end) => {
-                    spans.push(Span::new(at, end, Role::Comment));
-                    at = end;
-                }
-                None => {
-                    spans.push(Span::new(at, len, Role::Comment));
-                    return (spans, LineState::BlockComment);
-                }
-            }
-            continue;
-        }
-        if byte == b'"' {
-            let end = escaped(bytes, at, b'"');
-            spans.push(Span::new(at, end, Role::String));
-            at = end;
-            continue;
-        }
-        if byte == b'r'
-            && let Some((open_end, hashes)) = raw_open(bytes, at)
-        {
-            let close = raw_close(hashes);
-            match find(line, &close, open_end) {
-                Some(position) => {
-                    spans.push(Span::new(at, position + close.len(), Role::String));
-                    at = position + close.len();
-                }
-                None => {
-                    spans.push(Span::new(at, len, Role::String));
-                    return (spans, LineState::RawString { hashes });
-                }
-            }
-            continue;
-        }
-        if byte == b'\''
-            && let Some(end) = char_literal(bytes, at)
-        {
-            spans.push(Span::new(at, end, Role::String));
-            at = end;
-            continue;
-        }
-        if byte.is_ascii_digit() {
-            let end = number(bytes, at);
-            spans.push(Span::new(at, end, Role::Number));
-            at = end;
-            continue;
-        }
-        if byte == b'_' || byte.is_ascii_alphabetic() {
-            let end = identifier(bytes, at);
-            if RUST_KEYWORDS.contains(&&line[at..end]) {
-                spans.push(Span::new(at, end, Role::Keyword));
-            }
-            at = end;
-            continue;
-        }
-        if byte.is_ascii_whitespace() {
-            at += 1;
-            continue;
-        }
-        if is_punctuation(byte) {
-            spans.push(Span::new(at, at + 1, Role::Punctuation));
-        }
-        at += 1;
-    }
-    (spans, LineState::Clean)
-}
-
-fn lex_json(line: &str) -> (Vec<Span>, LineState) {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut spans = Vec::new();
-    let mut at = 0;
-    while at < len {
-        let byte = bytes[at];
-        if byte == b'"' {
-            let end = escaped(bytes, at, b'"');
-            spans.push(Span::new(at, end, Role::String));
-            at = end;
-            continue;
-        }
-        if byte.is_ascii_digit()
-            || (byte == b'-' && bytes.get(at + 1).is_some_and(u8::is_ascii_digit))
-        {
-            let end = number(bytes, at);
-            spans.push(Span::new(at, end, Role::Number));
-            at = end;
-            continue;
-        }
-        if byte == b'_' || byte.is_ascii_alphabetic() {
-            let end = identifier(bytes, at);
-            if matches!(&line[at..end], "true" | "false" | "null") {
-                spans.push(Span::new(at, end, Role::Keyword));
-            }
-            at = end;
-            continue;
-        }
-        if byte.is_ascii_whitespace() {
-            at += 1;
-            continue;
-        }
-        if matches!(byte, b'{' | b'}' | b'[' | b']' | b':' | b',') {
-            spans.push(Span::new(at, at + 1, Role::Punctuation));
-        }
-        at += 1;
-    }
-    (spans, LineState::Clean)
-}
-
-fn lex_css(line: &str, start: &LineState) -> (Vec<Span>, LineState) {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut spans = Vec::new();
-    let mut at = 0;
-
-    if matches!(start, LineState::BlockComment) {
-        match block_close(bytes, 0) {
-            Some(end) => {
-                spans.push(Span::new(0, end, Role::Comment));
-                at = end;
-            }
-            None => {
-                spans.push(Span::new(0, len, Role::Comment));
-                return (spans, LineState::BlockComment);
-            }
-        }
-    }
-
-    while at < len {
-        let byte = bytes[at];
-        if byte == b'/' && bytes.get(at + 1) == Some(&b'*') {
-            match block_close(bytes, at + 2) {
-                Some(end) => {
-                    spans.push(Span::new(at, end, Role::Comment));
-                    at = end;
-                }
-                None => {
-                    spans.push(Span::new(at, len, Role::Comment));
-                    return (spans, LineState::BlockComment);
-                }
-            }
-            continue;
-        }
-        if byte == b'"' || byte == b'\'' {
-            let end = escaped(bytes, at, byte);
-            spans.push(Span::new(at, end, Role::String));
-            at = end;
-            continue;
-        }
-        if byte == b'@' {
-            let end = identifier(bytes, at + 1);
-            spans.push(Span::new(at, end, Role::Keyword));
-            at = end.max(at + 1);
-            continue;
-        }
-        if byte.is_ascii_digit() {
-            let end = number(bytes, at);
-            spans.push(Span::new(at, end, Role::Number));
-            at = end;
-            continue;
-        }
-        if byte.is_ascii_whitespace() {
-            at += 1;
-            continue;
-        }
-        if matches!(
-            byte,
-            b'{' | b'}' | b':' | b';' | b',' | b'(' | b')' | b'#' | b'.'
-        ) {
-            spans.push(Span::new(at, at + 1, Role::Punctuation));
-        }
-        at += 1;
-    }
-    (spans, LineState::Clean)
-}
-
-/// The index just past a nested `/* … */` starting after `from`, or `None` if it does not close.
-fn block_close(bytes: &[u8], from: usize) -> Option<usize> {
-    let mut depth = 1usize;
-    let mut at = from;
-    while at + 1 < bytes.len() {
-        if bytes[at] == b'/' && bytes[at + 1] == b'*' {
-            depth += 1;
-            at += 2;
-        } else if bytes[at] == b'*' && bytes[at + 1] == b'/' {
-            depth -= 1;
-            at += 2;
-            if depth == 0 {
-                return Some(at);
-            }
-        } else {
-            at += 1;
-        }
-    }
-    None
-}
-
-/// The index just past a string starting at `at` with the given quote, honouring `\` escapes.
-fn escaped(bytes: &[u8], at: usize, quote: u8) -> usize {
-    let mut index = at + 1;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => index += 2,
-            byte if byte == quote => return index + 1,
-            _ => index += 1,
-        }
-    }
-    bytes.len()
-}
-
-/// A Rust char literal at `at`, when it is one (not a lifetime).
-fn char_literal(bytes: &[u8], at: usize) -> Option<usize> {
-    match bytes.get(at + 1) {
-        Some(b'\\') => {
-            let mut index = at + 2;
-            while index < bytes.len() && bytes[index] != b'\'' {
-                index += 1;
-            }
-            Some((index + 1).min(bytes.len()))
-        }
-        Some(_) if bytes.get(at + 2) == Some(&b'\'') => Some(at + 3),
-        _ => None,
-    }
-}
-
-/// A raw string opener at `at` (`r`, some `#`, a `"`), answering where the content starts and how
-/// many `#` there were.
-fn raw_open(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
-    let mut index = at + 1;
-    while bytes.get(index) == Some(&b'#') {
-        index += 1;
-    }
-    if bytes.get(index) == Some(&b'"') {
-        Some((index + 1, index - at - 1))
-    } else {
-        None
-    }
-}
-
-/// The delimiter that closes a raw string opened with `hashes` `#`.
-fn raw_close(hashes: usize) -> String {
-    format!("\"{}", "#".repeat(hashes))
-}
-
-/// A number, including `_` separators, a fraction, an exponent and a type suffix.
-fn number(bytes: &[u8], at: usize) -> usize {
-    let mut index = at;
-    while index < bytes.len()
-        && (bytes[index].is_ascii_alphanumeric()
-            || matches!(bytes[index], b'_' | b'.' | b'+' | b'-'))
-    {
-        index += 1;
-    }
-    index
-}
-
-/// An identifier.
-fn identifier(bytes: &[u8], at: usize) -> usize {
-    let mut index = at;
-    while index < bytes.len() && (bytes[index] == b'_' || bytes[index].is_ascii_alphanumeric()) {
-        index += 1;
-    }
-    index
-}
-
-fn is_punctuation(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'{' | b'}'
-            | b'('
-            | b')'
-            | b'['
-            | b']'
-            | b'<'
-            | b'>'
-            | b'.'
-            | b','
-            | b';'
-            | b':'
-            | b'='
-            | b'+'
-            | b'-'
-            | b'*'
-            | b'/'
-            | b'&'
-            | b'|'
-            | b'!'
-            | b'?'
-            | b'#'
-            | b'%'
-            | b'^'
-            | b'~'
-            | b'@'
-    )
-}
-
-/// The first index of `needle` in `haystack` at or after `from`.
-fn find(haystack: &str, needle: &str, from: usize) -> Option<usize> {
-    haystack[from..]
-        .find(needle)
-        .map(|position| position + from)
+    let highlighter = BuiltinHighlighter::new(language.id());
+    let (tokens, ends) = highlighter.highlight_line(line, *start);
+    let spans = tokens
+        .into_iter()
+        .filter_map(|token| {
+            Role::of(token.kind).map(|role| Span::new(token.start, token.end, role))
+        })
+        .collect();
+    (spans, ends)
 }
 
 #[cfg(test)]
@@ -918,18 +659,18 @@ mod tests {
         json.set_text("{\"a\": 1, \"b\": true}");
         json.resolve_all();
         let roles: Vec<Role> = json.spans(0).unwrap().iter().map(|s| s.role()).collect();
+        // The library leaves JSON's structural braces unspanned; it styles the values and the
+        // separators between them, which is the behaviour this test now records.
         assert_eq!(
             roles,
             vec![
-                Role::Punctuation,
                 Role::String,
                 Role::Punctuation,
                 Role::Number,
                 Role::Punctuation,
                 Role::String,
                 Role::Punctuation,
-                Role::Keyword,
-                Role::Punctuation
+                Role::Keyword
             ]
         );
 

@@ -21,7 +21,7 @@
 //!   [`Proof::Built`] or better passes.
 //!
 //! Capacity is the library's own bound for the stripped profile
-//! ([`crate::app::target::snapshot::capacity`]), so this build does not keep a second number that
+//! ([`crate::app::targets::snapshot::capacity`]), so this build does not keep a second number that
 //! could disagree with what the generated program can hold.
 
 #![allow(dead_code)]

@@ -409,7 +409,7 @@ enum WriteOutcome {
 /// Writes generated text only when the committed file may be replaced.
 ///
 /// A missing file is created. An existing file must start with the generated marker and its
-/// hand-written boundaries must be provable; [`merge::prepare`] answers both questions before a
+/// hand-written boundaries must be provable; [`crate::app::generate::merge::prepare`] answers both questions before a
 /// single byte is written. A file that is not ours, or whose boundaries cannot be proven, is
 /// refused with the path in the reason rather than overwritten.
 fn write_generated(path: &std::path::Path, regenerated: &str) -> Result<WriteOutcome, String> {
@@ -885,7 +885,7 @@ pub(super) fn export(options: &crate::cli::ExportOptions) -> bool {
     }
 }
 
-/// Generates every file a project plans, ready for [`export::commit`] (task T15.07).
+/// Generates every file a project plans, ready for [`crate::app::generate::export::commit`] (task T15.07).
 ///
 /// The project document is the input: its `generated` entries are the plan, grouped so the library's
 /// dual product pair is one generation ([`crate::app::generate::artifact::plan_project`]). Each

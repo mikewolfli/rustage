@@ -54,7 +54,7 @@ pub const PACKAGE_MEMBERS: [&str; 5] = ["id", "name", "version", "source", "feat
 ///
 /// They are effects and not flags because that is what a caller authorizes: `--locked` and
 /// `--offline` are how this build writes them down, and the mapping is stated in one place
-/// ([`Resolution::read_only`] and [`Resolution::may_change_things`]).
+/// ([`Resolution::read_only`] and [`Resolution::may_reach_the_registry`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Effect {
     /// Starting a program, which is what resolution always is.

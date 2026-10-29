@@ -10,7 +10,7 @@
 //! construction rather than by discipline:
 //!
 //! * **The viewport is a value beside the model, never inside it.** [`Viewport`] owns a
-//!   [`Transform`], a [`Grid`], [`Rulers`] and [`Guides`]. Its methods take the model as read-only
+//!   [`Transform`], a [`Grid`], [`Rulers`] and [`Guide`]. Its methods take the model as read-only
 //!   input and answer screen-space descriptions, so there is no path from an aid back into a node.
 //! * **Fit and actual size move the transform only.** [`Transform::fit`] and [`Transform::actual_size`]
 //!   change the pan and the zoom and leave every rectangle where it was, which is what "do not

@@ -15,7 +15,7 @@
 //!   value out requires [`Secret::expose`], which is the call a reviewer can search for.
 //! * **Nothing that reaches a log or a notification is assumed clean.** [`redact`] is applied to
 //!   text that may contain a credential before it is logged or shown, and
-//!   [`NetworkPermit::redacted`] does the same for a resolved URL. Roadmap §5 F23 asks for
+//!   [`NetworkPermit::render`] does the same for a resolved URL. Roadmap §5 F23 asks for
 //!   "everything sent out authorized item by item"; this is the other end of it, "everything shown
 //!   was filtered".
 //! * **A reference is not a secret.** [`CredentialRef`] names *where* material lives (a system

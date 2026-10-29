@@ -11,7 +11,7 @@
 //!   [`QuickOpen`] is built from candidate paths and matched with [`fuzzy_score`]; nothing on that path
 //!   consults a language service, so it cannot fail because one is missing.
 //! * **Symbol search needs a negotiated capability, and says so.** [`symbols`] answers
-//!   [`SymbolRefusal::Unsupported`] when [`Capability::Symbols`] was not negotiated, so the *symbols*
+//!   [`SymbolRefusal`] when [`Capability::Symbols`] was not negotiated, so the *symbols*
 //!   half of quick open is the only half that is disabled — and it is disabled explicitly, not by
 //!   returning nothing.
 //! * **Ranking is match quality first, recency second.** [`Hit`] carries both; a better match beats a

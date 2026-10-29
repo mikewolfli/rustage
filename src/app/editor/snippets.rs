@@ -30,7 +30,7 @@
 //! keeps auto-pairing and surrounding selection one concept rather than two.
 //!
 //! **Boundaries.** A multi-line body's own indentation is inserted verbatim; re-indenting its lines to
-//! the insertion column is a display concern belonging with [T06.03](crate::app::editor::coordinates) and is
+//! the insertion column is a display concern belonging with [T06.03](crate::app::editor::adapter) and is
 //! not done here. Tab-stops are session state, not document state, so closing the document ends them.
 
 #![allow(dead_code)]

@@ -7,7 +7,7 @@
 //! the build, not a demonstration: the format and generator versions are the constants this binary
 //! was compiled with, and the permission lines are what a fresh, untrusted project with no
 //! approvals actually answers when an agent asks — computed by the same
-//! [`PermissionGate`](super::permission::PermissionGate) the store uses, not typed out by hand.
+//! [`PermissionGate`](crate::contracts::permission::PermissionGate) the store uses, not typed out by hand.
 //!
 //! Keeping the report derived means it cannot flatter the code: if the permission table changes,
 //! this output changes with it, and the contract check against whitepaper §12.5 still has to pass.

@@ -12,7 +12,7 @@
 //!   order they are meant to happen — so a batch can be reviewed, stored, replayed and compared
 //!   instead of living in somebody's head. Its operations use the *model's* vocabulary: a node entry
 //!   is read and written by the page reader's own codec
-//!   ([`page::node_from_json`](crate::project::record::page::node_from_json)), so a batch cannot come to mean
+//!   ([`page::node_from_json`]), so a batch cannot come to mean
 //!   something a page document does not.
 //! * **A batch is prechecked.** [`Plan::of`] reads the document and reports what the batch would do
 //!   *before* anything happens: which operations cannot land and why (an id the document does not

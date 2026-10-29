@@ -8,10 +8,10 @@
 //!
 //! * **The profile and the operating system are separate fields.** [`Configuration::profile`] is one
 //!   of the five output profiles — a statement about capability and size — while [`Os`] is read from
-//!   the triple. [`check`] refuses an operating system's name as a profile with a reason that names
+//!   the triple. [`Configuration::check`] refuses an operating system's name as a profile with a reason that names
 //!   the triple, so the two cannot be used interchangeably.
 //! * **Mode 1 has no entry on a restricted target.** [`Mode::One`] loads JSON and CSS at run time,
-//!   which `mini`/`embedded` do not link; [`check`] refuses it there instead of letting a preview
+//!   which `mini`/`embedded` do not link; [`Configuration::check`] refuses it there instead of letting a preview
 //!   configuration become a build that cannot exist. Mode 2 is allowed everywhere.
 //! * **A missing fact and an impossible request stay apart.** A missing toolchain or SDK is
 //!   [`Finding::Missing`] with a remedy; an unknown profile, a mode the profile cannot have, or a

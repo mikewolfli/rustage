@@ -20,7 +20,7 @@
 //!   which is a warning rather than a refusal — the designer necessarily runs on a desktop host
 //!   (principle 12).
 //!
-//! The answers come from the library's own factory ([`rust_widgets::designer::availability_with`]),
+//! The answers come from the library's own factory ([`rust_widgets::designer::generator::availability_with`]),
 //! never from a list kept here: a names list would drift the first time either crate changed a
 //! feature gate (principle 12/59).
 

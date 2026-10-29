@@ -211,7 +211,7 @@ fn walk(entries: &mut Vec<Entry>, prefix: &str, items: &[Item]) {
 ///
 /// The pack is derived on demand, which is right for the command line and for the reports that are
 /// the vocabulary's only consumers today. A windowed consumer that looks text up per frame would hold
-/// one [`Catalog`] instead of deriving one per lookup — that is T24.06's concern, and it is stated
+/// one [`Catalog`](crate::app::locale::catalog::Catalog) instead of deriving one per lookup — that is T24.06's concern, and it is stated
 /// here so the choice is not mistaken for an oversight.
 pub fn pack(language: Language) -> Pack {
     let mut pack = Pack::new(language);

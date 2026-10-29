@@ -9,7 +9,7 @@
 //!
 //! * **Every name is a contract name.** [`Catalog::from_contract`] enumerates the pinned library's
 //!   own registry ([`WidgetFactory::constructible_names`] and [`WidgetFactory::widget_names`]) and
-//!   reads each control's designer manifest ([`designer_manifest`]). A [`WidgetDescriptor`] carries
+//!   reads each control's designer manifest ([`designer_manifest`](fn@designer_manifest)). A [`WidgetDescriptor`] carries
 //!   the canonical name the contract gave it; the catalog never synthesises one. A query for a kind
 //!   the contract does not describe answers nothing rather than a plausible-looking entry.
 //! * **An unsupported control says why.** [`Support`] is [`Supported`](Support::Supported),
@@ -24,7 +24,7 @@
 //!   revision, the capability-manifest protocol, the build profile/triple, the requested target
 //!   profile and the capture time, so a palette can say which contract it describes.
 //! * **Search is the one fuzzy rule.** [`Catalog::search`] reuses
-//!   [`fuzzy_score`](crate::app::search::quick_open::fuzzy_score) over the id, name and category, so
+//!   [`fuzzy_score`] over the id, name and category, so
 //!   the palette and quick open rank the same way; favorites lift a kind but never hide the rest.
 //!
 //! [`Catalog::of`] remains the constructor for an explicitly supplied set of descriptors (the CLI's

@@ -3,7 +3,7 @@
 
 //! The application: what rustage does when it runs.
 //!
-//! This module is a boundary only. [`run`] executes a parsed command, and [`shell::toolbar`] holds
+//! This module is a boundary only. [`run`](fn@run) executes a parsed command, and [`shell::toolbar`] holds
 //! the icon strip the host consumes until the designer itself exists.
 //!
 //! * The designer is grouped into one module per feature family — `shell`, `commands`, `editor`,
@@ -23,7 +23,7 @@
 //! * `debug` is the debug client (F19): it drives a platform adapter over DAP and keeps the source
 //!   mapping, breakpoints and the logic-swap boundary in one place. It is kept apart from `build`
 //!   and `logic`, whose processes it observes but does not own.
-//! * [`run`] stays at the top rather than inside a group: it is the dispatcher every command passes
+//! * [`run`](mod@run) stays at the top rather than inside a group: it is the dispatcher every command passes
 //!   through, and its own submodules already follow this same domain split.
 pub mod ai;
 pub mod application;

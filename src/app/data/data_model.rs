@@ -13,7 +13,7 @@
 //! * **An error is surfaced, not papered over by a sample.** [`active`] answers the runtime data when
 //!   it is there, an error when the fetch failed, and only then the sample — and the sample is always
 //!   labelled. So "the fetch failed" cannot come out looking like "here are your values".
-//! * **A sample refuses secrets.** [`sample`] answers the offending field names instead of storing
+//! * **A sample refuses secrets.** [`Dataset::sample`] answers the offending field names instead of storing
 //!   them, so a credential cannot be captured into the project by a preview run.
 //! * **The values are the project's value vocabulary.** A field holds a
 //!   [`PropertyValue`], so the data a preview binds is the same shape the rest of the designer

@@ -12,7 +12,7 @@
 //!   (principle #22).
 //! * **A language the build does not bundle is refused, not approximated.** [`Catalog::for_language`]
 //!   answers [`NotBundled`] for one, and [`select`] refuses an *explicit* request for it while letting
-//!   an *unknown* system language fall back to [`Language::DEFAULT`] with the request recorded — the
+//!   an *unknown* system language fall back to [`DEFAULT`] with the request recorded — the
 //!   two are different facts and are reported differently.
 //! * **A pack round-trips through its written form.** [`Pack::encode`] and [`Pack::decode`] are the one
 //!   pair that reads and writes the pack file, so every pack `--locale-report` produces (English and

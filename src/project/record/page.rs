@@ -83,8 +83,8 @@ pub const PAGE_NODE_MEMBERS: [&str; 4] = ["id", "type", "children", "properties"
 ///
 /// Deliberately not [`crate::contracts::model::Node`]: that type's parent and children links are
 /// written only by the store's apply path, which is what keeps "one writable model" true. A file
-/// carries the tree once and the store builds the links
-/// ([`PageDocument::to_change_set`]); the vocabulary a node uses — kinds, property names, property
+/// carries the tree once and the open buffer builds the model, with its parent and child links,
+/// from it ([`Buffer::model`](crate::project::document::buffer::Buffer::model)); the vocabulary a node uses — kinds, property names, property
 /// values — *is* the model's, so the two cannot describe different things.
 #[derive(Clone, PartialEq, Debug)]
 pub struct PageNode {

@@ -13,7 +13,7 @@
 //!   candidate is offered to the [T06.06](crate::project::text::protection) guard through
 //!   [`WriteSource::Replace`]; a refusal becomes [`Candidate::blocked`] with the reason, and a blocked
 //!   candidate is never checked, so it cannot be applied.
-//! * **A candidate shows its own change.** [`Candidate::before`]/[`after`] are the line as it is and
+//! * **A candidate shows its own change.** [`Candidate::before`]/[`Candidate::after`] are the line as it is and
 //!   as it would become, and [`Candidate::segments`] is their character diff, so "what would this do"
 //!   is answerable without applying anything.
 //! * **Only checked candidates are a replace.** [`Candidates::checked`] is the set a commit would use,

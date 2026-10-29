@@ -2344,13 +2344,20 @@ mod tests {
     }
 
     fn temporary(name: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // The clock alone is not unique enough: parallel tests can read the same tick and then
+        // share (and delete) one directory, which showed up as `git config` failing in an
+        // otherwise unrelated test. The counter makes the name unique within the process.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "rustage-vcs-{name}-{}-{}",
+            "rustage-vcs-{name}-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
+                .unwrap_or(0),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&path).expect("a temporary directory");
         path

@@ -10,7 +10,7 @@
 //! * **A location is a uri and an offset, and it stays its own.** [`Location`] carries the file it is
 //!   in; nothing in the history rewrites one location into another.
 //! * **Resolution is checked, and a missing file is refused.** [`resolve`] takes the set of files that
-//!   exist and answers [`JumpError::Vanished`] for one that does not — it never falls back to another
+//!   exist and answers [`JumpError`] for one that does not — it never falls back to another
 //!   file that merely has the same offset.
 //! * **A moved file is corrected, not lost.** [`History::rename`] rewrites the recorded uris of a
 //!   moved file, so a jump after a move lands on the same object at its new path; only a file that

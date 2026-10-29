@@ -51,6 +51,8 @@ run under the version the recorded evidence was produced with:
 ```sh
 cargo fmt --check
 cargo test
+cargo clippy --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps   # the host's own rustdoc links; third-party sources are not documented
 cargo run -- --help
 cargo run -- --probe-apis target/probe      # dependency contract probes; exits 4 while a probe reports a gap
 cargo run -- --probe-host target/host        # host platform services; exits 4 while a check is not ready

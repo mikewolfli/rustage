@@ -10,7 +10,7 @@
 > macOS 设计器宿主为 `certified`（构建 + 有界运行），Windows 宿主为 `build-verified`，
 > profile 格按各自证据分级。2.8.11 的 embedded E0599 已由 2.8.12 修复并在 3.1.0 复验，见
 > [feedback-20261020.md](../rw-feedback/feedback-20261020.md) §0.6 与
-> [log-20261029-11.md](../log/log-20261029-11.md)。**
+> [log-20261029-11.md](../log/archived/log-20261029-11.md)。**
 
 ## 这份矩阵回答什么
 
@@ -81,7 +81,7 @@
 | windows | build-verified | build-verified | build-verified | build-verified | build-verified |
 | linux | unverified | unverified | unverified | unverified | unverified |
 
-矩阵的证据范围（3.1.0 的本轮记录见 [log-20261029-11.md](../log/log-20261029-11.md)；2.8.12 的记录见
+矩阵的证据范围（3.1.0 的本轮记录见 [log-20261029-11.md](../log/archived/log-20261029-11.md)；2.8.12 的记录见
 [log-20261020-4.md](../log/log-20261020-4.md)）：
 
 - `macos × desktop/tablet/mobile/mini/embedded`（3.1.0）：`cargo build --manifest-path <rust-widgets>/Cargo.toml

@@ -9,7 +9,7 @@
 //!
 //! * **One session at a time.** [`Preview::start`] refuses a second session while one is live, so the
 //!   service never owns two.
-//! * **An instance is a [`Generation`], and a rebuild is a new one.** [`Preview::rebuild`] bumps the
+//! * **An instance has a generation, and a rebuild is a new one.** [`Preview::rebuild`] bumps the
 //!   generation, so a handle made for the old instance cannot read the new one — the same rule the
 //!   design scene uses.
 //! * **Stopping clears everything.** [`Preview::stop`] takes the process and the instances away and

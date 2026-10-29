@@ -4,7 +4,7 @@
 //! What rustage does when it runs: one arm per parsed command.
 //!
 //! The designer itself is not implemented. What *is* implemented and reachable here is the icon
-//! strip in [`toolbar`](super::shell::toolbar) — which exists because the host's icons need a real
+//! strip in [`toolbar`] — which exists because the host's icons need a real
 //! consumer before anything downstream can claim to be verified: the resource tooling proves a
 //! glyph is a glyph, and only a control can prove the glyph reaches a screen — and the dependency
 //! contract probes under `crate::probe`, and the host's own platform services under

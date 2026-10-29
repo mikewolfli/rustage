@@ -7,8 +7,8 @@
 //! dismissible, and it neither crowds out input nor runs a command by itself"*. Four separate
 //! promises, so four separate mechanisms:
 //!
-//! * **A hierarchy is presented only if its capability was negotiated.** [`Hierarchy::of`] takes the
-//!   [`Capabilities`] and the [`HierarchyKind`] and refuses — [`Hierarchy::refusal`] — when the
+//! * **A hierarchy is presented only if its capability was negotiated.** [`hierarchy`] takes the
+//!   [`Capabilities`] and the [`HierarchyKind`] and refuses — [`HierarchyRefusal`] — when the
 //!   service did not offer call or type hierarchy. There is no path that shows an unnegotiated one.
 //! * **A hint layer is versioned like everything else.** [`Hints`] reuses the one
 //!   [`Pending`] rule, so a layer for an old version is

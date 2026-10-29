@@ -122,7 +122,10 @@ impl NativePlatform {
             }
         }
         if let Some(text) = seed {
-            *self.smoke_field_text.lock().expect("smoke text lock") = text.to_owned();
+            *self
+                .smoke_field_text
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = text.to_owned();
             rust_widgets::set_widget_text(field_id, text);
             emit(
                 Level::Info,
@@ -228,7 +231,7 @@ impl NativePlatform {
 /// the field is seeded, which keeps a seed from being reported as a user edit.
 fn note_field_change(last: &Mutex<String>, text: String) {
     let changed = {
-        let mut known = last.lock().expect("smoke text lock");
+        let mut known = last.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if *known == text {
             false
         } else {

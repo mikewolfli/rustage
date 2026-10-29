@@ -13,8 +13,8 @@
 //!    place. A rename is one filesystem operation: either the project is there or the target is
 //!    exactly as it was.
 //! 2. **The target has to be free.** A directory that exists and has anything in it is refused
-//!    before anything is written (roadmap §3.4: "取消不能留下半个工程"), and an existing *empty*
-//!    directory is filled only by that same rename.
+//!    before anything is written (roadmap §3.4: "a cancel must not leave half a project"), and an
+//!    existing *empty* directory is filled only by that same rename.
 //! 3. **Every refusal and every cancel cleans up the staging directory** and says what it removed, so
 //!    the caller never has to guess whether the attempt left something behind.
 //!

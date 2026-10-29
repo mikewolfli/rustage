@@ -207,6 +207,8 @@ pub struct SceneIndex {
     node_to_path: BTreeMap<NodeId, Arc<[usize]>>,
     /// The unique keyed node under each parent.
     key_to_node: BTreeMap<(Option<NodeId>, String), NodeId>,
+    /// The unique key of each node, so `key_of` is a lookup rather than a scan.
+    node_to_key: BTreeMap<NodeId, String>,
     /// Keys claimed more than once under one parent, sorted.
     duplicated_keys: Vec<(Option<NodeId>, String)>,
 }
@@ -252,10 +254,7 @@ impl SceneIndex {
 
     /// The key of `node`, when it declared a unique one and is part of this snapshot.
     pub fn key_of(&self, node: NodeId) -> Option<&str> {
-        self.key_to_node
-            .iter()
-            .find(|(_, id)| **id == node)
-            .map(|((_, key), _)| key.as_str())
+        self.node_to_key.get(&node).map(String::as_str)
     }
 
     /// Every uniquely keyed node as `(parent, key, node)`, sorted by `(parent, key)`.
@@ -325,11 +324,13 @@ impl SceneIndex {
             if index.duplicated_keys.contains(&claimed) {
                 continue;
             }
-            if index.key_to_node.remove(&claimed).is_some() {
+            if let Some(previous) = index.key_to_node.remove(&claimed) {
                 // A second claimant makes the key identify neither, exactly as the library does.
+                index.node_to_key.remove(&previous);
                 index.duplicated_keys.push(claimed);
             } else {
                 index.key_to_node.insert(claimed, *node);
+                index.node_to_key.insert(*node, key.clone());
             }
         }
         index.duplicated_keys.sort();

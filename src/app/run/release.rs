@@ -168,7 +168,11 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                         Ok(packages) => packages,
                         Err(reason) => return super::report(reason),
                     };
-                    let (mut derived, coverage) = lockfile::sbom(&packages, &package_licences);
+                    let (mut derived, coverage) = match lockfile::sbom(&packages, &package_licences)
+                    {
+                        Ok(derived) => derived,
+                        Err(reason) => return super::report(reason),
+                    };
                     // The artifact this release produced belongs in the bill of materials too, with
                     // the digest the release actually declared — that is the artifact↔SBOM link.
                     if let Some(artifact) = &artifact {

@@ -977,7 +977,14 @@ impl Executor {
             }
             for handle in workers.drain(..) {
                 if handle.is_finished() {
-                    let _ = handle.join();
+                    if handle.join().is_err() {
+                        emit(
+                            Level::Warn,
+                            "host::tasks",
+                            "a worker thread panicked while stopping; its task result was not \
+                             recorded",
+                        );
+                    }
                 } else {
                     emit(
                         Level::Warn,
@@ -994,8 +1001,13 @@ impl Executor {
             while !monitor.is_finished() && Instant::now() < monitor_deadline {
                 thread::sleep(Duration::from_millis(2));
             }
-            if monitor.is_finished() {
-                let _ = monitor.join();
+            if monitor.is_finished() && monitor.join().is_err() {
+                emit(
+                    Level::Warn,
+                    "host::tasks",
+                    "the monitor thread panicked while stopping; task deadlines may not have been \
+                     reported",
+                );
             }
         }
 

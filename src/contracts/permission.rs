@@ -216,10 +216,8 @@ impl Grant {
 
 /// Whether the project has been trusted. Untrusted projects are opened read-only: nothing runs.
 ///
-/// `Trusted` is reached through the trust prompt, which is T01.05's surface; until that exists the
-/// variant is only constructed by tests, hence the lint silence on the enum rather than on the
-/// gate that uses it.
-#[allow(dead_code)]
+/// The prompt surface is [`PermissionService::trust`](crate::host::permission::PermissionService::trust),
+/// reached by the project-open path and the CLI's `--trust`; tests construct `Trusted` directly.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum TrustState {
     /// Never trusted, or trust withdrawn. No code from the project runs.

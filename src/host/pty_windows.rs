@@ -106,12 +106,16 @@ impl PtySession {
                 match reader.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(count) => {
-                        let mut buffer = reader_output.lock().expect("the terminal output lock");
+                        let mut buffer = reader_output
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         buffer.extend_from_slice(&chunk[..count]);
                         if buffer.len() > BUFFER_LIMIT {
                             let excess = buffer.len() - BUFFER_LIMIT;
                             buffer.drain(..excess);
-                            *reader_dropped.lock().expect("the terminal drop lock") += excess;
+                            *reader_dropped
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) += excess;
                         }
                     }
                     Err(_) => break,
@@ -169,7 +173,10 @@ impl PtySession {
 
     /// How many bytes were dropped because the buffer was full.
     pub fn dropped(&self) -> usize {
-        *self.dropped.lock().expect("the terminal drop lock")
+        *self
+            .dropped
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Waits up to `limit` for the child to exit, returning its status if it did.
@@ -210,8 +217,15 @@ impl PtySession {
                 });
             }
         }
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+        {
+            crate::host::log::emit(
+                crate::host::log::Level::Warn,
+                "host::pty",
+                "the terminal output reader panicked while shutting down; output after this \
+                 point is missing from the session",
+            );
         }
     }
 }

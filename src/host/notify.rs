@@ -834,9 +834,14 @@ impl Default for NotificationCentre {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .expect("the notification centre is never poisoned: no panic escapes its critical sections")
+    mutex.lock().unwrap_or_else(|poisoned| {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "host::notify",
+            "the notification centre lock was poisoned; recovering its inner state",
+        );
+        poisoned.into_inner()
+    })
 }
 
 #[cfg(test)]

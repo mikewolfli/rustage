@@ -185,7 +185,10 @@ fn finish(start: usize, package: Locked) -> Result<Locked, String> {
 /// identity in a lockfile that may carry two versions of one crate. A package with no entry is
 /// recorded as `unrecorded`; the [`Coverage`] it returns counts both, so the gap is visible in the
 /// report instead of being mistaken for a recorded licence.
-pub fn sbom(packages: &[Locked], licences: &BTreeMap<String, String>) -> (Sbom, Coverage) {
+pub fn sbom(
+    packages: &[Locked],
+    licences: &BTreeMap<String, String>,
+) -> Result<(Sbom, Coverage), String> {
     let mut sbom = Sbom::new();
     let mut coverage = Coverage {
         packages: packages.len(),
@@ -209,15 +212,21 @@ pub fn sbom(packages: &[Locked], licences: &BTreeMap<String, String>) -> (Sbom, 
         if package.source.is_none() {
             coverage.without_source += 1;
         }
-        let _ = sbom.add(Component {
+        sbom.add(Component {
             name: package.component_name(),
             version: package.version.clone(),
             license: licence,
             source,
             digest: package.checksum.clone(),
-        });
+        })
+        .map_err(|reason| {
+            format!(
+                "package {} could not be recorded in the SBOM: {reason}",
+                package.component_name()
+            )
+        })?;
     }
-    (sbom, coverage)
+    Ok((sbom, coverage))
 }
 
 #[cfg(test)]
@@ -301,7 +310,7 @@ dependencies = [
             "0BSD OR MIT OR Apache-2.0".to_owned(),
         );
         licences.insert("rustage@0.1.0".to_owned(), "MIT".to_owned());
-        let (sbom, coverage) = sbom(&packages, &licences);
+        let (sbom, coverage) = sbom(&packages, &licences).expect("the packages are recordable");
 
         assert_eq!(
             sbom.components["pkg:cargo/adler2@2.0.1"].license,
@@ -333,7 +342,7 @@ dependencies = [
     fn an_empty_lockfile_derives_an_empty_sbom() {
         let packages = parse("version = 4\n").expect("a lockfile");
         assert!(packages.is_empty());
-        let (sbom, coverage) = sbom(&packages, &BTreeMap::new());
+        let (sbom, coverage) = sbom(&packages, &BTreeMap::new()).expect("an empty sbom");
         assert!(sbom.names().is_empty());
         assert_eq!(coverage.packages, 0);
         assert!(coverage.is_complete());

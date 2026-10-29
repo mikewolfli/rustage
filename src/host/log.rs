@@ -260,7 +260,9 @@ pub fn emit(level: Level, target: &str, message: &str) {
     let Some(logger) = PROCESS_LOGGER.get() else {
         return;
     };
-    let mut logger = logger.lock().expect("the process logger is never poisoned");
+    let mut logger = logger
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _ = logger.log(level, target, message);
 }
 
@@ -269,7 +271,9 @@ pub fn flush() {
     let Some(logger) = PROCESS_LOGGER.get() else {
         return;
     };
-    let mut logger = logger.lock().expect("the process logger is never poisoned");
+    let mut logger = logger
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _ = logger.flush();
 }
 

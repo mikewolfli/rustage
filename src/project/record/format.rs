@@ -2496,14 +2496,15 @@ fn encode_service(entry: &ServiceEntry) -> Json {
 }
 
 pub(crate) fn check_unique<T: Unique>(entries: &[T]) -> Result<(), ProjectError> {
-    let mut seen = Vec::new();
+    // A set instead of a vector makes the duplicate check logarithmic per entry rather than a scan
+    // of everything seen so far.
+    let mut seen = std::collections::BTreeSet::new();
     for entry in entries {
         let claim = entry.claim();
         let path = entry.claim_path();
-        if seen.contains(&claim) {
+        if !seen.insert(claim.clone()) {
             return Err(ProjectError::Duplicate { path, claim });
         }
-        seen.push(claim);
     }
     Ok(())
 }
@@ -2613,10 +2614,31 @@ pub(crate) fn check_generated_sources(
     pages: &[PageEntry],
     generated: &[GeneratedTarget],
 ) -> Result<(), ProjectError> {
+    use std::collections::HashSet;
+
+    // `resolves_like` compares resolved paths when both sides have one and falls back to the
+    // written text otherwise. Two indexes keep that exact rule while making each lookup constant
+    // instead of a scan of every page.
+    let mut paths: HashSet<&std::path::Path> = HashSet::new();
+    let mut written_any: HashSet<&str> = HashSet::new();
+    let mut written_unresolved: HashSet<&str> = HashSet::new();
+    for page in pages {
+        let document = &page.document;
+        written_any.insert(document.written());
+        match document.resolved() {
+            Some(path) => {
+                paths.insert(path);
+            }
+            None => {
+                written_unresolved.insert(document.written());
+            }
+        }
+    }
     for (index, entry) in generated.iter().enumerate() {
-        let known = pages
-            .iter()
-            .any(|page| page.document.resolves_like(&entry.from));
+        let known = match entry.from.resolved() {
+            Some(path) => paths.contains(path) || written_unresolved.contains(entry.from.written()),
+            None => written_any.contains(entry.from.written()),
+        };
         if !known {
             return Err(ProjectError::Dangling {
                 path: format!("generated[{index}].from"),

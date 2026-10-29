@@ -16,7 +16,8 @@
 //! * **A contrast is a number, or it is absent.** [`contrast`] answers `None` for a colour it cannot
 //!   read rather than a plausible ratio, so an unreadable colour cannot pass a check (principle 22).
 //! * **Unicode is not a special case.** Token names and values are just text; [`Session`] and the
-//!   token set handle `var(--字体)` because names are made of alphanumerics, which CJK characters are.
+//!   token set handle `var(--café)` because names are made of alphanumerics, and an accented letter
+//!   is one.
 
 #![allow(dead_code)]
 

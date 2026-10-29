@@ -1096,9 +1096,14 @@ fn record(
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .expect("the permission service is never poisoned: no panic escapes its critical sections")
+    mutex.lock().unwrap_or_else(|poisoned| {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "host::permission",
+            "the permission service lock was poisoned; recovering its inner state",
+        );
+        poisoned.into_inner()
+    })
 }
 
 #[cfg(test)]

@@ -65,8 +65,16 @@ pub(super) struct CanvasState {
     tree: Tree,
     scene: Scene,
     selected: Vec<NodeId>,
-    nodes: Vec<Node>,
+    /// Each node's design-space rectangle, keyed by id so [`Self::rect`] is a lookup rather than a
+    /// scan and [`Self::nodes`] is one pass over the scene order.
+    nodes: BTreeMap<NodeId, Rect>,
     contracts: BTreeMap<NodeId, NodeContract>,
+    /// A counter that changes whenever the picture the window mirrors changes: names, selection or
+    /// membership. The window uses it to skip rebuilding a canvas snapshot that cannot differ.
+    revision: u64,
+    /// A counter for the Outline's row content (names and membership), which selection changes do
+    /// not alter. The window uses it to avoid rebuilding every row on a click.
+    content_revision: u64,
 }
 
 impl CanvasState {
@@ -97,7 +105,7 @@ impl CanvasState {
             .insert(Some(root), Kind::Widget, "footer")
             .expect("a widget is allowed in a container");
 
-        let mut nodes = Vec::new();
+        let mut nodes = BTreeMap::new();
         for (node, rect) in [
             (root, Rect::new(0, 0, 600, 400)),
             (panel, Rect::new(40, 60, 520, 280)),
@@ -107,7 +115,7 @@ impl CanvasState {
             (footer, Rect::new(40, 330, 200, 40)),
         ] {
             scene.insert(node, rect);
-            nodes.push(Node { node, rect });
+            nodes.insert(node, rect);
         }
         scene.set_hidden(note, true);
         scene.set_locked(footer, true);
@@ -129,6 +137,8 @@ impl CanvasState {
             selected: Vec::new(),
             nodes,
             contracts,
+            revision: 0,
+            content_revision: 0,
         }
     }
 
@@ -218,13 +228,29 @@ impl CanvasState {
     pub(super) fn rename(&mut self, node: NodeId, name: &str) -> Result<(), String> {
         self.tree
             .rename(node, name)
-            .map_err(|error| error.message())
+            .map_err(|error| error.message())?;
+        self.revision += 1;
+        self.content_revision += 1;
+        Ok(())
+    }
+
+    /// The revision of the picture the window mirrors (names, selection, membership).
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The revision of the Outline's row content: names and membership, not selection.
+    pub(super) fn content_revision(&self) -> u64 {
+        self.content_revision
     }
 
     /// Clears the selection, which is what a click on empty canvas does.
     pub(super) fn clear_selection(&mut self) -> usize {
         let had = self.selected.len();
-        self.selected.clear();
+        if had > 0 {
+            self.selected.clear();
+            self.revision += 1;
+        }
         had
     }
 
@@ -249,6 +275,7 @@ impl CanvasState {
             return Ok(());
         }
         self.selected = vec![node];
+        self.revision += 1;
         Ok(())
     }
 
@@ -260,7 +287,10 @@ impl CanvasState {
                 selected.push(node);
             }
         }
-        self.selected = selected;
+        if selected != self.selected {
+            self.selected = selected;
+            self.revision += 1;
+        }
         self.selected.len()
     }
 
@@ -276,19 +306,24 @@ impl CanvasState {
 
     /// A node's design-space rectangle.
     pub(super) fn rect(&self, node: NodeId) -> Option<Rect> {
-        self.nodes
-            .iter()
-            .find(|entry| entry.node == node)
-            .map(|entry| entry.rect)
+        self.nodes.get(&node).copied()
     }
 
-    /// Every node with its rectangle, in paint order (bottom first).
+    /// Every visible node with its rectangle, in paint order (bottom first).
+    ///
+    /// One pass over the scene order and one map lookup per node, so the cost is linear in the
+    /// number of nodes rather than the old scan-within-scan.
     pub(super) fn nodes(&self) -> Vec<Node> {
         self.scene
             .order()
             .iter()
-            .filter_map(|node| self.rect(*node).map(|rect| Node { node: *node, rect }))
-            .filter(|entry| !self.scene.is_hidden(entry.node))
+            .filter(|node| !self.scene.is_hidden(**node))
+            .filter_map(|node| {
+                self.nodes.get(node).map(|rect| Node {
+                    node: *node,
+                    rect: *rect,
+                })
+            })
             .collect()
     }
 
@@ -333,10 +368,12 @@ impl CanvasState {
         // rectangle go with it, so no descendant is left behind as a hit-test target.
         for removed in &report.removed {
             self.scene.remove(*removed);
-            self.nodes.retain(|entry| entry.node != *removed);
+            self.nodes.remove(removed);
             self.contracts.remove(removed);
             self.selected.retain(|selected| selected != removed);
         }
+        self.revision += 1;
+        self.content_revision += 1;
         Ok(report.render())
     }
 
@@ -348,11 +385,6 @@ impl CanvasState {
     /// Whether a node is locked.
     pub(super) fn is_locked(&self, node: NodeId) -> bool {
         self.scene.is_locked(node)
-    }
-
-    /// The row index that names `node`, when the tree still holds it.
-    pub(super) fn row_of(&self, node: NodeId) -> Option<usize> {
-        self.row_nodes().iter().position(|row| *row == node)
     }
 }
 

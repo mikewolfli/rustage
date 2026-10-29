@@ -100,7 +100,7 @@ pub(super) fn locale_report(directory: &Path) -> bool {
             rules.sorted(&sample).join(" < ")
         );
 
-        let path = directory.join(format!("{}.lang", catalog.language().tag()));
+        let path = directory.join(format!("{}.json", catalog.language().tag()));
         if let Err(error) = std::fs::write(&path, catalog.pack().encode()) {
             eprintln!("rustage: could not write {}: {error}", path.display());
             return false;

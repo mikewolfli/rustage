@@ -1345,7 +1345,7 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
         Ok(states) => states,
         Err(reason) => {
             let stderr = old.process.stderr();
-            let _ = old.process.finish(Duration::from_secs(2));
+            finish_process(&mut old.process, "the old generation");
             return report(format!("{reason}\n{}", stderr.trim()));
         }
     };
@@ -1366,7 +1366,7 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                     // serving (the pause reply proves the process is alive), so report the
                     // bound instead of taking a snapshot of a half-paused generation.
                     note_old_still_serving(&mut old, first_generation, timeout);
-                    let _ = old.process.finish(Duration::from_secs(2));
+                    finish_process(&mut old.process, "the old generation");
                     return report(outcome.render());
                 }
                 match active.paused() {
@@ -1379,21 +1379,21 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                         Err(refusal) => return report(refusal.render()),
                     },
                     Ok(reply) => {
-                        let _ = old.process.finish(Duration::from_secs(2));
+                        finish_process(&mut old.process, "the old generation");
                         return report(format!("the old generation did not drain: {reply:?}"));
                     }
                     Err(reason) => {
-                        let _ = old.process.finish(Duration::from_secs(2));
+                        finish_process(&mut old.process, "the old generation");
                         return report(reason);
                     }
                 }
             }
             Ok(reply) => {
-                let _ = old.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
                 return report(format!("the old generation did not pause: {reply:?}"));
             }
             Err(reason) => {
-                let _ = old.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
                 return report(reason);
             }
         }
@@ -1410,11 +1410,11 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                 Some(text)
             }
             Ok(text) => {
-                let _ = old.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
                 return report(format!("the snapshot has no state: {text:?}"));
             }
             Err(reason) => {
-                let _ = old.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
                 return report(reason);
             }
         }
@@ -1436,7 +1436,7 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                 // state once more, so "the old generation stays in service" is an observation
                 // rather than a promise in the refusal text.
                 note_old_still_serving(&mut old, first_generation, timeout);
-                let _ = old.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
                 return report(reason);
             }
         },
@@ -1467,7 +1467,7 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
     ) {
         Ok(started) => started,
         Err(reason) => {
-            let _ = old.process.finish(Duration::from_secs(2));
+            finish_process(&mut old.process, "the old generation");
             return report(reason);
         }
     };
@@ -1505,28 +1505,31 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
                 // check, not a copy of the sender's preview. The switch has not happened, so the
                 // old process is asked for its state before both ends are closed.
                 if let Some(active) = swap.as_mut() {
+                    // `ImportFailed` is the expected answer here: this call records the new
+                    // generation's refusal and aborts the walk. There is no separate cleanup failure
+                    // to report, because the phase is the evidence.
                     let _ = active.import(false);
                 }
                 let reason =
                     unescape_text(restored.strip_prefix("error=").unwrap_or(restored.as_str()));
                 note_old_still_serving(&mut old, first_generation, timeout);
-                let _ = old.process.finish(Duration::from_secs(2));
-                let _ = new.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
+                finish_process(&mut new.process, "the new generation");
                 return report(format!(
                     "the new generation refused the import: {reason}; generation {first_generation} \
                      was not replaced"
                 ));
             }
             Ok(restored) => {
-                let _ = old.process.finish(Duration::from_secs(2));
-                let _ = new.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
+                finish_process(&mut new.process, "the new generation");
                 return report(format!(
                     "the new generation restored {restored:?}, not the snapshot {snapshot:?}"
                 ));
             }
             Err(reason) => {
-                let _ = old.process.finish(Duration::from_secs(2));
-                let _ = new.process.finish(Duration::from_secs(2));
+                finish_process(&mut old.process, "the old generation");
+                finish_process(&mut new.process, "the new generation");
                 return report(reason);
             }
         }
@@ -1535,8 +1538,8 @@ pub(super) fn logic_process(options: &crate::cli::LogicProcessOptions) -> bool {
         Ok(states) => states,
         Err(reason) => {
             let stderr = new.process.stderr();
-            let _ = old.process.finish(Duration::from_secs(2));
-            let _ = new.process.finish(Duration::from_secs(2));
+            finish_process(&mut old.process, "the old generation");
+            finish_process(&mut new.process, "the new generation");
             return report(format!("{reason}\n{}", stderr.trim()));
         }
     };
@@ -1699,6 +1702,23 @@ fn migrate_state(
 }
 
 /// Prints whether the old generation still answers `state` after a refused switch.
+/// Stops a generation's process after a refusal and reports a stop that failed.
+///
+/// `DuplexProcess::finish` returns an outcome rather than a `Result`; a `SignalFailed` outcome is
+/// the one case where the process may still be running, and swallowing it would make a cleanup
+/// failure look like a clean stop.
+fn finish_process(process: &mut crate::host::subprocess::DuplexProcess, label: &str) {
+    if let crate::host::subprocess::Termination::SignalFailed { reason } =
+        process.finish(std::time::Duration::from_secs(2))
+    {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::logic",
+            &format!("{label} could not be stopped: {reason}"),
+        );
+    }
+}
+
 fn note_old_still_serving(old: &mut StartedLogic, generation: u64, timeout: std::time::Duration) {
     match ask(old, "state", timeout) {
         Ok(state) => println!(

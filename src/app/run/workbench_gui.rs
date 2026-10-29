@@ -92,7 +92,8 @@ type PageControls = (u64, u64, u64, u64, u64, u64, u64, u64, u64);
 
 /// One editor group's widgets.
 struct GroupView {
-    tabs: Vec<u64>,
+    /// The library's tab strip for this group.
+    tabs: u64,
     editor: u64,
     /// The group's ids, so hiding a group hides its tab strip and editor together.
     all: Vec<u64>,
@@ -114,12 +115,9 @@ struct Gui {
     window: u64,
     /// Every widget's place in the responsive chrome.
     placements: Vec<(u64, Area)>,
-    /// The command palette's state, and the controls that mirror it.
+    /// The command palette's state and the one control that shows it.
     palette: Palette,
-    palette_widgets: Vec<u64>,
-    palette_query: u64,
-    palette_list: u64,
-    palette_help: u64,
+    palette_surface: u64,
     registry: Registry,
     recents: Recents,
     /// The Inspector's one editable property and the controls that mirror it.
@@ -167,19 +165,73 @@ struct Gui {
     ///
     /// Pointer motion can arrive much faster than the painter can draw; the snapshot is replaced
     /// in place and one repaint is queued, so a drag cannot pile up an unbounded number of frames.
-    canvas_snapshot: Arc<Mutex<CanvasSnapshot>>,
+    canvas_snapshot: Arc<Mutex<Arc<CanvasSnapshot>>>,
     canvas_scheduled: Arc<AtomicBool>,
+    /// The scene revision the last canvas snapshot was built from; a pointer event that changes
+    /// nothing in the scene reuses the node list instead of allocating it again.
+    canvas_revision: u64,
+    /// The Outline rows and their node ids, rebuilt only when names or membership change.
+    outline_rows: Vec<String>,
+    outline_index: BTreeMap<NodeId, usize>,
+    outline_content_revision: u64,
 }
 
-/// One frame of the canvas: each visible node's rectangle, name, hidden/locked/selected state,
+/// One visible node as the canvas paints it: rectangle, label, and hidden/locked/selected flags.
+type CanvasNode = (SceneRect, String, bool, bool, bool);
+
+/// One frame of the canvas: each visible node's rectangle, label, hidden/locked/selected state,
 /// and the marquee if a drag is in progress.
-type CanvasSnapshot = (
-    Vec<(SceneRect, String, bool, bool, bool)>,
-    Option<SceneRect>,
-);
+///
+/// The node list is shared behind an `Arc` so a scheduled frame clones the pointer, not every
+/// name. Only the marquee changes between pointer events.
+struct CanvasSnapshot {
+    nodes: Arc<[CanvasNode]>,
+    marquee: Option<SceneRect>,
+}
 
 /// How far a press must move in design space before it is a marquee rather than a click.
 const DRAG_THRESHOLD: u32 = 8;
+
+/// Reports a widget or model operation that failed during window construction or a callback.
+///
+/// These used to be `let _ =`: a refused registration or layout quietly removed a control with no
+/// record of why. The window keeps running, but the log says what did not happen (principle #22).
+fn warn_failure(what: &str, reason: impl std::fmt::Display) {
+    crate::host::log::emit(
+        crate::host::log::Level::Warn,
+        "app::run::workbench-gui",
+        &format!("{what}: {reason}"),
+    );
+}
+
+/// Shows a panel only when its backing service exists, and says why when it does not.
+fn show_panel_if_available(panels: &mut Panels, id: &str, services: &BTreeSet<String>) {
+    let Some(spec) = panels.spec(id) else {
+        warn_failure(
+            "a panel was not shown",
+            format!("there is no panel {id}; a panel is registered before it is shown"),
+        );
+        return;
+    };
+    let service = spec.service().map(str::to_owned);
+    if !spec.is_available(services) {
+        if let Err(error) = panels.hide(id) {
+            warn_failure("an unavailable panel could not be hidden", error.message());
+        }
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-gui",
+            &format!(
+                "panel {id} is registered but {} is unavailable, so it is not shown",
+                service.as_deref().unwrap_or("its service")
+            ),
+        );
+        return;
+    }
+    if let Err(error) = panels.show(id) {
+        warn_failure("a panel could not be shown", error.message());
+    }
+}
 
 impl Gui {
     fn status_line(&self) -> String {
@@ -231,7 +283,7 @@ impl Gui {
         // The model decides how many groups exist; the responsive layout follows it. Geometry is
         // no longer written here, so the two cannot disagree about which box a group owns.
         self.refresh_layout();
-        let groups: Vec<(u64, Vec<String>, String)> = self
+        let groups: Vec<(u64, Vec<String>, String, Option<usize>)> = self
             .groups
             .group_ids()
             .into_iter()
@@ -247,11 +299,15 @@ impl Gui {
                     .and_then(|tab| self.groups.text(tab.document()))
                     .unwrap_or("")
                     .to_owned();
-                (group.get(), documents, text)
+                let active = tabs
+                    .tabs()
+                    .iter()
+                    .position(|tab| tabs.active().is_some_and(|active| active == tab));
+                (group.get(), documents, text, active)
             })
             .collect();
         for (index, view) in self.group_views.iter_mut().enumerate() {
-            let Some((_, documents, text)) = groups.get(index) else {
+            let Some((_, documents, text, active)) = groups.get(index) else {
                 for widget in &view.all {
                     rust_widgets::set_widget_visible(*widget, false);
                 }
@@ -260,13 +316,28 @@ impl Gui {
             for widget in &view.all {
                 rust_widgets::set_widget_visible(*widget, true);
             }
-            for (button, document) in view.tabs.iter().zip(documents.iter()) {
+            // The tab strip is the library's `TabWidget`; the model still owns which documents
+            // exist and which one is active. Titles and count are mirrored here, so a document
+            // that appears or disappears cannot leave a stale tab behind.
+            let tabs = rust_widgets::app::TabWidgetHandle::from_raw(view.tabs);
+            let mut count = tabs.tab_count();
+            for (tab, document) in documents.iter().enumerate() {
                 let label = document.rsplit('/').next().unwrap_or(document);
-                rust_widgets::set_widget_text(*button, label);
-                rust_widgets::set_widget_visible(*button, true);
+                if tab < count {
+                    tabs.set_tab_text(tab, label);
+                } else if tabs.add_tab(label, None).is_some() {
+                    count += 1;
+                }
             }
-            for button in view.tabs.iter().skip(documents.len()) {
-                rust_widgets::set_widget_visible(*button, false);
+            while count > documents.len() {
+                if tabs.remove_tab(count - 1) {
+                    count -= 1;
+                } else {
+                    break;
+                }
+            }
+            if let Some(active) = active {
+                tabs.set_current_index(*active);
             }
             let applied = with_widget_mut(view.editor, |widget| {
                 let any: &mut dyn std::any::Any = widget;
@@ -361,7 +432,33 @@ fn subscribe_index(
     if !subscribed {
         crate::host::log::emit(
             crate::host::log::Level::Warn,
-            "app::run::workbench-palette",
+            "app::run::workbench",
+            &format!("control {id} publishes no {event} signal"),
+        );
+    }
+}
+
+/// Subscribes one payload-carrying signal whose payload is a string.
+fn subscribe_string(
+    id: u64,
+    event: &'static str,
+    mut callback: impl FnMut(&str) + Send + Sync + 'static,
+) {
+    let subscribed = with_widget_mut(id, move |widget| {
+        widget.event_signal_dyn(event).map(|signal| {
+            signal.subscribe(Box::new(move |payload| {
+                if let CapabilityValue::String(text) = payload {
+                    callback(text);
+                }
+            }))
+        })
+    })
+    .flatten()
+    .is_some();
+    if !subscribed {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::workbench",
             &format!("control {id} publishes no {event} signal"),
         );
     }
@@ -394,23 +491,37 @@ fn watch_focus(id: u64, name: &'static str) {
 }
 
 fn sync_palette(gui: &mut Gui) {
-    let rows = gui.palette.rows();
-    let selected = gui.palette.selected();
-    let has_selection = gui.palette.selected_entry().is_some();
-    rust_widgets::set_widget_text(gui.palette_help, &gui.palette.help(&gui.registry));
-
-    // Rebuilding a list can make the control report a selection. Its callback locks the same
-    // `Gui` this function is called under, and a synchronous emit would deadlock the mutex.
-    // The list is therefore updated on the next main-loop turn, after the caller releases it.
-    let list = gui.palette_list;
+    let surface = gui.palette_surface;
+    if surface == 0 {
+        return;
+    }
+    let entries: Vec<rust_widgets::widget::special_widgets::CommandEntry> = gui
+        .palette
+        .entries()
+        .iter()
+        .map(|entry| {
+            let title = match entry.reason() {
+                Some(reason) => format!("{} — disabled: {reason}", entry.title()),
+                None => entry.title().to_owned(),
+            };
+            rust_widgets::widget::special_widgets::CommandEntry::new(entry.id(), title)
+                .with_category(entry.category())
+        })
+        .collect();
+    let query = gui.palette.query().to_owned();
+    // `CommandPalette` emits `query_changed` from `set_query`; the callback locks this same `Gui`,
+    // so the write happens on the next main-loop turn, after the caller releases the mutex.
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for row in &rows {
-            let _ = rust_widgets::list_box_add_item(list, row);
-        }
-        if has_selection {
-            let _ = rust_widgets::list_box_set_current_index(list, selected);
-        }
+        let _ = with_widget_mut(surface, move |widget| {
+            let Some(palette) = (widget as &mut dyn Any)
+                .downcast_mut::<rust_widgets::widget::special_widgets::CommandPalette>(
+            ) else {
+                return false;
+            };
+            palette.set_entries(entries);
+            palette.set_query(query);
+            true
+        });
     });
 }
 
@@ -440,7 +551,7 @@ fn refresh_inspector(gui: &mut Gui) {
     } else {
         gui.property.node().get().to_string()
     };
-    let items = [
+    let mut items = vec![
         format!("node: {nodes}"),
         format!("kind: {kind} · {contract}"),
         format!(
@@ -456,6 +567,15 @@ fn refresh_inspector(gui: &mut Gui) {
                 .unwrap_or("(not themed)")
         ),
     ];
+    // The contract's default and accepted tokens are shown beside the value, so an enum property
+    // does not ask a person to type a token the schema already enumerates.
+    if let Some(default) = gui.property.contract_default() {
+        items.push(format!("default: {default}"));
+    }
+    let tokens = gui.property.accepted_tokens();
+    if !tokens.is_empty() {
+        items.push(format!("accepted: {}", tokens.join(" | ")));
+    }
     rust_widgets::list_box_clear_items(gui.inspector_list);
     for item in &items {
         let _ = rust_widgets::list_box_add_item(gui.inspector_list, item);
@@ -729,17 +849,37 @@ fn canvas_point(canvas_panel: u64, x: i32, y: i32) -> Option<(i32, i32)> {
 ///
 /// The list is rebuilt on the next main-loop turn: an emit from `list_box_clear_items` or
 /// `list_box_set_current_index` would re-enter the `Gui` mutex this function is called under.
+/// Rows are rebuilt only when a name or the membership changed; a click or a marquee only moves
+/// the current row, so it does not pay for every row's indentation string again.
 fn sync_outline(gui: &mut Gui) {
-    let rows = gui.scene.rows();
-    let selected = gui.scene.primary().and_then(|node| gui.scene.row_of(node));
     let list = gui.outline_list;
     if list == 0 {
         return;
     }
+    let revision = gui.scene.content_revision();
+    let rows_changed = revision != gui.outline_content_revision;
+    if rows_changed {
+        gui.outline_rows = gui.scene.rows();
+        gui.outline_index = gui
+            .scene
+            .row_nodes()
+            .into_iter()
+            .enumerate()
+            .map(|(index, node)| (node, index))
+            .collect();
+        gui.outline_content_revision = revision;
+    }
+    let selected = gui
+        .scene
+        .primary()
+        .and_then(|node| gui.outline_index.get(&node).copied());
+    let rows = rows_changed.then(|| gui.outline_rows.clone());
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for row in &rows {
-            let _ = rust_widgets::list_box_add_item(list, row);
+        if let Some(rows) = rows {
+            rust_widgets::list_box_clear_items(list);
+            for row in &rows {
+                let _ = rust_widgets::list_box_add_item(list, row);
+            }
         }
         if let Some(index) = selected {
             let _ = rust_widgets::list_box_set_current_index(list, index);
@@ -753,21 +893,7 @@ fn sync_outline(gui: &mut Gui) {
 /// The draw is deferred: the model is read while the `Gui` mutex is held, and the widget is
 /// repainted on the next main-loop turn so a signal callback can call this without re-entering the
 /// runtime while its control is the event target.
-fn sync_canvas(gui: &Gui) {
-    let nodes: Vec<(SceneRect, String, bool, bool, bool)> = gui
-        .scene
-        .nodes()
-        .into_iter()
-        .map(|node| {
-            (
-                node.rect,
-                gui.scene.name(node.node).unwrap_or("?").to_owned(),
-                gui.scene.is_hidden(node.node),
-                gui.scene.is_locked(node.node),
-                gui.scene.selected().contains(&node.node),
-            )
-        })
-        .collect();
+fn sync_canvas(gui: &mut Gui) {
     let marquee = if gui.drag_active {
         match (gui.drag_start, gui.pointer) {
             (Some(start), Some(end)) => Some(span(start, end)),
@@ -776,8 +902,45 @@ fn sync_canvas(gui: &Gui) {
     } else {
         None
     };
+    let revision = gui.scene.revision();
+    // Building the node list allocates one name per visible node, so it happens only when the
+    // scene actually changed. A drag emits a pointer event per pixel; those events only move the
+    // marquee and reuse the shared node list.
+    let nodes = if revision == gui.canvas_revision {
+        match gui.canvas_snapshot.lock() {
+            Ok(snapshot) => Arc::clone(&snapshot.nodes),
+            Err(_) => return,
+        }
+    } else {
+        let selected = gui.scene.selected();
+        let nodes: Arc<[CanvasNode]> = gui
+            .scene
+            .nodes()
+            .into_iter()
+            .map(|node| {
+                let name = gui.scene.name(node.node).unwrap_or("?");
+                let label = if gui.scene.is_locked(node.node) {
+                    format!("{name} [locked]")
+                } else {
+                    name.to_owned()
+                };
+                (
+                    node.rect,
+                    label,
+                    gui.scene.is_hidden(node.node),
+                    gui.scene.is_locked(node.node),
+                    selected.contains(&node.node),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        gui.canvas_revision = revision;
+        nodes
+    };
     if let Ok(mut snapshot) = gui.canvas_snapshot.lock() {
-        *snapshot = (nodes, marquee);
+        // Replacing the `Arc` is cheap and keeps the old list alive in any frame already reading
+        // it.
+        *snapshot = Arc::new(CanvasSnapshot { nodes, marquee });
     }
     // One queued frame at a time, and it reads the newest snapshot when it runs. A drag that
     // emits a pointer event per pixel therefore repaints at the loop's pace instead of stacking
@@ -790,8 +953,10 @@ fn sync_canvas(gui: &Gui) {
     let panel = gui.canvas_panel;
     let surface = gui.canvas_surface;
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(8), move || {
-        if let Ok((nodes, marquee)) = snapshot.lock().map(|snapshot| snapshot.clone()) {
-            draw_canvas(panel, surface, &nodes, marquee);
+        if let Ok(snapshot) = snapshot.lock() {
+            let frame = Arc::clone(&snapshot);
+            drop(snapshot);
+            draw_canvas(panel, surface, &frame);
         }
         scheduled.store(false, Ordering::SeqCst);
     });
@@ -809,17 +974,13 @@ const TEXT: rust_widgets::core::Color = rust_widgets::core::Color::rgb(0x1D, 0x1
 const MUTED_TEXT: rust_widgets::core::Color = rust_widgets::core::Color::rgb(0x86, 0x86, 0x8B);
 
 /// Paints the design surface and every visible node in one pass.
-fn draw_canvas(
-    panel: u64,
-    surface: u64,
-    nodes: &[(SceneRect, String, bool, bool, bool)],
-    marquee: Option<SceneRect>,
-) {
+fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
     let Some(rect) = with_widget_mut(panel, |widget| widget.geometry()) else {
         return;
     };
     let transform = CanvasTransform::new(rect);
-    let font = rust_widgets::core::Font::new("Inter", 13.0, false, false);
+    static FONT: std::sync::OnceLock<rust_widgets::core::Font> = std::sync::OnceLock::new();
+    let font = FONT.get_or_init(|| rust_widgets::core::Font::new("Inter", 13.0, false, false));
     let _ = with_widget_mut(surface, |widget| {
         let Some(canvas) = (widget as &mut dyn Any)
             .downcast_mut::<rust_widgets::widget::special_widgets::Canvas>()
@@ -828,7 +989,7 @@ fn draw_canvas(
         };
         canvas.clear();
         canvas.fill_rect(rect, CANVAS_BACKGROUND);
-        for (design, name, hidden, locked, selected) in nodes {
+        for (design, name, hidden, locked, selected) in frame.nodes.iter() {
             if *hidden {
                 continue;
             }
@@ -842,19 +1003,14 @@ fn draw_canvas(
             };
             canvas.fill_rect(node, fill);
             canvas.draw_rect(node, border);
-            let label = if *locked {
-                format!("{name} [locked]")
-            } else {
-                name.clone()
-            };
             canvas.draw_text(
                 Point::new(node.x + 8, node.y + 8),
-                &label,
-                &font,
+                name,
+                font,
                 if *locked { MUTED_TEXT } else { TEXT },
             );
         }
-        if let Some(marquee) = marquee {
+        if let Some(marquee) = frame.marquee {
             canvas.draw_rect(transform.place(marquee), ACCENT);
         }
     });
@@ -1034,20 +1190,14 @@ fn open_palette(gui: &mut Gui) {
     palette_with(gui, |palette, registry, recents| {
         palette.open(previous, registry, &context, recents);
     });
-    for id in &gui.palette_widgets {
-        rust_widgets::set_widget_visible(*id, true);
+    if gui.palette_surface != 0 {
+        rust_widgets::set_widget_visible(gui.palette_surface, true);
     }
     // The palette is placed by the same responsive layout as the chrome, so the overlay follows
     // a resize instead of keeping the geometry it was created with.
     gui.refresh_layout();
-    // The palette starts empty. The model was reset synchronously; the field is cleared on the
-    // next main-loop turn so its value callback cannot re-enter the `Gui` mutex this action holds.
-    let query_field = gui.palette_query;
-    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::set_widget_text(query_field, "");
-    });
     sync_palette(gui);
-    if focus_widget(gui.palette_query) {
+    if gui.palette_surface != 0 && focus_widget(gui.palette_surface) {
         gui.message = "command palette".to_owned();
         crate::host::log::emit(
             crate::host::log::Level::Info,
@@ -1059,7 +1209,7 @@ fn open_palette(gui: &mut Gui) {
         crate::host::log::emit(
             crate::host::log::Level::Info,
             "app::run::workbench-palette",
-            "palette could not focus its query field",
+            "palette could not focus its control",
         );
         close_palette(gui);
     }
@@ -1071,20 +1221,16 @@ fn close_palette(gui: &mut Gui) {
         return;
     }
     let previous = gui.palette.close();
-    for id in &gui.palette_widgets {
-        rust_widgets::set_widget_visible(*id, false);
+    if gui.palette_surface != 0 {
+        rust_widgets::set_widget_visible(gui.palette_surface, false);
     }
     match previous {
-        Some(id) if !gui.palette_widgets.contains(&id) => {
+        Some(id) if id != gui.palette_surface => {
             if !focus_widget(id) {
                 clear_focus();
             }
         }
-        Some(_) => {
-            // The keyboard was already on a palette control; there is nowhere useful to restore.
-            clear_focus();
-        }
-        None => {
+        Some(_) | None => {
             clear_focus();
         }
     }
@@ -1109,9 +1255,10 @@ fn shortcut_summary() -> String {
     format!("shortcuts: {}", parts.join(" · "))
 }
 
-fn run_palette_selected(gui: &mut Gui) {
-    let Some(entry) = gui.palette.selected_entry().cloned() else {
-        gui.message = "no command is selected".to_owned();
+fn run_palette_id(gui: &mut Gui, id: &str) {
+    let Some(entry) = gui.palette.entry_by_id(id).cloned() else {
+        gui.message = format!("{id}: no such command is registered");
+        update_status(gui);
         return;
     };
     if !entry.is_enabled() {
@@ -1158,7 +1305,9 @@ fn run_palette_selected(gui: &mut Gui) {
 fn apply_action(gui: &mut Gui, action: &str) {
     if let Some(id) = action.strip_prefix("toggle:") {
         if gui.panels.layout().shown().iter().any(|shown| shown == id) {
-            let _ = gui.panels.hide(id);
+            if let Err(error) = gui.panels.hide(id) {
+                warn_failure("a panel could not be hidden", error.message());
+            }
             gui.message = format!("hidden {id}");
         } else if gui.panels.show(id).is_ok() {
             gui.message = format!("shown {id}");
@@ -1186,7 +1335,9 @@ fn apply_action(gui: &mut Gui, action: &str) {
             None => gui.message = "no --layout path was given".to_owned(),
         },
         "layout:reset" => {
-            let _ = gui.default_layout.apply(&mut gui.groups, &mut gui.panels);
+            if let Err(error) = gui.default_layout.apply(&mut gui.groups, &mut gui.panels) {
+                warn_failure("the default layout could not be applied", error.message());
+            }
             gui.message = "layout reset".to_owned();
             gui.sync_panels();
             gui.sync_editors();
@@ -1217,16 +1368,6 @@ fn apply_action(gui: &mut Gui, action: &str) {
         gui.status,
         &format!("{} | {}", gui.status_line(), gui.message),
     );
-}
-
-fn wire_button(button: &ButtonHandle, action: &str, gui: &Arc<Mutex<Gui>>) {
-    let gui = Arc::clone(gui);
-    let action = action.to_owned();
-    button.on_click(move || {
-        if let Ok(mut gui) = gui.lock() {
-            apply_action(&mut gui, &action);
-        }
-    });
 }
 
 /// Wires one debug-panel control to the worker command it names.
@@ -1332,22 +1473,6 @@ fn apply_debug_update(gui: &mut Gui, update: DebugUpdate) {
     }
 }
 
-fn wire_tab(button: &ButtonHandle, group: usize, index: usize, gui: &Arc<Mutex<Gui>>) {
-    let gui = Arc::clone(gui);
-    button.on_click(move || {
-        if let Ok(mut gui) = gui.lock() {
-            let Some(id) = gui.groups.group_ids().get(group).copied() else {
-                return;
-            };
-            if let Some(tabs) = gui.groups.tabs_mut(id) {
-                let _ = tabs.activate(index);
-            }
-            gui.message = format!("tab {index} in group {group}");
-            gui.sync_editors();
-        }
-    });
-}
-
 /// Opens the workbench window and runs it until the window closes or the deadline passes.
 pub(super) fn workbench_gui(
     layout_path: Option<PathBuf>,
@@ -1383,18 +1508,21 @@ pub(super) fn workbench_gui(
     workbench.open_document("src/main.rs");
     workbench.set_target("desktop");
 
-    let mut panels = built_in_panels();
-    for (id, title, dock) in EXTRA_PANELS {
-        let _ = panels.register(PanelSpec::new(id, title, dock, 300));
-        let _ = panels.show(id);
-    }
-    // The services the built-in panels need are the ones this slice actually has: the document
-    // tree, a property schema and diagnostics all come from models that exist.
-    let services: BTreeSet<String> = ["document-tree", "property-schema", "diagnostics"]
+    // The services the built-in panels need are the ones this slice actually has: a property
+    // schema and diagnostics come from models that exist. `document-tree` does not exist yet, so
+    // the Outline is registered but hidden instead of being shown without a backend (I-11). A
+    // panel whose service is missing stays registered but is not shown (T04.02's gate), and the
+    // log names it.
+    let services: BTreeSet<String> = ["property-schema", "diagnostics"]
         .into_iter()
         .map(str::to_owned)
         .collect();
-    let _ = &services;
+    let mut panels = built_in_panels();
+    for (id, title, dock) in EXTRA_PANELS {
+        if let Err(error) = panels.register(PanelSpec::new(id, title, dock, 300)) {
+            warn_failure("an extra panel could not be registered", error.message());
+        }
+    }
     for id in [
         "pages",
         "outline",
@@ -1405,7 +1533,7 @@ pub(super) fn workbench_gui(
         "data",
         "debug",
     ] {
-        let _ = panels.show(id);
+        show_panel_if_available(&mut panels, id, &services);
     }
 
     let mut groups = Groups::new(8);
@@ -1421,18 +1549,23 @@ pub(super) fn workbench_gui(
         ("styles.css", "window {\n  background: #1e1e1e;\n}\n"),
     ] {
         groups.pin(document);
-        let _ = groups.type_into(text);
+        if let Err(reason) = groups.type_into(text) {
+            warn_failure("the demo document text could not be set", reason);
+        }
     }
     let focus = groups.focus();
-    if let Some(tabs) = groups.tabs_mut(focus) {
-        let _ = tabs.activate(0);
+    if let Some(tabs) = groups.tabs_mut(focus)
+        && let Err(reason) = tabs.activate(0)
+    {
+        warn_failure("the first tab could not be activated", reason);
     }
     let default_layout = Layout::captured("default", &groups, &panels, false, false);
     if let Some(path) = &layout_path
         && let Ok(text) = std::fs::read_to_string(path)
         && let Ok(layout) = Layout::from_json(&text)
+        && let Err(error) = layout.apply(&mut groups, &mut panels)
     {
-        let _ = layout.apply(&mut groups, &mut panels);
+        warn_failure("the saved layout could not be applied", error.message());
     }
 
     // The design scene starts with its panel selected, which is the node the Inspector's seed is
@@ -1456,7 +1589,9 @@ pub(super) fn workbench_gui(
             }
             Err(reason) => property.report_unavailable(initial, &name, reason),
         }
-        let _ = scene.select_only(initial);
+        if let Err(reason) = scene.select_only(initial) {
+            warn_failure("the initial scene selection was refused", reason);
+        }
     }
 
     let gui = Arc::new(Mutex::new(Gui {
@@ -1472,10 +1607,7 @@ pub(super) fn workbench_gui(
         window,
         placements: Vec::new(),
         palette: Palette::new(),
-        palette_widgets: Vec::new(),
-        palette_query: 0,
-        palette_list: 0,
-        palette_help: 0,
+        palette_surface: 0,
         registry: built_in(),
         recents: Recents::new(8),
         property,
@@ -1510,14 +1642,26 @@ pub(super) fn workbench_gui(
         pages_error: 0,
         pages_note: 0,
         pages_selected: 0,
-        canvas_snapshot: Arc::new(Mutex::new((Vec::new(), None))),
+        canvas_snapshot: Arc::new(Mutex::new(Arc::new(CanvasSnapshot {
+            nodes: Arc::from(Vec::new()),
+            marquee: None,
+        }))),
         canvas_scheduled: Arc::new(AtomicBool::new(false)),
+        canvas_revision: u64::MAX,
+        outline_rows: Vec::new(),
+        outline_index: BTreeMap::new(),
+        outline_content_revision: u64::MAX,
     }));
 
     // Menu bar. The toolbar is the portable path (macOS paints no native menus in this revision);
     // the menu bar is still created because on the other hosts it is the native one.
     let bar = handle.new_menu_bar(0, 0, WIDTH, MENU_HEIGHT);
-    let _ = handle.attach_menu_bar(&bar);
+    if !handle.attach_menu_bar(&bar) {
+        warn_failure(
+            "the menu bar could not be attached",
+            "the window refused it; the menu actions are still reachable from the toolbar",
+        );
+    }
     if let Ok(mut gui) = gui.lock() {
         gui.placements.push((bar.raw_id(), Area::Menu));
     }
@@ -1557,10 +1701,9 @@ pub(super) fn workbench_gui(
         }
     }
 
-    // Toolbar. Buttons are the actions a person can reach without a menu. Their widths are
-    // shared evenly by the responsive layout, so a wider window widens them rather than leaving
-    // a strip of unused chrome at the right edge.
-    let toolbar: Vec<(&str, &str)> = vec![
+    // Toolbar. The strip is the library's `ToolBar`, and each action is one of its items; the
+    // model still decides what an action does, so a click and a menu entry share `apply_action`.
+    let toolbar_items: Vec<(&str, &str)> = vec![
         ("Commands", "palette:open"),
         ("Outline", "toggle:outline"),
         ("Inspector", "toggle:inspector"),
@@ -1573,19 +1716,38 @@ pub(super) fn workbench_gui(
         ("Save layout", "layout:save"),
         ("Reset layout", "layout:reset"),
     ];
-    let toolbar_count = toolbar.len() as u32;
-    for (index, (label, action)) in toolbar.iter().enumerate() {
-        let button = handle.new_button(label, 0, TOOLBAR_Y, 120, TOOLBAR_HEIGHT);
-        wire_button(&button, action, &gui);
-        if let Ok(mut gui) = gui.lock() {
-            gui.placements.push((
-                button.raw_id(),
-                Area::Toolbar {
-                    index: index as u32,
-                    count: toolbar_count,
-                },
-            ));
+    let tool_bar = handle.new_tool_bar(8, TOOLBAR_Y, WIDTH - 16, TOOLBAR_HEIGHT);
+    let inserted = with_widget_mut(tool_bar.raw_id(), |widget| {
+        let Some(bar) = (widget as &mut dyn Any).downcast_mut::<rust_widgets::widget::ToolBar>()
+        else {
+            return false;
+        };
+        for (index, (label, action)) in toolbar_items.iter().enumerate() {
+            bar.insert_item(
+                index,
+                rust_widgets::widget::menu_toolbar::tool_bar::ToolBarItem::new(*action, *label),
+            );
         }
+        true
+    })
+    .unwrap_or(false);
+    if !inserted {
+        warn_failure(
+            "the tool bar could not be filled",
+            "the mounted control was not a ToolBar",
+        );
+    }
+    {
+        let gui = Arc::clone(&gui);
+        subscribe_string(tool_bar.raw_id(), "action_triggered", move |action| {
+            if let Ok(mut gui) = gui.lock() {
+                apply_action(&mut gui, action);
+            }
+        });
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.placements
+            .push((tool_bar.raw_id(), Area::Toolbar { index: 0, count: 1 }));
     }
 
     // Docked panels. The model owns which panels exist and whether they are shown; the responsive
@@ -1656,10 +1818,12 @@ pub(super) fn workbench_gui(
     ] {
         let panel = handle.new_panel(rect.0, rect.1, rect.2, rect.3);
         panel.set_title(title);
+        // The panel is the library's `GroupBox`: `set_title` draws the title band itself, so the
+        // list starts below that band. A second same-named label used to duplicate the title
+        // (blue21 W-2e).
         // Child factories parent the controls to the panel, so the panel's layout, clipping and
         // teardown own them; asking the window for them (2.8.10 and earlier) left the parent link
         // as an implicit contract (feedback-20261020 §3.1, closed by 2.8.11).
-        let title_widget = panel.new_label(title, rect.0 + 8, rect.1 + 6, rect.2 - 16, 20);
         let list = panel.new_list_box(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 38);
         let focus_name = match id {
             "pages" => "pages list",
@@ -1673,9 +1837,6 @@ pub(super) fn workbench_gui(
         };
         watch_focus(list.raw_id(), focus_name);
         let mut inner = BoxLayout::new(Orientation::Vertical, 4, 8);
-        inner.add_widget(title_widget.raw_id(), 0);
-        inner.set_constraints(title_widget.raw_id(), LayoutConstraints::new(20, Some(20)));
-        inner.set_size_policy(title_widget.raw_id(), SizePolicy::Fixed);
         inner.add_widget(list.raw_id(), 1);
         inner.set_size_policy(list.raw_id(), SizePolicy::Expanding);
         let mut extra_widgets: Vec<u64> = Vec::new();
@@ -1942,7 +2103,6 @@ pub(super) fn workbench_gui(
             gui.placements.push((panel.raw_id(), area));
             let entry = gui.panel_widgets.entry(id.to_owned()).or_default();
             entry.push(panel.raw_id());
-            entry.push(title_widget.raw_id());
             entry.push(list.raw_id());
             entry.extend(extra_widgets);
         }
@@ -2016,15 +2176,17 @@ pub(super) fn workbench_gui(
                     let (count, lines) = gui.property.reset();
                     if renames {
                         for node in &nodes {
-                            if let Some(value) = gui.property.value_for(*node) {
-                                let _ = gui.scene.rename(*node, &value);
+                            if let Some(value) = gui.property.value_for(*node)
+                                && let Err(reason) = gui.scene.rename(*node, &value)
+                            {
+                                warn_failure("a node could not be renamed on reset", reason);
                             }
                         }
                     }
                     rust_widgets::set_widget_text(gui.property_error, &lines.join(" | "));
                     refresh_inspector(&mut gui);
                     sync_outline(&mut gui);
-                    sync_canvas(&gui);
+                    sync_canvas(&mut gui);
                     gui.message = format!("reset {count} node(s) to the structural title");
                     update_status(&gui);
                     crate::host::log::emit(
@@ -2658,30 +2820,66 @@ pub(super) fn workbench_gui(
         gui.placements.push((status.raw_id(), Area::Status));
     }
 
-    // Two editor groups: the second stays hidden until "Split" is used.
+    // Two editor groups: the second stays hidden until "Split" is used. The strip is the
+    // library's `TabWidget`; the model still owns the documents and the active index, and the
+    // control's `current_changed` writes that choice back into the model.
     for group in 0..2 {
         let (tx, _ex, ew) = if group == 0 {
             (270, 270, 680)
         } else {
             (610, 610, 340)
         };
-        let mut tabs = Vec::new();
-        let mut all = Vec::new();
-        for index in 0..3 {
-            let button = handle.new_button("", tx + index as i32 * 110, CONTENT_Y, 108, 26);
-            wire_tab(&button, group, index, &gui);
-            tabs.push(button.raw_id());
-            all.push(button.raw_id());
-            if let Ok(mut gui) = gui.lock() {
-                gui.placements.push((
-                    button.raw_id(),
-                    Area::Tab {
-                        group: group as u32,
-                        index: index as u32,
-                        count: 3,
-                    },
-                ));
+        let documents: Vec<String> = gui
+            .lock()
+            .ok()
+            .and_then(|gui| {
+                let id = *gui.groups.group_ids().get(group)?;
+                let tabs = gui.groups.tabs(id)?;
+                Some(
+                    tabs.tabs()
+                        .iter()
+                        .map(|tab| tab.document().to_owned())
+                        .collect(),
+                )
+            })
+            .unwrap_or_default();
+        let tab_strip = handle.new_tab_widget(tx, CONTENT_Y, ew, 26);
+        for document in &documents {
+            let label = document.rsplit('/').next().unwrap_or(document);
+            if tab_strip.add_tab(label, None).is_none() {
+                warn_failure("a tab could not be added to the strip", label);
             }
+        }
+        {
+            let gui = Arc::clone(&gui);
+            subscribe_index(tab_strip.raw_id(), "current_changed", move |index| {
+                if let Ok(mut gui) = gui.lock() {
+                    let Some(id) = gui.groups.group_ids().get(group).copied() else {
+                        return;
+                    };
+                    let activated = gui
+                        .groups
+                        .tabs_mut(id)
+                        .map(|tabs| tabs.activate(index as usize));
+                    match activated {
+                        Some(Ok(())) => {}
+                        Some(Err(reason)) => warn_failure("a tab could not be activated", reason),
+                        None => warn_failure("a tab strip has no group", group),
+                    }
+                    gui.message = format!("tab {index} in group {group}");
+                    gui.sync_editors();
+                }
+            });
+        }
+        watch_focus(tab_strip.raw_id(), "editor tabs");
+        let mut all = vec![tab_strip.raw_id()];
+        if let Ok(mut gui) = gui.lock() {
+            gui.placements.push((
+                tab_strip.raw_id(),
+                Area::TabStrip {
+                    group: group as u32,
+                },
+            ));
         }
         // The editor area is the library's own code editor, not a list of lines. The surface is
         // mounted by its registered name; `sync_editors` reaches it through the widget runtime and
@@ -2706,7 +2904,7 @@ pub(super) fn workbench_gui(
         }
         if let Ok(mut gui) = gui.lock() {
             gui.group_views.push(GroupView {
-                tabs,
+                tabs: tab_strip.raw_id(),
                 editor: editor.raw_id(),
                 all,
             });
@@ -2769,7 +2967,7 @@ pub(super) fn workbench_gui(
                                 gui.drag_start = Some(design);
                             }
                             if gui.drag_active && previous != Some(design) {
-                                sync_canvas(&gui);
+                                sync_canvas(&mut gui);
                             }
                         }
                     });
@@ -2785,164 +2983,64 @@ pub(super) fn workbench_gui(
         });
     }
 
-    // Command palette (T05.04/T05.05). It is an overlay created after the docked panels so the
-    // painter's creation order keeps it above them; its geometry comes from the same responsive
-    // layout as the rest of the chrome, not from a second placement.
-    let palette_panel = handle.new_panel(0, 0, 640, 320);
-    let palette_title = palette_panel.new_label("Command Palette", 0, 0, 0, 0);
-    let palette_query = palette_panel.new_line_edit("", 0, 0, 0, 0);
-    palette_query.set_placeholder("Type a command…");
-    watch_focus(palette_query.raw_id(), "palette query");
-    let palette_list = palette_panel.new_list_box(0, 0, 0, 0);
-    let palette_help = palette_panel.new_label("", 0, 0, 0, 0);
-    let palette_hint =
-        palette_panel.new_label("Type to filter · Run executes · Close hides", 0, 0, 0, 0);
-    let palette_actions = palette_panel.new_panel(0, 0, 0, 0);
-    let palette_run = palette_actions.new_button("Run", 0, 0, 0, 0);
-    let palette_close = palette_actions.new_button("Close", 0, 0, 0, 0);
-    let mut action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
-    for id in [palette_run.raw_id(), palette_close.raw_id()] {
-        action_layout.add_widget(id, 1);
-        action_layout.set_size_policy(id, SizePolicy::Expanding);
-    }
-    palette_actions.set_layout(Box::new(action_layout));
-    let mut palette_layout = BoxLayout::new(Orientation::Vertical, 4, 8);
-    for (id, height, policy) in [
-        (palette_title.raw_id(), 20, SizePolicy::Fixed),
-        (palette_query.raw_id(), 28, SizePolicy::Fixed),
-        (palette_list.raw_id(), 0, SizePolicy::Expanding),
-        (palette_help.raw_id(), 20, SizePolicy::Fixed),
-        (palette_hint.raw_id(), 18, SizePolicy::Fixed),
-        (palette_actions.raw_id(), 28, SizePolicy::Fixed),
-    ] {
-        palette_layout.add_widget(id, 0);
-        palette_layout.set_size_policy(id, policy);
-        if height > 0 {
-            palette_layout.set_constraints(id, LayoutConstraints::new(height, Some(height)));
-        }
-    }
-    palette_panel.set_layout(Box::new(palette_layout));
-    let palette_widgets = vec![
-        palette_panel.raw_id(),
-        palette_title.raw_id(),
-        palette_query.raw_id(),
-        palette_list.raw_id(),
-        palette_help.raw_id(),
-        palette_hint.raw_id(),
-        palette_actions.raw_id(),
-        palette_run.raw_id(),
-        palette_close.raw_id(),
-    ];
-    for id in &palette_widgets {
-        rust_widgets::set_widget_visible(*id, false);
-    }
-
-    // A query edit filters through the same palette model the command line uses. The callback
-    // runs on the UI thread; the registry only has to be read, so no effect is authorized here.
-    {
-        let gui = Arc::clone(&gui);
-        palette_query.on_value_changed(move |text| {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
+    // Command palette (T05.04/T05.05). It is the library's `CommandPalette`, mounted after the
+    // docked panels so the painter's creation order keeps it above them; its geometry comes from
+    // the same responsive layout as the rest of the chrome, not from a second placement. Filtering,
+    // highlighting and activation belong to the control; the host only feeds it entries and runs
+    // the activated command id through the registry model.
+    match handle.mount_widget_by_name("command_palette", Rect::new(0, 0, 640, 320), "") {
+        Ok(palette) => {
+            let id = palette.raw_id();
+            rust_widgets::set_widget_visible(id, false);
+            watch_focus(id, "command palette");
             {
-                let context = palette_context();
-                palette_with(&mut gui, |palette, registry, recents| {
-                    palette.set_query(text, registry, &context, recents);
+                let gui = Arc::clone(&gui);
+                subscribe_string(id, "command_activated", move |command| {
+                    if let Ok(mut gui) = gui.lock()
+                        && gui.palette.is_open()
+                    {
+                        run_palette_id(&mut gui, command);
+                    }
                 });
-                sync_palette(&mut gui);
-                crate::host::log::emit(
-                    crate::host::log::Level::Info,
-                    "app::run::workbench-palette",
-                    &format!(
-                        "palette query {:?}: {} result(s)",
-                        text,
-                        gui.palette.result_count()
-                    ),
-                );
             }
-        });
-    }
-    {
-        let gui = Arc::clone(&gui);
-        subscribe_unit(palette_query.raw_id(), "return_pressed", move || {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
             {
-                run_palette_selected(&mut gui);
+                let gui = Arc::clone(&gui);
+                subscribe_string(id, "query_changed", move |text| {
+                    if let Ok(gui) = gui.lock()
+                        && gui.palette.is_open()
+                    {
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench-palette",
+                            &format!("palette query {text:?}"),
+                        );
+                    }
+                });
             }
-        });
-    }
-    {
-        // Escape ends editing. A focus move also emits `editing_finished`, so the panel only
-        // closes when the query still holds the keyboard — otherwise clicking a row would
-        // close the palette before its selection arrived.
-        let gui = Arc::clone(&gui);
-        subscribe_unit(palette_query.raw_id(), "editing_finished", move || {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
-                && focused_widget() == Some(gui.palette_query)
             {
-                close_palette(&mut gui);
-                gui.message = "command palette closed".to_owned();
-                update_status(&gui);
+                let gui = Arc::clone(&gui);
+                let _ = with_widget_mut(id, move |widget| {
+                    widget.base().focus_lost.connect(move || {
+                        if let Ok(mut gui) = gui.lock()
+                            && gui.palette.is_open()
+                        {
+                            close_palette(&mut gui);
+                            gui.message = "command palette closed".to_owned();
+                            update_status(&gui);
+                        }
+                    });
+                    true
+                });
             }
-        });
-    }
-    {
-        let gui = Arc::clone(&gui);
-        subscribe_index(palette_list.raw_id(), "item_selected", move |index| {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
-                && gui.palette.select(index as usize)
-            {
-                rust_widgets::set_widget_text(gui.palette_help, &gui.palette.help(&gui.registry));
-                crate::host::log::emit(
-                    crate::host::log::Level::Info,
-                    "app::run::workbench-palette",
-                    &format!("palette selected {index}"),
-                );
+            if let Ok(mut gui) = gui.lock() {
+                gui.palette_surface = id;
+                gui.placements.push((id, Area::Palette));
             }
-        });
-    }
-    {
-        let gui = Arc::clone(&gui);
-        subscribe_index(palette_list.raw_id(), "item_activated", move |index| {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
-            {
-                gui.palette.select(index as usize);
-                run_palette_selected(&mut gui);
-            }
-        });
-    }
-    {
-        let gui = Arc::clone(&gui);
-        palette_run.on_click(move || {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
-            {
-                run_palette_selected(&mut gui);
-            }
-        });
-    }
-    {
-        let gui = Arc::clone(&gui);
-        palette_close.on_click(move || {
-            if let Ok(mut gui) = gui.lock()
-                && gui.palette.is_open()
-            {
-                close_palette(&mut gui);
-                gui.message = "command palette closed".to_owned();
-                update_status(&gui);
-            }
-        });
-    }
-    if let Ok(mut gui) = gui.lock() {
-        gui.palette_widgets = palette_widgets;
-        gui.palette_query = palette_query.raw_id();
-        gui.palette_list = palette_list.raw_id();
-        gui.palette_help = palette_help.raw_id();
-        gui.placements.push((palette_panel.raw_id(), Area::Palette));
+        }
+        Err(error) => warn_failure(
+            "the command palette could not be mounted",
+            format!("{error:?}"),
+        ),
     }
 
     if let Ok(mut gui) = gui.lock() {

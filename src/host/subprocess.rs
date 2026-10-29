@@ -731,7 +731,17 @@ impl OwnedProcess {
             return;
         }
         for reader in self.readers.drain(..) {
-            let _ = reader.join();
+            if reader.join().is_err() {
+                emit(
+                    Level::Warn,
+                    "host::subprocess",
+                    &format!(
+                        "a stream reader for {} panicked; its last chunk of output is missing from \
+                         the capture",
+                        self.label
+                    ),
+                );
+            }
         }
     }
 

@@ -101,50 +101,74 @@ impl Pack {
             .map(|(key, text)| (key.as_str(), text.as_str()))
     }
 
-    /// The pack written as its file form.
+    /// The pack written as its file form: the upstream i18n JSON shape.
+    ///
+    /// ```json
+    /// {"language":"en","translations":{"key":{"message":"text"}}}
+    /// ```
     pub fn encode(&self) -> String {
-        let mut text = String::from("rustage-locale 1\n");
-        text.push_str(&format!("language {}\n", self.language.tag()));
+        let mut translations = crate::project::record::json::JsonObject::new();
         for (key, message) in &self.messages {
-            text.push_str(key);
-            text.push('\t');
-            text.push_str(&escape(message));
-            text.push('\n');
+            let mut entry = crate::project::record::json::JsonObject::new();
+            entry.insert(
+                "message",
+                crate::project::record::json::Json::string(message.clone()),
+            );
+            translations.insert(
+                key.clone(),
+                crate::project::record::json::Json::Object(entry),
+            );
         }
-        text
+        let mut root = crate::project::record::json::JsonObject::new();
+        root.insert(
+            "language",
+            crate::project::record::json::Json::string(self.language.tag()),
+        );
+        root.insert(
+            "translations",
+            crate::project::record::json::Json::Object(translations),
+        );
+        crate::project::record::json::Json::Object(root).render_compact()
     }
 
-    /// The pack read back from its file form.
+    /// The pack read back from the JSON language-file shape.
     pub fn decode(text: &str) -> Result<Self, Fault> {
-        let mut lines = text.lines();
-        let header = lines.next().unwrap_or_default();
-        if header.trim() != "rustage-locale 1" {
-            return Err(Fault::BadHeader {
-                line: header.to_owned(),
-            });
-        }
-        let language_line = lines.next().unwrap_or_default();
-        let Some(tag) = language_line.trim().strip_prefix("language ") else {
-            return Err(Fault::BadHeader {
-                line: language_line.to_owned(),
-            });
-        };
-        let Some(language) = Language::parse(tag) else {
-            return Err(Fault::UnknownLanguage {
-                tag: tag.trim().to_owned(),
-            });
-        };
+        use crate::project::record::json::{Json, parse};
+
+        let document = parse(text).map_err(|error| Fault::BadJson {
+            reason: error.to_string(),
+        })?;
+        let root = document.as_object().ok_or_else(|| Fault::BadJson {
+            reason: "the language file is not a JSON object".to_owned(),
+        })?;
+        let tag = root
+            .get("language")
+            .and_then(Json::as_str)
+            .ok_or_else(|| Fault::BadJson {
+                reason: "the language file has no `language` string".to_owned(),
+            })?;
+        let language = Language::parse(tag).ok_or_else(|| Fault::UnknownLanguage {
+            tag: tag.to_owned(),
+        })?;
+        let translations = root
+            .get("translations")
+            .and_then(Json::as_object)
+            .ok_or_else(|| Fault::BadJson {
+                reason: "the language file has no `translations` object".to_owned(),
+            })?;
         let mut pack = Self::new(language);
-        for line in lines {
-            if line.is_empty() {
-                continue;
-            }
-            let Some((key, message)) = line.split_once('\t') else {
-                return Err(Fault::BadEntry {
-                    line: line.to_owned(),
-                });
-            };
-            pack.insert(key.to_owned(), unescape(message));
+        for (key, value) in translations.iter() {
+            let entry = value.as_object().ok_or_else(|| Fault::BadEntry {
+                line: format!("translations.{key} is not an object"),
+            })?;
+            let message =
+                entry
+                    .get("message")
+                    .and_then(Json::as_str)
+                    .ok_or_else(|| Fault::BadEntry {
+                        line: format!("translations.{key} has no `message` string"),
+                    })?;
+            pack.insert(key.to_owned(), message.to_owned());
         }
         Ok(pack)
     }
@@ -153,19 +177,19 @@ impl Pack {
 /// Why a pack could not be read.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Fault {
-    /// The first line is not the pack header.
-    BadHeader {
-        /// The line that was there.
-        line: String,
+    /// The file is not the JSON language-file shape.
+    BadJson {
+        /// What the reader said.
+        reason: String,
     },
     /// The pack names a language this build does not know.
     UnknownLanguage {
         /// The tag it named.
         tag: String,
     },
-    /// A line is not `key<TAB>text`.
+    /// A translation is not `{"message": "..."}`.
     BadEntry {
-        /// The line that was there.
+        /// The entry that was there.
         line: String,
     },
 }
@@ -174,14 +198,12 @@ impl Fault {
     /// The fault in one line.
     pub fn message(&self) -> String {
         match self {
-            Self::BadHeader { line } => {
-                format!("the pack header is {line:?}, not `rustage-locale 1`")
-            }
+            Self::BadJson { reason } => format!("the language file is not JSON text: {reason}"),
             Self::UnknownLanguage { tag } => {
                 format!("the pack names language {tag:?}, which this build does not know")
             }
             Self::BadEntry { line } => {
-                format!("the pack line {line:?} is not `key<TAB>text`")
+                format!("the language entry {line:?} is not a `message` object")
             }
         }
     }
@@ -432,43 +454,6 @@ pub fn installed() -> Selection {
         .unwrap_or(Selection::Chosen { language: DEFAULT })
 }
 
-/// Writes a `\t` and a newline in text into escapes the pack line form can carry.
-fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '\\' => out.push_str("\\\\"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Reads back what [`escape`] wrote.
-fn unescape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut characters = text.chars();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            out.push(character);
-            continue;
-        }
-        match characters.next() {
-            Some('t') => out.push('\t'),
-            Some('n') => out.push('\n'),
-            Some('\\') => out.push('\\'),
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Catalog, Fault, Pack, Selection, Text, select};
@@ -522,25 +507,25 @@ mod tests {
     }
 
     #[test]
-    fn a_pack_with_a_bad_header_or_line_is_refused() {
+    fn a_pack_with_a_bad_document_or_entry_is_refused() {
         assert!(matches!(
-            Pack::decode("nonsense\nlanguage en\n"),
-            Err(Fault::BadHeader { .. })
+            Pack::decode("nonsense"),
+            Err(Fault::BadJson { .. })
         ));
         assert!(matches!(
-            Pack::decode("rustage-locale 1\nlanguage en\nno-tab-here\n"),
+            Pack::decode(r#"{"language":"en","translations":{"k":42}}"#),
             Err(Fault::BadEntry { .. })
         ));
         assert!(matches!(
-            Pack::decode("rustage-locale 1\nlanguage klingon\n"),
+            Pack::decode(r#"{"language":"klingon","translations":{}}"#),
             Err(Fault::UnknownLanguage { .. })
         ));
         assert!(
-            Fault::BadHeader {
-                line: "x".to_owned()
+            Fault::BadJson {
+                reason: "x".to_owned()
             }
             .message()
-            .contains("header")
+            .contains("JSON")
         );
     }
 

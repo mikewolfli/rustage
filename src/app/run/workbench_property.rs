@@ -426,7 +426,6 @@ impl PropertyState {
     ///
     /// Empty for every non-enum property, and for an unavailable schema: a choice list nobody
     /// declared is not offered.
-    #[allow(dead_code)]
     pub(super) fn accepted_tokens(&self) -> Vec<String> {
         match self.editor.schema().kind_of(&self.name) {
             Some(PropertyType::Enum { variants }) => variants.clone(),
@@ -435,7 +434,6 @@ impl PropertyState {
     }
 
     /// The contract's default for the property, rendered for the field.
-    #[allow(dead_code)]
     pub(super) fn contract_default(&self) -> Option<String> {
         self.editor
             .schema()

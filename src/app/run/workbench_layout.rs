@@ -54,14 +54,10 @@ pub(super) enum Area {
     RightPanel { index: u32, count: u32 },
     /// One of the bottom panels, side by side under the editor.
     BottomPanel { index: u32, count: u32 },
-    /// One editor-group tab.
-    Tab {
-        /// Which editor group owns the tab.
+    /// One editor-group tab strip, spanning the group's width.
+    TabStrip {
+        /// Which editor group owns the strip.
         group: u32,
-        /// The tab's position in the strip.
-        index: u32,
-        /// How many tabs the strip holds.
-        count: u32,
     },
     /// An editor group's text area.
     Editor {
@@ -178,19 +174,9 @@ impl WorkbenchLayout {
                 Area::LeftPanel { index, .. } => slice(&left_slices, index, rect),
                 Area::RightPanel { index, .. } => slice(&right_slices, index, rect),
                 Area::BottomPanel { index, .. } => slice(&bottom_slices, index, rect),
-                Area::Tab {
-                    group,
-                    index,
-                    count,
-                } => {
+                Area::TabStrip { group } => {
                     let group_box = slice(&group_slices, group, rect);
-                    let strip_width = group_box.width.min(120 * count.max(1));
-                    let tab_slices = slices(
-                        Rect::new(group_box.x, group_box.y, strip_width, TAB_HEIGHT),
-                        count,
-                        false,
-                    );
-                    slice(&tab_slices, index, rect)
+                    Rect::new(group_box.x, group_box.y, group_box.width, TAB_HEIGHT)
                 }
                 Area::Editor { group } => {
                     let group_box = slice(&group_slices, group, rect);
@@ -378,14 +364,7 @@ mod tests {
             .place(7, Area::RightPanel { index: 1, count: 2 })
             .place(8, Area::BottomPanel { index: 0, count: 2 })
             .place(9, Area::BottomPanel { index: 1, count: 2 })
-            .place(
-                10,
-                Area::Tab {
-                    group: 0,
-                    index: 0,
-                    count: 3,
-                },
-            )
+            .place(10, Area::TabStrip { group: 0 })
             .place(11, Area::Editor { group: 0 })
             .place(12, Area::Editor { group: 1 })
             .place(13, Area::Status)

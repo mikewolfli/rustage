@@ -327,11 +327,6 @@ impl ProjectServices {
         self.permission.trust(&self.root)
     }
 
-    /// What a trust prompt should show for this project.
-    pub fn prompt(&self) -> super::permission::TrustPrompt {
-        self.permission.prompt(&self.root)
-    }
-
     /// Whether this project is trusted.
     pub fn is_trusted(&self) -> bool {
         self.permission.is_trusted(&self.root)
@@ -846,15 +841,25 @@ fn executor_error_message(error: &ExecutorError) -> String {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .expect("the service registry is never poisoned: no panic escapes its critical sections")
+    mutex.lock().unwrap_or_else(|poisoned| {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "host::registry",
+            "the service registry lock was poisoned; recovering its inner state",
+        );
+        poisoned.into_inner()
+    })
 }
 
 fn lock_process(process: &Mutex<OwnedProcess>) -> MutexGuard<'_, OwnedProcess> {
-    process
-        .lock()
-        .expect("a tracked process is never poisoned: no panic escapes its critical sections")
+    process.lock().unwrap_or_else(|poisoned| {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "host::registry",
+            "a tracked process lock was poisoned; recovering its inner state",
+        );
+        poisoned.into_inner()
+    })
 }
 
 #[cfg(test)]

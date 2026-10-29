@@ -91,18 +91,28 @@ impl PtySession {
                 "the pseudo-terminal could not be prepared: {error}"
             ));
         }
-        // SAFETY: `ptsname` returns a NUL-terminated string owned by libc for this descriptor; it is
-        // read immediately and copied before any other libc call could invalidate it.
-        let slave_name = unsafe {
-            let pointer = libc::ptsname(master_fd);
-            if pointer.is_null() {
-                libc::close(master_fd);
-                return Err(format!(
-                    "the pseudo-terminal has no slave name: {}",
-                    std::io::Error::last_os_error()
-                ));
+        // `ptsname` writes into a process-wide static buffer and is not thread-safe. The lock keeps
+        // two terminal opens from reading each other's name; the name is copied out before the
+        // guard is dropped, so no libc-owned pointer escapes this block.
+        let slave_name = {
+            static PTSNAME_LOCK: Mutex<()> = Mutex::new(());
+            let _guard = PTSNAME_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // SAFETY: `ptsname` returns a NUL-terminated string in libc-owned storage for this
+            // descriptor; it is read and copied while the process-wide lock is held, before any
+            // other libc call could overwrite it.
+            unsafe {
+                let pointer = libc::ptsname(master_fd);
+                if pointer.is_null() {
+                    libc::close(master_fd);
+                    return Err(format!(
+                        "the pseudo-terminal has no slave name: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                CStr::from_ptr(pointer).to_string_lossy().into_owned()
             }
-            CStr::from_ptr(pointer).to_string_lossy().into_owned()
         };
 
         let slave = OpenOptions::new()
@@ -209,7 +219,10 @@ impl PtySession {
 
     /// How many bytes were dropped because the buffer was full.
     pub fn dropped(&self) -> usize {
-        *self.dropped.lock().expect("the terminal drop lock")
+        *self
+            .dropped
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Waits up to `limit` for the child to exit, returning its status if it did.
@@ -253,8 +266,15 @@ impl PtySession {
                 });
             }
         }
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+        {
+            crate::host::log::emit(
+                crate::host::log::Level::Warn,
+                "host::pty",
+                "the terminal output reader panicked while shutting down; output after this \
+                 point is missing from the session",
+            );
         }
     }
 
@@ -271,12 +291,16 @@ impl PtySession {
                 match reader.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(count) => {
-                        let mut buffer = output.lock().expect("the terminal output lock");
+                        let mut buffer = output
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         buffer.extend_from_slice(&chunk[..count]);
                         if buffer.len() > BUFFER_LIMIT {
                             let excess = buffer.len() - BUFFER_LIMIT;
                             buffer.drain(..excess);
-                            *dropped.lock().expect("the terminal drop lock") += excess;
+                            *dropped
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) += excess;
                         }
                     }
                     // EIO is how a Unix master reports "the slave side is gone"; anything else is

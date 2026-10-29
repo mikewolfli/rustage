@@ -35,7 +35,6 @@ pub struct Message {
     /// The request id, when the message is a response.
     pub id: Option<i64>,
     /// The method, when the message is a request or notification.
-    #[allow(dead_code)]
     pub method: Option<String>,
     /// The message body.
     pub body: Json,
@@ -123,7 +122,9 @@ impl Client {
                 if read == 0 {
                     break;
                 }
-                let mut text = capture.lock().expect("the language-server stderr lock");
+                let mut text = capture
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 text.push_str(&line);
                 // Keep the diagnostic bounded; a server that logs forever must not grow the host.
                 if text.len() > 64 * 1024 {
@@ -154,7 +155,7 @@ impl Client {
     pub fn stderr(&self) -> String {
         self.stderr
             .lock()
-            .expect("the language-server stderr lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
 
@@ -202,7 +203,24 @@ impl Client {
                 return Err(format!("{method} did not answer within {timeout:?}"));
             }
             match self.messages.recv_timeout(remaining) {
-                Ok(message) if message.answers(id) => return response_body(message.body),
+                // A server→client request carries both an id and a method. It is not the answer to
+                // our request even when the ids coincide, and this client does not implement the
+                // server's request surface: say so instead of mistaking it for a response.
+                Ok(message) if message.answers(id) && message.method.is_none() => {
+                    return response_body(message.body);
+                }
+                Ok(message) if message.method.is_some() => {
+                    crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "host::lsp",
+                        &format!(
+                            "the language server sent the request {:?}, which this client does not \
+                             handle; it was ignored",
+                            message.method.as_deref().unwrap_or("")
+                        ),
+                    );
+                    continue;
+                }
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(format!("{method} did not answer within {timeout:?}"));
@@ -287,8 +305,15 @@ impl Client {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+        {
+            crate::host::log::emit(
+                crate::host::log::Level::Warn,
+                "host::lsp",
+                "the language server's output reader panicked; any message it had not delivered \
+                 is lost",
+            );
         }
     }
 
@@ -314,8 +339,15 @@ impl Drop for Client {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+        {
+            crate::host::log::emit(
+                crate::host::log::Level::Warn,
+                "host::lsp",
+                "the language server's output reader panicked during drop; its last messages \
+                 are lost",
+            );
         }
     }
 }

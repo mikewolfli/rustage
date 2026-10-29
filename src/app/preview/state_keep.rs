@@ -224,25 +224,23 @@ pub fn capture_focus(index: &TreeIndex, focused: Option<ObjectId>) -> Capture {
 /// annotated with the live control to focus so a caller can carry it out without repeating the key
 /// lookup. Scroll is deliberately not part of the plan; see [`SCROLL_GAP`].
 pub fn restore_focus(capture: &Capture, index: &TreeIndex) -> Vec<FocusRestore> {
-    let present: Vec<Present> = index
-        .keys()
-        .into_iter()
-        .filter_map(|(_, key, id)| {
-            let node = key.parse::<u64>().ok().map(NodeId::from_raw)?;
-            Some(Present::new(node, index.widget_of(id).unwrap_or_default()))
-        })
-        .collect();
+    // One pass over the keys builds both the present list and the key→control map the target
+    // lookup needs; the old code called `keys()` twice and scanned the second list per outcome.
     let keys = index.keys();
+    let mut by_key = std::collections::HashMap::with_capacity(keys.len());
+    let mut present = Vec::with_capacity(keys.len());
+    for (_, key, id) in keys {
+        let Some(node) = key.parse::<u64>().ok().map(NodeId::from_raw) else {
+            continue;
+        };
+        by_key.insert(key.to_owned(), id);
+        present.push(Present::new(node, index.widget_of(id).unwrap_or_default()));
+    }
     restore(capture, &present)
         .into_iter()
         .map(|outcome| {
             let target = match &outcome {
-                Restore::Restored(kept) => {
-                    let key = kept.node.get().to_string();
-                    keys.iter()
-                        .find(|(_, candidate, _)| *candidate == key)
-                        .map(|(_, _, id)| *id)
-                }
+                Restore::Restored(kept) => by_key.get(&kept.node.get().to_string()).copied(),
                 Restore::Gone { .. } | Restore::Incompatible { .. } => None,
             };
             FocusRestore { outcome, target }

@@ -56,6 +56,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use rust_widgets::core::ObjectId;
 use rust_widgets::view::{Node, View, ViewEngine};
@@ -167,7 +168,11 @@ impl Document {
     /// kind on the way to the control). Nothing is guessed: a subject without a target, an unknown
     /// node, or an empty property name is `Unsupported` with the reason, which the caller reports as
     /// a no-op.
-    fn apply_live(&mut self, edit: &Edit) -> Application {
+    fn apply_live(
+        &mut self,
+        edit: &Edit,
+        index: &std::collections::BTreeMap<u64, usize>,
+    ) -> Application {
         let subject = edit.subject();
         let Some((raw_node, rest)) = subject.split_once(':') else {
             return Application::Unsupported(format!(
@@ -191,11 +196,13 @@ impl Document {
         if name.is_empty() {
             return Application::Unsupported(format!("{} names no property", edit.render()));
         }
-        let Some(node) = self
-            .nodes
-            .iter_mut()
-            .find(|held| held.node.get() == raw_node)
-        else {
+        let Some(&position) = index.get(&raw_node) else {
+            return Application::Unsupported(format!(
+                "{} names node {raw_node}, which is not in the document",
+                edit.render()
+            ));
+        };
+        let Some(node) = self.nodes.get_mut(position) else {
             return Application::Unsupported(format!(
                 "{} names node {raw_node}, which is not in the document",
                 edit.render()
@@ -413,6 +420,10 @@ pub struct Preview {
     pub session: Option<String>,
     /// The instances it is holding.
     pub instances: Vec<Instance>,
+    /// Where each node's instance sits in [`Self::instances`], so installing a node is a lookup
+    /// rather than a scan of every instance. Rebuilt with the vector; never a second source of
+    /// node facts.
+    instance_slots: BTreeMap<NodeId, usize>,
     /// The child process it started, if any.
     pub process: Option<u32>,
     /// How many view updates the session has applied.
@@ -426,7 +437,7 @@ pub struct Preview {
     /// Kept so a failed update can rebuild the previous tree on the same engine. The library's
     /// `update` installs the new declaration even when it reports `root_replaced`, so without this
     /// rollback every later update would keep comparing against the failed tree.
-    mounted: Option<Document>,
+    mounted: Option<Rc<Document>>,
     /// Every control id this session created, including ones a later update removed.
     ///
     /// Tracked because `ViewEngine` has no `Drop` that unregisters its controls: without this list,
@@ -470,6 +481,7 @@ impl Preview {
         }
         self.release_engine();
         self.instances.clear();
+        self.instance_slots.clear();
         self.updates = 0;
 
         let created = RefCell::new(Vec::new());
@@ -492,7 +504,7 @@ impl Preview {
         self.view_ids.extend(created);
         self.view_generation = engine.generation();
         self.engine = Some(engine);
-        self.mounted = Some(document.clone());
+        self.mounted = Some(Rc::new(document.clone()));
         for node in &document.nodes {
             self.install(node.node)?;
         }
@@ -573,7 +585,7 @@ impl Preview {
         }
 
         self.updates = self.updates.saturating_add(1);
-        self.mounted = Some(document.clone());
+        self.mounted = Some(Rc::new(document.clone()));
         self.view_generation = self
             .engine
             .as_ref()
@@ -646,8 +658,16 @@ impl Preview {
         let mut next = document.clone();
         let mut untouched = Vec::new();
         let mut changed = Vec::new();
+        // One index per batch rather than one linear scan per edit: a batch of k live edits used
+        // to cost k·n node comparisons.
+        let index: std::collections::BTreeMap<u64, usize> = next
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(position, node)| (node.node.get(), position))
+            .collect();
         for edit in &update.edits {
-            match next.apply_live(edit) {
+            match next.apply_live(edit, &index) {
                 Application::Changed => changed.push(edit.render()),
                 Application::Unchanged => {
                     untouched.push(format!("{} is already the model's value", edit.render()));
@@ -775,7 +795,8 @@ impl Preview {
         }
         self.view_generation = engine.generation();
         self.instances.clear();
-        self.mounted = Some(document.clone());
+        self.instance_slots.clear();
+        self.mounted = Some(Rc::new(document.clone()));
         for node in &document.nodes {
             self.install(node.node)?;
         }
@@ -848,9 +869,18 @@ impl Preview {
             node,
             generation: *generation,
         };
-        match self.instances.iter_mut().find(|held| held.node == node) {
-            Some(held) => *held = instance,
-            None => self.instances.push(instance),
+        match self.instance_slots.get(&node).copied() {
+            Some(position) => match self.instances.get_mut(position) {
+                Some(held) => *held = instance,
+                None => {
+                    self.instance_slots.insert(node, self.instances.len());
+                    self.instances.push(instance);
+                }
+            },
+            None => {
+                self.instance_slots.insert(node, self.instances.len());
+                self.instances.push(instance);
+            }
         }
         Ok(instance)
     }
@@ -872,6 +902,7 @@ impl Preview {
                     instances: std::mem::take(&mut self.instances),
                     session: self.session.clone(),
                 };
+                self.instance_slots.clear();
                 self.process = None;
                 self.release_engine();
                 Ok(released)

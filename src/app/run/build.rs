@@ -473,14 +473,28 @@ fn execute_compile(
             Some(record) if record.is_final() => break record,
             Some(_) => continue,
             None => {
-                let _ = executor.shutdown();
+                let shutdown = executor.shutdown();
+                if !shutdown.is_clean() {
+                    crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "app::run::build",
+                        &format!("build executor shutdown was not clean: {shutdown}"),
+                    );
+                }
                 return report("the submitted build disappeared from the executor".to_owned());
             }
         }
     };
 
     let result = submitted.result();
-    let _ = executor.shutdown();
+    let shutdown = executor.shutdown();
+    if !shutdown.is_clean() {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::build",
+            &format!("build executor shutdown was not clean: {shutdown}"),
+        );
+    }
     match result {
         Some(Ok(outcome)) => {
             for line in outcome.render() {
@@ -768,11 +782,16 @@ pub(super) fn run_program(options: &crate::cli::RunOptions) -> bool {
                 }
             }
             Err(reason) => {
-                // A failed start or a mismatch must not leave the program running behind us.
+                // A failed start or a mismatch must not leave the program running behind us. If the
+                // stop itself fails, say so instead of promising a cleanup that did not happen.
                 if let Some(run) = run.as_mut()
                     && run.is_running()
+                    && let Err(stop_reason) = run.stop()
                 {
-                    let _ = run.stop();
+                    return report(format!(
+                        "{reason}; the program could not be stopped and may still be running: \
+                         {stop_reason}"
+                    ));
                 }
                 return report(reason);
             }

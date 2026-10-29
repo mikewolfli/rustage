@@ -397,6 +397,9 @@ impl Session {
                 None => selections.push(Selection::caret(placed.exit)),
             }
         }
+        // The snippet parser emits one range per placeholder in source order and never overlaps
+        // them, so this invariant holds by construction. The expect names that dependency instead
+        // of silently dropping a caret if a future parser change breaks it.
         Carets::of(selections).expect("the stops of one snippet are disjoint and ordered")
     }
 

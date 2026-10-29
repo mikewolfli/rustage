@@ -993,8 +993,13 @@ fn startup_probe(program: &str) -> impl FnMut(&[String]) -> Result<(), String> +
                 })
             }
             None => {
-                let _ = process.terminate(std::time::Duration::from_millis(500));
-                Err("the probe did not finish within 10 s".to_owned())
+                let stopped = process.terminate(std::time::Duration::from_millis(500));
+                Err(match stopped {
+                    crate::host::subprocess::Termination::SignalFailed { reason } => format!(
+                        "the probe did not finish within 10 s; stopping it also failed: {reason}"
+                    ),
+                    _ => "the probe did not finish within 10 s".to_owned(),
+                })
             }
         }
     }

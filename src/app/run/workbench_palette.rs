@@ -4,13 +4,13 @@
 //! The command palette's state (task T05.04).
 //!
 //! The model is deliberately separate from the widgets: [`crate::app::commands::palette`] owns
-//! fuzzy search, recents and help, and this type owns which query is open, which row is selected
-//! and what was focused before the palette took the keyboard. The workbench window only mirrors
-//! this state into real controls, so a palette row and the command it names cannot drift while a
-//! user types.
+//! recents and the registry-derived entry list, and this type owns which query is open and what
+//! was focused before the palette took the keyboard. Filtering, highlighting and activation belong
+//! to the library's `CommandPalette` control (blue21 W-2a); the host only feeds it the entries and
+//! executes the activated command id.
 
 use crate::app::commands::command::{Context, Registry};
-use crate::app::commands::palette::{Entry, Recents, help_for, search};
+use crate::app::commands::palette::{Entry, Recents, search};
 
 /// The command palette as the workbench window holds it.
 #[derive(Default)]
@@ -18,7 +18,6 @@ pub(super) struct Palette {
     open: bool,
     query: String,
     entries: Vec<Entry>,
-    selected: usize,
     previous_focus: Option<u64>,
 }
 
@@ -46,7 +45,6 @@ impl Palette {
     ) {
         self.open = true;
         self.query.clear();
-        self.selected = 0;
         self.previous_focus = previous_focus;
         self.refresh(registry, context, recents);
     }
@@ -57,85 +55,24 @@ impl Palette {
         self.previous_focus.take()
     }
 
-    /// Replaces the query and recomputes the rows.
-    pub(super) fn set_query(
-        &mut self,
-        query: &str,
-        registry: &Registry,
-        context: &Context,
-        recents: &Recents,
-    ) {
-        self.query = query.to_owned();
-        self.selected = 0;
-        self.refresh(registry, context, recents);
-    }
-
-    /// Recomputes the rows for the current query.
+    /// Recomputes the entries for the current query.
     pub(super) fn refresh(&mut self, registry: &Registry, context: &Context, recents: &Recents) {
         self.entries = search(registry, context, &self.query, recents);
-        if self.selected >= self.entries.len() {
-            self.selected = 0;
-        }
     }
 
-    /// The rows as the list control shows them, bounded so a large registry cannot build an
-    /// unbounded widget list in one keystroke.
-    pub(super) fn rows(&self) -> Vec<String> {
-        const LIMIT: usize = 50;
-        if self.entries.is_empty() {
-            return vec!["(no matching command)".to_owned()];
-        }
-        self.entries.iter().take(LIMIT).map(Entry::render).collect()
+    /// The current query text.
+    pub(super) fn query(&self) -> &str {
+        &self.query
     }
 
-    /// How many commands matched the current query.
-    pub(super) fn result_count(&self) -> usize {
-        self.entries.len()
+    /// Every entry the open palette holds, before the control's own filtering.
+    pub(super) fn entries(&self) -> &[Entry] {
+        &self.entries
     }
 
-    /// The selected entry, when there is one.
-    pub(super) fn selected_entry(&self) -> Option<&Entry> {
-        self.entries.get(self.selected)
-    }
-
-    /// Selects `index`, within bounds. Returns whether the selection moved.
-    pub(super) fn select(&mut self, index: usize) -> bool {
-        if index >= self.entries.len() || index == self.selected {
-            return false;
-        }
-        self.selected = index;
-        true
-    }
-
-    /// The index the list shows as current.
-    pub(super) fn selected(&self) -> usize {
-        self.selected
-    }
-
-    /// One line of help for the selected row: the command's own parameters when it can run,
-    /// or the registry's own disabled reason when it cannot.
-    pub(super) fn help(&self, registry: &Registry) -> String {
-        let Some(entry) = self.selected_entry() else {
-            return "No command matches this query.".to_owned();
-        };
-        if let Some(reason) = entry.reason() {
-            return format!("{} — disabled: {reason}", entry.id());
-        }
-        match help_for(registry, entry.id()) {
-            Ok(help) if help.params().is_empty() => {
-                format!("{} — {}", help.id(), help.title())
-            }
-            Ok(help) => {
-                let params = help
-                    .params()
-                    .iter()
-                    .map(|param| format!("{}:{}", param.name(), param.kind()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{} — {} · {params}", help.id(), help.title())
-            }
-            Err(reason) => format!("{} — {reason}", entry.id()),
-        }
+    /// One entry by command id, whether or not the current query matches it.
+    pub(super) fn entry_by_id(&self, id: &str) -> Option<&Entry> {
+        self.entries.iter().find(|entry| entry.id() == id)
     }
 }
 
@@ -153,19 +90,15 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_query_lists_commands_and_a_query_narrows_them() {
+    fn an_empty_query_lists_commands_a_query_narrows_them_and_reason_is_queryable() {
         let registry = built_in();
         let recents = Recents::new(8);
         let mut palette = Palette::new();
         palette.open(None, &registry, &context(), &recents);
-        assert!(palette.open && palette.rows().len() > 1);
-
-        palette.set_query("welcome", &registry, &context(), &recents);
-        assert_eq!(
-            palette.selected_entry().map(|entry| entry.id()),
-            Some("view.welcome")
-        );
-        assert!(palette.help(&registry).contains("Welcome"));
+        assert!(palette.is_open());
+        assert!(palette.entries().len() > 1);
+        let welcome = palette.entry_by_id("view.welcome").expect("welcome");
+        assert!(welcome.title().contains("Welcome"));
     }
 
     #[test]
@@ -175,12 +108,11 @@ mod tests {
         let mut palette = Palette::new();
         let untrusted = Context::in_area("design");
         palette.open(None, &registry, &untrusted, &recents);
-        palette.set_query("build", &registry, &untrusted, &recents);
-        let entry = palette.selected_entry().expect("a match");
-        assert_eq!(entry.id(), "build.run");
+        let entry = palette
+            .entry_by_id("build.run")
+            .expect("a registered command");
         assert!(!entry.is_enabled());
-        assert!(palette.help(&registry).contains("disabled"));
-        assert!(palette.help(&registry).contains("trusted"));
+        assert!(entry.reason().unwrap_or_default().contains("trusted"));
     }
 
     #[test]
@@ -191,21 +123,19 @@ mod tests {
         let mut palette = Palette::new();
         palette.open(None, &registry, &context(), &recents);
         assert_eq!(
-            palette.selected_entry().map(|entry| entry.id()),
+            palette.entries().first().map(|entry| entry.id()),
             Some("file.save")
         );
-        assert!(palette.rows().len() > 1);
+        assert!(palette.entries().len() > 1);
     }
 
     #[test]
-    fn selection_stays_inside_the_rows() {
+    fn an_entry_is_found_by_its_id() {
         let registry = built_in();
         let recents = Recents::new(8);
         let mut palette = Palette::new();
         palette.open(None, &registry, &context(), &recents);
-        assert!(palette.select(1));
-        assert_eq!(palette.selected(), 1);
-        assert!(!palette.select(usize::MAX));
-        assert_eq!(palette.selected(), 1);
+        assert!(palette.entry_by_id("view.welcome").is_some());
+        assert!(palette.entry_by_id("not.a-command").is_none());
     }
 }

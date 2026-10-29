@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
+// SPDX-License-Identifier: MIT
+
 mod app;
 mod cli;
 mod contracts;

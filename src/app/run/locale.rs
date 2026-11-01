@@ -13,6 +13,7 @@ use std::path::Path;
 
 use super::*;
 use crate::app::locale::catalog;
+use crate::app::locale::tools;
 use crate::app::locale::vocabulary;
 use crate::host::locale::Language;
 
@@ -113,12 +114,60 @@ pub(super) fn locale_report(directory: &Path) -> bool {
         match read_back {
             Ok(pack) if pack == *catalog.pack() => {
                 println!("{}", path.display());
+                // Pseudo-localization is a layout test, not a shipped language: it keeps the same
+                // declared language but adds width and accents, so a clipped label is visible
+                // without translating anything (task T24.10).
+                let pseudo_path =
+                    directory.join(format!("{}.pseudo.json", catalog.language().tag()));
+                let pseudo = tools::pseudo_pack(catalog.pack());
+                if let Err(error) = std::fs::write(&pseudo_path, pseudo.encode()) {
+                    eprintln!(
+                        "rustage: could not write {}: {error}",
+                        pseudo_path.display()
+                    );
+                    return false;
+                }
+                println!("{}", pseudo_path.display());
             }
             Ok(_) => {
                 return report("the written language pack did not read back the same".to_owned());
             }
             Err(reason) => return report(reason),
         }
+    }
+    true
+}
+
+/// Audits the catalog keys the window's source asks for (task T24.10).
+///
+/// The scan is over `.rs` files under `directory`; `target/` and `.git/` are skipped because they
+/// are build output and history, not code. The answer fails only when a used key is not identified:
+/// an unused identified key is reported but is not a broken label, and failing on it would turn a
+/// stale catalog entry into a red build.
+pub(super) fn locale_audit(directory: &Path) -> bool {
+    let (used, files) = match tools::collect_keys(directory) {
+        Ok(found) => found,
+        Err(reason) => return report(reason),
+    };
+    let identified = vocabulary::entries();
+    let audit = tools::audit(&used, &identified);
+    println!(
+        "locale audit: {} source file(s), {} distinct key(s) used, {} identified",
+        files,
+        used.len(),
+        identified.len()
+    );
+    for key in &audit.missing {
+        println!("missing: {key}");
+    }
+    for key in &audit.unused {
+        println!("unused: {key}");
+    }
+    if !audit.is_clean() {
+        return report(format!(
+            "{} used key(s) are not identified in the vocabulary",
+            audit.missing.len()
+        ));
     }
     true
 }

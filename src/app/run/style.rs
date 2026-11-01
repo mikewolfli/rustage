@@ -767,6 +767,29 @@ pub(super) fn style(options: &crate::cli::StyleOptions) -> bool {
             },
             "token" => define_token_from(&mut tokens, argument).map(|line| vec![line]),
             "theme" => define_theme_from(&mut tokens, argument).map(|line| vec![line]),
+            "theme-load" => tokens.load_theme_file(argument).map(|line| vec![line]),
+            "theme-save" => match argument.split_once(':') {
+                Some((name, path)) => tokens
+                    .save_theme_file(name, path)
+                    .map(|()| vec![format!("theme {name}: saved to {path}")]),
+                None => Err(format!("theme-save needs <name>:<path>, got {argument:?}")),
+            },
+            "trace-check" => match &element {
+                Some(element) => {
+                    let css = Css::parse(&source);
+                    let disagreements =
+                        crate::app::style::css_view::trace_disagreements(&css, element, None);
+                    if disagreements.is_empty() {
+                        Ok(vec!["trace: the host and the library agree".to_owned()])
+                    } else {
+                        Ok(disagreements
+                            .iter()
+                            .map(|disagreement| format!("trace: {}", disagreement.render()))
+                            .collect())
+                    }
+                }
+                None => Err("trace-check needs an element".to_owned()),
+            },
             "under" => {
                 if argument == "-" || argument == "none" || argument.is_empty() {
                     theme = None;

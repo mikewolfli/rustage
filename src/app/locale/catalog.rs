@@ -454,6 +454,41 @@ pub fn installed() -> Selection {
         .unwrap_or(Selection::Chosen { language: DEFAULT })
 }
 
+/// Loads the `language/` directory into the library's global i18n manager.
+///
+/// The packs are runtime data: [`rust_widgets::i18n::init_with_options`] reads every JSON file under
+/// the directory, so a translator's edit on disk is what the window and CLI read. Loading nothing is
+/// reported rather than treated as success — an empty catalogue would paint keys in the window
+/// (principle #22).
+///
+/// The tag is the host's own (`en`, `zh-Hans`) and so is each file's `language` field; the upstream
+/// files under `language/` use a primary subtag, but those are the library's internal catalogue, not
+/// this application's. One convention — file stem == declared language == manager language — is what
+/// keeps the three in step (blue21 L-4 item 7).
+pub fn install_global() -> Result<(), String> {
+    let language = installed().language();
+    let dir = super::vocabulary::language_dir();
+    let report = rust_widgets::i18n::init_with_options(rust_widgets::i18n::InitOptions {
+        language: language.tag().to_owned(),
+        preload_dir: Some(dir.display().to_string()),
+        diagnostics: true,
+    });
+    if !report.errors.is_empty() {
+        return Err(format!(
+            "the language packs in {} could not all be loaded: {}",
+            dir.display(),
+            report.errors.join("; ")
+        ));
+    }
+    if report.files_loaded == 0 {
+        return Err(format!(
+            "no language pack was found in {}; the interface would show its keys",
+            dir.display()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Catalog, Fault, Pack, Selection, Text, select};

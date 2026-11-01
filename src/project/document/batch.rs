@@ -829,7 +829,14 @@ impl Plan {
         let mut structure = Structure::of(document);
         let mut gone: BTreeSet<NodeId> = BTreeSet::new();
         let mut written: BTreeMap<(NodeId, PropertyName), usize> = BTreeMap::new();
-        let mut staged: BTreeMap<(NodeId, PropertyName), Option<PropertyValue>> = BTreeMap::new();
+        // Where a property's batch-local value is, rather than a second copy of it: an index into
+        // `ops` (blue21 O-11), or `Cleared` once a `Step::Clear` removed it.
+        #[derive(Clone, Copy)]
+        enum Staged {
+            Set(usize),
+            Cleared,
+        }
+        let mut staged: BTreeMap<(NodeId, PropertyName), Staged> = BTreeMap::new();
 
         for (index, step) in batch.steps().iter().enumerate() {
             match step {
@@ -880,13 +887,13 @@ impl Plan {
                     });
                     for (name, value) in node.properties() {
                         written.insert((id, name.clone()), index);
-                        staged.insert((id, name.clone()), Some(value.clone()));
                         ops.push(ChangeOp::SetProperty {
                             id,
                             name: name.clone(),
                             previous: None,
                             value: value.clone(),
                         });
+                        staged.insert((id, name.clone()), Staged::Set(ops.len() - 1));
                     }
                 }
                 Step::Remove { id } => {
@@ -1004,10 +1011,15 @@ impl Plan {
                             second: index,
                         });
                     }
-                    let previous = staged
-                        .get(&(*id, name.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| node.property(name).cloned());
+                    let key = (*id, name.clone());
+                    let previous = match staged.get(&key) {
+                        None => node.property(name).cloned(),
+                        Some(Staged::Cleared) => None,
+                        Some(Staged::Set(position)) => match ops.get(*position) {
+                            Some(ChangeOp::SetProperty { value, .. }) => Some(value.clone()),
+                            _ => node.property(name).cloned(),
+                        },
+                    };
                     if let PropertyValue::Asset(asset) = value {
                         match root.resolve_for_creation(asset) {
                             Err(error) => {
@@ -1027,13 +1039,13 @@ impl Plan {
                             Ok(_) => {}
                         }
                     }
-                    staged.insert((*id, name.clone()), Some(value.clone()));
                     ops.push(ChangeOp::SetProperty {
                         id: *id,
                         name: name.clone(),
                         previous,
                         value: value.clone(),
                     });
+                    staged.insert(key, Staged::Set(ops.len() - 1));
                 }
                 Step::Clear { id, name } => {
                     let Some(node) = document.node(*id).filter(|_| !gone.contains(id)) else {
@@ -1048,10 +1060,15 @@ impl Plan {
                             second: index,
                         });
                     }
-                    let removed = staged
-                        .get(&(*id, name.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| node.property(name).cloned());
+                    let key = (*id, name.clone());
+                    let removed = match staged.get(&key) {
+                        None => node.property(name).cloned(),
+                        Some(Staged::Cleared) => None,
+                        Some(Staged::Set(position)) => match ops.get(*position) {
+                            Some(ChangeOp::SetProperty { value, .. }) => Some(value.clone()),
+                            _ => node.property(name).cloned(),
+                        },
+                    };
                     let Some(removed) = removed else {
                         findings.push(Finding::NothingToClear {
                             index,
@@ -1060,12 +1077,12 @@ impl Plan {
                         });
                         continue;
                     };
-                    staged.insert((*id, name.clone()), None);
                     ops.push(ChangeOp::ClearProperty {
                         id: *id,
                         name: name.clone(),
                         removed,
                     });
+                    staged.insert(key, Staged::Cleared);
                 }
             }
         }
@@ -1264,13 +1281,18 @@ pub fn apply(plan: &Plan, document: &mut DocumentStore) -> Outcome {
             document.adopt_id(node.id());
         }
     }
-    let outcome = document.apply(set.clone());
+    // The inverse can be derived before `apply` consumes the set: `apply` only proceeds when
+    // `set.base()` equals the current revision, and it advances the revision by exactly one. So the
+    // revision the inverse must be applied at is `base.next()`. This used to clone the whole set
+    // (ops include `Box<Node>`) only to keep a copy for `inverse` afterwards (blue21 O-10).
+    let intent = set.intent().to_owned();
+    let inverse_set = set.inverse(set.base().next());
+    let outcome = document.apply(set);
     match outcome {
         ApplyOutcome::Applied { from, to } => {
-            let inverse_set = set.inverse(to);
             let inverse = ChangesetInverse {
                 batch: Batch::of_change_set(
-                    set.intent().to_owned(),
+                    intent,
                     &format!("undo: {}", plan.intent),
                     &inverse_set,
                 ),

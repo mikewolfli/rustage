@@ -360,6 +360,248 @@ pub fn built_in() -> Panels {
     panels
 }
 
+/// One panel roadmap §2.2 requires.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RequiredPanel {
+    id: &'static str,
+    title: &'static str,
+    domain: &'static str,
+    host_id: Option<&'static str>,
+    deferred: bool,
+}
+
+impl RequiredPanel {
+    /// The roadmap's panel id (`panel.<name>`).
+    pub const fn id(&self) -> &'static str {
+        self.id
+    }
+
+    /// Its title.
+    pub const fn title(&self) -> &'static str {
+        self.title
+    }
+
+    /// The responsibility domain the roadmap names.
+    pub const fn domain(&self) -> &'static str {
+        self.domain
+    }
+
+    /// The panel id this host registers for it, when one exists today.
+    pub const fn host_id(&self) -> Option<&'static str> {
+        self.host_id
+    }
+
+    /// Whether the roadmap defers it to a future extension.
+    pub const fn is_deferred(&self) -> bool {
+        self.deferred
+    }
+}
+
+/// The panels roadmap §2.2 lists, in its order. A panel with no host id is accounted for here and
+/// reported missing; it is never replaced by an empty stand-in.
+pub const REQUIRED_PANELS: [RequiredPanel; 42] = [
+    required("panel.project", "Project tree", "F02", None),
+    required("panel.objects", "Object tree", "F09", None),
+    required("panel.widgets", "Widget library", "F09", None),
+    required("panel.assets", "Asset library", "F12", None),
+    required("panel.components", "Component library", "F12", None),
+    required(
+        "panel.properties",
+        "Property inspector",
+        "F11",
+        Some("inspector"),
+    ),
+    required("panel.layout", "Layout inspector", "F10", None),
+    required("panel.styles", "Style inspector", "F11", None),
+    required("panel.events", "Events and actions", "F13", Some("events")),
+    required("panel.data", "Data and state", "F13", Some("data")),
+    required("panel.pages", "Pages and navigation", "F13", Some("pages")),
+    required("panel.actions", "Application actions", "F26", None),
+    required(
+        "panel.application",
+        "Application menu and tool area",
+        "F26",
+        None,
+    ),
+    required("panel.items", "Collection contents", "F27", None),
+    required("panel.states", "States and transitions", "F13", None),
+    required("panel.timeline", "Transition preview", "F11", None),
+    required("panel.outline", "Source outline", "F07", Some("outline")),
+    required("panel.search", "Search results", "F08", None),
+    required("panel.problems", "Problems", "F21", Some("problems")),
+    required("panel.build", "Build output", "F16", None),
+    required("panel.run", "Application output", "F16", None),
+    required("panel.terminal", "Terminal", "F16", None),
+    required("panel.tasks", "Background tasks", "F01", None),
+    required("panel.preview", "Preview management", "F14", None),
+    required("panel.hot", "Hot update", "F17", None),
+    required("panel.targets", "Targets and deployment", "F18", None),
+    required(
+        "panel.dependencies",
+        "Cargo members and dependencies",
+        "F02",
+        None,
+    ),
+    required(
+        "panel.environments",
+        "Toolchains and environments",
+        "F02;F28",
+        None,
+    ),
+    required("panel.breakpoints", "Breakpoints", "F19", None),
+    required("panel.stack", "Call stack and threads", "F19", None),
+    required("panel.variables", "Variables and watches", "F19", None),
+    required("panel.debug", "Debug console", "F19", Some("debug")),
+    required("panel.vcs", "Version control", "F20", None),
+    required("panel.history", "File and project history", "F03/F20", None),
+    required("panel.tests", "Tests", "F21", None),
+    deferred("panel.profiler", "Profiler", "T21.09"),
+    deferred("panel.memory", "Native debug inspection", "T19.09"),
+    required("panel.inspection", "Design inspection", "F21", None),
+    required("panel.extensions", "Extensions and tools", "F22", None),
+    required("panel.ai", "AI session", "F23", None),
+    required(
+        "panel.notifications",
+        "Notifications and recovery",
+        "F01/F03",
+        None,
+    ),
+    required("panel.help", "Help and contracts", "F24", None),
+];
+
+const fn required(
+    id: &'static str,
+    title: &'static str,
+    domain: &'static str,
+    host_id: Option<&'static str>,
+) -> RequiredPanel {
+    RequiredPanel {
+        id,
+        title,
+        domain,
+        host_id,
+        deferred: false,
+    }
+}
+
+const fn deferred(id: &'static str, title: &'static str, domain: &'static str) -> RequiredPanel {
+    RequiredPanel {
+        id,
+        title,
+        domain,
+        host_id: None,
+        deferred: true,
+    }
+}
+
+/// What the ledger says about one required panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PanelState {
+    /// Registered, available and shown.
+    Shown,
+    /// Registered but closed by the layout.
+    Hidden,
+    /// Registered but its service is not available, so it is not shown.
+    Unavailable,
+    /// No panel is registered for it yet.
+    Missing,
+    /// The roadmap defers it to a future extension.
+    Deferred,
+}
+
+impl PanelState {
+    /// Its name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shown => "shown",
+            Self::Hidden => "hidden",
+            Self::Unavailable => "unavailable",
+            Self::Missing => "missing",
+            Self::Deferred => "deferred",
+        }
+    }
+}
+
+/// One line of the ledger.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Accounting {
+    panel: RequiredPanel,
+    state: PanelState,
+}
+
+impl Accounting {
+    /// The required panel.
+    pub const fn panel(&self) -> RequiredPanel {
+        self.panel
+    }
+
+    /// What the host has for it.
+    pub const fn state(&self) -> PanelState {
+        self.state
+    }
+}
+
+impl Panels {
+    /// Accounts for every panel roadmap §2.2 requires against what this host registered and has
+    /// services for.
+    pub fn accounting(&self, services: &BTreeSet<String>) -> Vec<Accounting> {
+        REQUIRED_PANELS
+            .iter()
+            .map(|panel| {
+                let state = if panel.is_deferred() {
+                    PanelState::Deferred
+                } else {
+                    match panel.host_id().and_then(|id| self.spec(id)) {
+                        None => PanelState::Missing,
+                        Some(spec) if !spec.is_available(services) => PanelState::Unavailable,
+                        Some(spec) if self.layout.shown().iter().any(|id| id == spec.id()) => {
+                            PanelState::Shown
+                        }
+                        Some(_) => PanelState::Hidden,
+                    }
+                };
+                Accounting {
+                    panel: *panel,
+                    state,
+                }
+            })
+            .collect()
+    }
+
+    /// The ledger in lines: a count per state, then every panel that is not shown.
+    pub fn accounting_lines(&self, services: &BTreeSet<String>) -> Vec<String> {
+        let accounting = self.accounting(services);
+        let count = |state: PanelState| {
+            accounting
+                .iter()
+                .filter(|entry| entry.state() == state)
+                .count()
+        };
+        let mut lines = vec![format!(
+            "panels: {} required, {} shown, {} hidden, {} unavailable, {} missing, {} deferred",
+            accounting.len(),
+            count(PanelState::Shown),
+            count(PanelState::Hidden),
+            count(PanelState::Unavailable),
+            count(PanelState::Missing),
+            count(PanelState::Deferred),
+        )];
+        for entry in &accounting {
+            if entry.state() == PanelState::Shown {
+                continue;
+            }
+            lines.push(format!(
+                "  {} ({}) {}: {}",
+                entry.panel().id(),
+                entry.panel().domain(),
+                entry.state().name(),
+                entry.panel().title(),
+            ));
+        }
+        lines
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +808,97 @@ mod tests {
         for spec in panels.specs() {
             assert!(report.contains(spec.id()), "{report}");
         }
+    }
+
+    #[test]
+    fn the_ledger_is_the_roadmaps_42_panels() {
+        assert_eq!(REQUIRED_PANELS.len(), 42);
+        let mut ids: Vec<&str> = REQUIRED_PANELS.iter().map(|panel| panel.id()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), REQUIRED_PANELS.len(), "the ids are unique");
+        for panel in REQUIRED_PANELS {
+            assert!(panel.id().starts_with("panel."), "{}", panel.id());
+            assert!(!panel.title().is_empty());
+            assert!(!panel.domain().is_empty());
+            if let Some(host) = panel.host_id() {
+                assert!(!panel.is_deferred(), "{} has a host panel", panel.id());
+                assert!(
+                    built_in().spec(host).is_some()
+                        || ["pages", "events", "data", "debug"].contains(&host),
+                    "{} names an unknown host panel {host}",
+                    panel.id()
+                );
+            }
+        }
+        let deferred: Vec<&str> = REQUIRED_PANELS
+            .iter()
+            .filter(|panel| panel.is_deferred())
+            .map(|panel| panel.id())
+            .collect();
+        assert_eq!(deferred, vec!["panel.profiler", "panel.memory"]);
+    }
+
+    #[test]
+    fn the_ledger_says_missing_rather_than_faking_a_panel() {
+        let panels = built_in();
+        let accounting = panels.accounting(&services(&[]));
+        let state = |id: &str| {
+            accounting
+                .iter()
+                .find(|entry| entry.panel().id() == id)
+                .map(|entry| entry.state())
+        };
+        assert_eq!(state("panel.widgets"), Some(PanelState::Missing));
+        assert_eq!(state("panel.profiler"), Some(PanelState::Deferred));
+        // The outline is registered but its service is not available in this call.
+        assert_eq!(state("panel.outline"), Some(PanelState::Unavailable));
+        let lines = panels.accounting_lines(&services(&[
+            "document-tree",
+            "property-schema",
+            "diagnostics",
+        ]));
+        assert!(lines[0].contains("42 required"), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("panel.widgets (F09) missing")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_service_is_not_shown_and_the_ledger_reports_it() {
+        let mut panels = Panels::new();
+        panels
+            .register(
+                PanelSpec::new("inspector", "Inspector", Dock::Right, 320)
+                    .needing("property-schema"),
+            )
+            .expect("registers");
+        panels.show("inspector").expect("shows");
+
+        let without = panels.accounting(&services(&[]));
+        assert_eq!(
+            without
+                .iter()
+                .find(|entry| entry.panel().id() == "panel.properties")
+                .map(|entry| entry.state()),
+            Some(PanelState::Unavailable)
+        );
+        assert!(
+            !panels
+                .visible(&services(&[]))
+                .iter()
+                .any(|spec| spec.id() == "inspector")
+        );
+
+        let with = panels.accounting(&services(&["property-schema"]));
+        assert_eq!(
+            with.iter()
+                .find(|entry| entry.panel().id() == "panel.properties")
+                .map(|entry| entry.state()),
+            Some(PanelState::Shown)
+        );
     }
 }

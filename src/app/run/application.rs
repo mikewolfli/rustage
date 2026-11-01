@@ -583,6 +583,12 @@ pub(super) fn app_context(options: &crate::cli::AppContextOptions) -> bool {
                 }
                 None => Err(format!("{argument:?} is not an action id")),
             },
+            "required" => {
+                for (kind, actions) in crate::app::application::context::required() {
+                    println!("{}: {}", kind.name(), actions.join(", "));
+                }
+                Ok(())
+            }
             "show" => {
                 for kind in ContextKind::ALL {
                     if let Some(menu) = registry.menu(kind) {
@@ -612,11 +618,16 @@ pub(super) fn app_context(options: &crate::cli::AppContextOptions) -> bool {
 pub(super) fn app_dialog(options: &crate::cli::AppDialogOptions) -> bool {
     use crate::app::application::action::ActionId;
     use crate::app::application::dialog::{Dialog, Kind, Modality, Stack, WindowId};
+    use crate::app::application::wizard::{
+        Confirmation, RequiredConfirmation, RequiredWizard, Wizard,
+    };
     use std::collections::BTreeMap;
 
     let mut stack: Option<Stack> = None;
     let mut defined: BTreeMap<String, Dialog> = BTreeMap::new();
     let mut fields: BTreeMap<String, String> = BTreeMap::new();
+    let mut wizard: Option<Wizard> = None;
+    let mut confirmation: Option<Confirmation> = None;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<(), String> = match verb {
@@ -732,6 +743,160 @@ pub(super) fn app_dialog(options: &crate::cli::AppDialogOptions) -> bool {
                             .join(", "),
                     ),
                     None => println!("no main window"),
+                }
+                Ok(())
+            }
+            "wizards" => {
+                for required in RequiredWizard::ALL {
+                    println!("{}: {}", required.id(), required.title());
+                }
+                for required in RequiredConfirmation::ALL {
+                    println!("{}: {}", required.id(), required.title());
+                }
+                Ok(())
+            }
+            "confirm" => match RequiredConfirmation::from_id(argument) {
+                Some(required) => {
+                    let asking = Confirmation::new(required);
+                    println!("{}", asking.ask());
+                    confirmation = Some(asking);
+                    Ok(())
+                }
+                None => Err(format!(
+                    "{argument:?} is not a required confirmation; list them with wizards"
+                )),
+            },
+            "acknowledge" | "decline" => {
+                let Some(confirmation) = confirmation.as_mut() else {
+                    return report(format!("{verb} needs a confirmation"));
+                };
+                let answered = if verb == "acknowledge" {
+                    confirmation.acknowledge()
+                } else {
+                    confirmation.decline()
+                };
+                match answered {
+                    Ok(outcome) => {
+                        println!("{}: {outcome:?}", confirmation.required().id());
+                        Ok(())
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "confirm-show" => {
+                match confirmation.as_ref() {
+                    Some(confirmation) => println!(
+                        "{}: {:?}",
+                        confirmation.required().id(),
+                        confirmation.outcome()
+                    ),
+                    None => println!("no confirmation"),
+                }
+                Ok(())
+            }
+            "wizard" => match RequiredWizard::from_id(argument) {
+                Some(required) => {
+                    wizard = Some(Wizard::new(required));
+                    Ok(())
+                }
+                None => Err(format!(
+                    "{argument:?} is not a required wizard; list them with wizards"
+                )),
+            },
+            "step" => {
+                let Some(wizard) = wizard.as_mut() else {
+                    return report("step needs a wizard".to_owned());
+                };
+                match argument.split_once(':') {
+                    Some((id, title)) => wizard.add_input(id, title),
+                    None => Err(format!("{argument:?} is not <id>:<title>")),
+                }
+            }
+            "change" => {
+                let Some(wizard) = wizard.as_mut() else {
+                    return report("change needs a wizard".to_owned());
+                };
+                wizard.add_change(argument)
+            }
+            "review" => {
+                let Some(wizard) = wizard.as_mut() else {
+                    return report("review needs a wizard".to_owned());
+                };
+                wizard.add_review(argument)
+            }
+            "next" | "back" => {
+                let Some(wizard) = wizard.as_mut() else {
+                    return report(format!("{verb} needs a wizard"));
+                };
+                let required = wizard.required();
+                let moved = if verb == "next" {
+                    wizard.next()
+                } else {
+                    wizard.back()
+                };
+                match moved {
+                    Ok(step) => {
+                        let title = step.title().to_owned();
+                        println!("{}: {title}", required.id());
+                        Ok(())
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "finish" => {
+                let Some(wizard) = wizard.take() else {
+                    return report("finish needs a wizard".to_owned());
+                };
+                match wizard.finish() {
+                    Ok(crate::app::application::wizard::Outcome::Committed(commit)) => {
+                        for line in commit.lines() {
+                            println!("{line}");
+                        }
+                        Ok(())
+                    }
+                    Ok(crate::app::application::wizard::Outcome::Cancelled) => {
+                        println!("cancelled: nothing was applied");
+                        Ok(())
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "abandon" => {
+                let Some(wizard) = wizard.take() else {
+                    return report("abandon needs a wizard".to_owned());
+                };
+                match wizard.cancel() {
+                    crate::app::application::wizard::Outcome::Cancelled => {
+                        println!("cancelled: nothing was applied");
+                        Ok(())
+                    }
+                    crate::app::application::wizard::Outcome::Committed(commit) => {
+                        println!(
+                            "{}: {} change(s)",
+                            commit.wizard().id(),
+                            commit.changes().len()
+                        );
+                        Ok(())
+                    }
+                }
+            }
+            "wizard-show" => {
+                match wizard.as_ref() {
+                    Some(wizard) => {
+                        println!(
+                            "{} step(s), position {}, on review: {}",
+                            wizard.steps().len(),
+                            wizard.position(),
+                            if wizard.is_on_review() { "yes" } else { "no" }
+                        );
+                        for step in wizard.steps() {
+                            println!("  step {}: {}", step.id().unwrap_or("review"), step.title());
+                        }
+                        for line in wizard.render() {
+                            println!("{line}");
+                        }
+                    }
+                    None => println!("no wizard"),
                 }
                 Ok(())
             }

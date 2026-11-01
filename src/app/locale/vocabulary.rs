@@ -31,6 +31,8 @@
 
 #![allow(dead_code)]
 
+use std::sync::OnceLock;
+
 use crate::app::commands::command::built_in as registry;
 use crate::app::commands::menu::{Item, built_in as menus};
 use crate::app::commands::shortcuts::built_in as keymap;
@@ -48,6 +50,8 @@ pub enum Source {
     Diagnostic,
     /// A line the process itself prints.
     Shell,
+    /// A label the workbench window paints (menus, toolbar, panel titles, buttons).
+    Window,
 }
 
 impl Source {
@@ -58,6 +62,7 @@ impl Source {
             Self::Menu => "menu",
             Self::Diagnostic => "diagnostic",
             Self::Shell => "shell",
+            Self::Window => "window",
         }
     }
 }
@@ -75,39 +80,137 @@ pub struct Entry {
 
 /// The diagnostic templates, keyed by what they say rather than by their English.
 ///
-/// A `{name}` is a placeholder [`crate::app::locale::catalog::Catalog::fill`] replaces.
-pub const TEMPLATES: [(&str, &str); 7] = [
-    ("diag.command.unknown", "there is no command {id}"),
-    ("diag.command.disabled", "{id} is not available: {reason}"),
-    ("diag.command.missing", "{id} needs a {name} argument"),
-    (
-        "diag.command.bad-argument",
-        "{id}: {name} is not valid: {reason}",
-    ),
-    (
-        "diag.command.unauthorized",
-        "{id} has the {effect} effect, which is not authorized",
-    ),
-    ("diag.command.no-such-command", "there is no command {id}"),
-    ("diag.command.not-an-id", "{id} is not a command id"),
+/// The keys of the diagnostic templates, in the order the report lists them.
+pub const TEMPLATE_KEYS: [&str; 7] = [
+    "diag.command.unknown",
+    "diag.command.disabled",
+    "diag.command.missing",
+    "diag.command.bad-argument",
+    "diag.command.unauthorized",
+    "diag.command.no-such-command",
+    "diag.command.not-an-id",
 ];
 
-/// The process's own lines, keyed by where they are printed.
-pub const SHELL: [(&str, &str); 5] = [
-    ("shell.version", "rustage {version}"),
-    (
-        "shell.status.not-implemented",
-        "The desktop designer is not implemented yet.",
-    ),
-    (
-        "shell.status.icon-strip",
-        "The icon strip is: run `rustage --render-icons <directory>` to render it.",
-    ),
-    (
-        "shell.status.probes",
-        "The dependency contract probes are: run `rustage --probe-apis <directory>`.",
-    ),
-    ("shell.error.prefix", "rustage: {message}"),
+/// The workbench window's own labels, keyed by what they name.
+///
+/// The keys of the workbench window's labels.
+pub const WINDOW_KEYS: [&str; 107] = [
+    "ui.panel.pages",
+    "ui.panel.outline",
+    "ui.panel.events",
+    "ui.panel.inspector",
+    "ui.panel.data",
+    "ui.panel.messages",
+    "ui.panel.problems",
+    "ui.panel.debug",
+    "ui.menu.quit",
+    "ui.menu.layout",
+    "ui.menu.editor",
+    "ui.menu.save-layout",
+    "ui.menu.reset-layout",
+    "ui.menu.split-right",
+    "ui.menu.next-group",
+    "ui.toolbar.commands",
+    "ui.toolbar.split",
+    "ui.toolbar.next-group",
+    "ui.toolbar.save-layout",
+    "ui.toolbar.reset-layout",
+    "ui.button.add",
+    "ui.button.open",
+    "ui.button.back",
+    "ui.button.forward",
+    "ui.button.close",
+    "ui.button.clear",
+    "ui.button.reset",
+    "ui.button.values",
+    "ui.button.theme",
+    "ui.button.bind",
+    "ui.button.unbind",
+    "ui.button.fire",
+    "ui.button.start",
+    "ui.button.run",
+    "ui.button.step",
+    "ui.button.stop",
+    "ui.placeholder.page-name",
+    "ui.placeholder.handler-name",
+    "ui.placeholder.theme-name",
+    "ui.placeholder.mixed",
+    "ui.inspector.node",
+    "ui.inspector.kind",
+    "ui.inspector.theme",
+    "ui.inspector.default",
+    "ui.inspector.accepted",
+    "ui.inspector.inspect",
+    "ui.inspector.selection",
+    "ui.data.dataset",
+    "ui.data.diagnostic",
+    "ui.context.clear",
+    "ui.context.reset",
+    "ui.context.inspect",
+    "ui.context.select-parent",
+    "ui.context.toggle-hide",
+    "ui.context.toggle-lock",
+    "ui.context.raise",
+    "ui.status.ready",
+    "ui.status.no-document",
+    "ui.status.no-problems",
+    "ui.status.command-palette",
+    "ui.status.palette-closed",
+    "ui.status.palette-could-not-focus",
+    "ui.status.hidden",
+    "ui.status.shown",
+    "ui.status.no-panel",
+    "ui.status.layout-reset",
+    "ui.status.layout-saved",
+    "ui.status.layout-not-saved",
+    "ui.status.no-layout-path",
+    "ui.status.editor-split",
+    "ui.status.focus-group",
+    "ui.status.closing",
+    "ui.status.unknown-action",
+    "ui.status.no-parent",
+    "ui.status.locked",
+    "ui.status.unlocked",
+    "ui.status.hidden-node",
+    "ui.status.shown-node",
+    "ui.status.raised",
+    "ui.status.already-top",
+    "ui.status.inspector-cleared",
+    "ui.status.reset-nodes",
+    "ui.status.inspected",
+    "ui.status.theme-applied",
+    "ui.status.data-applied",
+    "ui.status.page-declared",
+    "ui.status.navigation-declared",
+    "ui.status.now-on",
+    "ui.status.bound",
+    "ui.status.unbound",
+    "ui.error.schema-unavailable",
+    "ui.error.contracts-differ",
+    "ui.error.contracts",
+    "ui.error.not-applied",
+    "ui.error.inspect-refused",
+    "ui.error.theme-refused",
+    "ui.error.not-added",
+    "ui.error.not-opened",
+    "ui.error.not-moved",
+    "ui.error.not-closed",
+    "ui.error.not-bound",
+    "ui.error.not-unbound",
+    "ui.error.not-fired",
+    "ui.note.inspector",
+    "ui.note.data",
+    "ui.note.events",
+    "ui.note.pages",
+];
+
+/// The keys of the process's own lines, in the order the report lists them.
+pub const SHELL_KEYS: [&str; 5] = [
+    "shell.version",
+    "shell.status.not-implemented",
+    "shell.status.icon-strip",
+    "shell.status.probes",
+    "shell.error.prefix",
 ];
 
 /// Every identified interface string, in key order.
@@ -157,11 +260,14 @@ pub fn entries() -> Vec<Entry> {
         walk(&mut found, &format!("menu.{}", menu.id()), menu.items());
     }
 
-    for (key, english) in TEMPLATES {
-        push(&mut found, key.to_owned(), english, Source::Diagnostic);
-    }
-    for (key, english) in SHELL {
-        push(&mut found, key.to_owned(), english, Source::Shell);
+    for (keys, source) in [
+        (TEMPLATE_KEYS.as_slice(), Source::Diagnostic),
+        (SHELL_KEYS.as_slice(), Source::Shell),
+        (WINDOW_KEYS.as_slice(), Source::Window),
+    ] {
+        for key in keys {
+            push(&mut found, (*key).to_owned(), english_of(key), source);
+        }
     }
 
     found.sort_by(|left, right| left.key.cmp(&right.key));
@@ -199,37 +305,101 @@ fn walk(entries: &mut Vec<Entry>, prefix: &str, items: &[Item]) {
     }
 }
 
-/// The pack for a language.
+/// The directory the JSON language packs live in.
+///
+/// The packs are runtime data, not compiled into the binary: a translator edits
+/// `language/<tag>.json` and a hot reload picks it up, which is the upstream convention the
+/// project follows (blue21 L-1/L-4). The lookup order is:
+///
+/// 1. `RUSTAGE_LANGUAGE_DIR`, for a packaged build or a test with its own fixtures;
+/// 2. `language/` under the working directory, which is how `cargo run` finds the checkout;
+/// 3. `language/` next to the executable, which is how an installed bundle finds its data.
+///
+/// None of these existing is not a silent fallback: [`pack`] logs the missing file and answers an
+/// empty pack, which the completeness tests fail on and the interface shows as its keys.
+pub fn language_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("RUSTAGE_LANGUAGE_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let local = std::path::PathBuf::from("language");
+    if local.is_dir() {
+        return local;
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        let beside = parent.join("language");
+        if beside.is_dir() {
+            return beside;
+        }
+    }
+    local
+}
+
+/// The path of one language's JSON pack.
+pub fn pack_path(language: Language) -> std::path::PathBuf {
+    language_dir().join(format!("{}.json", language.tag()))
+}
+
+/// The decoded pack for a language, read from its JSON file once.
+fn loaded(language: Language) -> &'static Pack {
+    static ENGLISH: OnceLock<Pack> = OnceLock::new();
+    static CHINESE: OnceLock<Pack> = OnceLock::new();
+    let slot: &'static OnceLock<Pack> = match language {
+        Language::English => &ENGLISH,
+        Language::SimplifiedChinese => &CHINESE,
+    };
+    slot.get_or_init(|| {
+        let path = pack_path(language);
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match Pack::decode(&text) {
+                Ok(pack) => pack,
+                Err(fault) => {
+                    crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "app::locale::vocabulary",
+                        &format!(
+                            "the {} pack at {} is malformed: {}",
+                            language.tag(),
+                            path.display(),
+                            fault.message()
+                        ),
+                    );
+                    Pack::new(language)
+                }
+            },
+            Err(error) => {
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::locale::vocabulary",
+                    &format!(
+                        "the {} pack could not be read from {}: {error}",
+                        language.tag(),
+                        path.display()
+                    ),
+                );
+                Pack::new(language)
+            }
+        }
+    })
+}
+
+/// The English text for a key, read from the English pack.
+fn english_of(key: &'static str) -> &'static str {
+    loaded(Language::English).get(key).unwrap_or(key)
+}
+
+/// The pack for a language, read from its JSON language file under [`language_dir`].
 ///
 /// Only a bundled language has messages; an unbundled one is refused by
 /// [`crate::app::locale::catalog::Catalog::for_language`] before it reaches here, so this answers an
 /// empty pack rather than inventing text.
-///
-/// The English pack is derived from [`entries`] so it cannot omit a string the interface shows. The
-/// Simplified Chinese pack is translated against the same keys, and its completeness (every key, no
-/// extra key) is checked in this module's tests rather than at runtime.
-///
-/// The pack is derived on demand, which is right for the command line and for the reports that are
-/// the vocabulary's only consumers today. A windowed consumer that looks text up per frame would hold
-/// one [`Catalog`](crate::app::locale::catalog::Catalog) instead of deriving one per lookup — that is T24.06's concern, and it is stated
-/// here so the choice is not mistaken for an oversight.
 pub fn pack(language: Language) -> Pack {
-    let mut pack = Pack::new(language);
     if language.bundled() {
-        match language {
-            Language::English => {
-                for entry in entries() {
-                    pack.insert(entry.key, entry.english);
-                }
-            }
-            Language::SimplifiedChinese => {
-                for (key, text) in super::zh_hans::MESSAGES {
-                    pack.insert(key, text);
-                }
-            }
-        }
+        loaded(language).clone()
+    } else {
+        Pack::new(language)
     }
-    pack
 }
 
 /// What the vocabulary covers, and where a label is missing.
@@ -330,8 +500,8 @@ pub fn coverage() -> Coverage {
 
 #[cfg(test)]
 mod tests {
-    use super::{SHELL, Source, TEMPLATES, coverage, entries, pack};
-    use crate::app::locale::catalog::Catalog;
+    use super::{SHELL_KEYS, Source, TEMPLATE_KEYS, WINDOW_KEYS, coverage, entries, pack};
+    use crate::app::locale::catalog::{Catalog, Text};
     use crate::host::locale::Language;
 
     #[test]
@@ -372,10 +542,13 @@ mod tests {
     #[test]
     fn the_diagnostics_and_shell_lines_are_identified() {
         let keys: Vec<String> = entries().into_iter().map(|entry| entry.key).collect();
-        for (key, _) in TEMPLATES {
+        for key in TEMPLATE_KEYS {
             assert!(keys.contains(&key.to_owned()), "{key}");
         }
-        for (key, _) in SHELL {
+        for key in SHELL_KEYS {
+            assert!(keys.contains(&key.to_owned()), "{key}");
+        }
+        for key in WINDOW_KEYS {
             assert!(keys.contains(&key.to_owned()), "{key}");
         }
     }
@@ -388,6 +561,7 @@ mod tests {
             Source::Menu,
             Source::Diagnostic,
             Source::Shell,
+            Source::Window,
         ] {
             assert!(
                 sources.contains(&source),
@@ -398,16 +572,18 @@ mod tests {
     }
 
     #[test]
-    fn the_english_pack_answers_every_identified_key() {
+    fn the_english_pack_is_the_identified_vocabulary_not_a_copy() {
         let catalog = Catalog::from_pack(pack(Language::English));
-        for entry in entries() {
-            assert!(
-                catalog.text(&entry.key).is_found(),
-                "{} is not in the pack",
+        let identified = entries();
+        for entry in &identified {
+            assert_eq!(
+                catalog.text(&entry.key),
+                Text::Found(entry.english.as_str()),
+                "{} differs from the registry-derived English",
                 entry.key
             );
         }
-        assert!(catalog.pack().len() >= entries().len());
+        assert_eq!(catalog.pack().len(), identified.len());
     }
 
     #[test]
@@ -425,19 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn the_chinese_pack_has_no_key_the_vocabulary_does_not_identify() {
-        let identified: std::collections::BTreeSet<String> =
-            entries().into_iter().map(|entry| entry.key).collect();
-        for (key, _) in crate::app::locale::zh_hans::MESSAGES {
-            assert!(
-                identified.contains(key),
-                "{key} is translated but not identified"
-            );
-        }
-    }
-
-    #[test]
-    fn the_chinese_pack_keeps_every_placeholder_and_is_sorted_by_key() {
+    fn the_chinese_pack_keeps_every_placeholder() {
         fn placeholders(text: &str) -> std::collections::BTreeSet<String> {
             let mut found = std::collections::BTreeSet::new();
             let mut rest = text;
@@ -450,28 +614,17 @@ mod tests {
             found
         }
 
-        let translated: std::collections::BTreeMap<&str, &str> =
-            crate::app::locale::zh_hans::MESSAGES
-                .iter()
-                .copied()
-                .collect();
-        let mut previous: Option<&str> = None;
-        for (key, text) in crate::app::locale::zh_hans::MESSAGES {
-            if let Some(previous) = previous {
-                assert!(previous < key, "{key} is out of order after {previous}");
-            }
-            previous = Some(key);
+        let english = Catalog::from_pack(pack(Language::English));
+        let chinese = Catalog::from_pack(pack(Language::SimplifiedChinese));
+        for (key, text) in chinese.pack().iter() {
             assert!(!text.trim().is_empty(), "{key} has no text");
-        }
-        for entry in entries() {
-            let text = translated
-                .get(entry.key.as_str())
-                .unwrap_or_else(|| panic!("{} is not translated", entry.key));
+            let Some(source) = english.pack().get(key) else {
+                panic!("{key} is translated but not identified");
+            };
             assert_eq!(
                 placeholders(text),
-                placeholders(&entry.english),
-                "{} changes its placeholders",
-                entry.key
+                placeholders(source),
+                "{key} changes its placeholders"
             );
         }
     }

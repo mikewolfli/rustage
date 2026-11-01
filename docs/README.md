@@ -22,6 +22,10 @@
    gates and measurement scenarios, plus the release baseline.
 11. [Contribution guide](../CONTRIBUTING.md): workflow and checks.
 12. [GitHub administration](github.md): owner-managed repository settings.
+13. [Extension development](extension-development.md): the local package manifest, digest, install
+    and compatibility fixture (T22.07), with the runnable example under `examples/extension-hello`.
+14. [Release guide](release.md): freeze, stage, artifact verification, update journal and the
+    limitations that remain (T25.02/T25.06).
 
 Related design evidence: [Capability planning references](plan/capability-reference.md)
 records the supplementary requirements (adopted, deferred and refused with reasons), the protocol

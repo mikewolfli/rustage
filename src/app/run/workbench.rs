@@ -315,6 +315,9 @@ pub(super) fn workbench(options: &crate::cli::WorkbenchOptions) -> bool {
     for line in panels.render(&services) {
         println!("{line}");
     }
+    for line in panels.accounting_lines(&services) {
+        println!("{line}");
+    }
     if let Some(problem) = problem {
         println!("rustage: {}", problem.message());
         return false;

@@ -1,0 +1,11 @@
+{
+  "id": "com.example.hello",
+  "version": "0.1.0",
+  "host_min": "0.1.0",
+  "host_max": "0.2.0",
+  "capabilities": ["widget"],
+  "permissions": [],
+  "provides": ["hello-card"],
+  "license": "MIT",
+  "digest": "e0abfef02a81504fb0ab39e804e5e2e1493a6ef68f3ad4cf3c55a6837638381d"
+}

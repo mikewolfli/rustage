@@ -236,6 +236,49 @@ impl ChangeSet {
         }
         Ok(())
     }
+
+    /// Validates a set against a real project root, including symbolic links.
+    ///
+    /// [`Self::validate`] refuses a lexical `..` escape, but a path inside the root can still leave
+    /// it through a symlink. Every existing path component is checked: a symlink whose resolved
+    /// target is outside the root is refused and named. A component that does not exist yet is not
+    /// an error, because an agent may create a new file; the existing prefix has already been
+    /// checked.
+    pub fn validate_in(&self, root: &std::path::Path) -> Result<(), String> {
+        self.validate()?;
+        let root = root.canonicalize().map_err(|error| {
+            format!(
+                "the project root {} cannot be resolved: {error}",
+                root.display()
+            )
+        })?;
+        for change in &self.changes {
+            let mut candidate = root.clone();
+            for part in change.path.split('/').filter(|part| !part.is_empty()) {
+                candidate.push(part);
+                let Ok(metadata) = std::fs::symlink_metadata(&candidate) else {
+                    break;
+                };
+                if !metadata.file_type().is_symlink() {
+                    continue;
+                }
+                let resolved = candidate.canonicalize().map_err(|error| {
+                    format!(
+                        "{} is a symbolic link that cannot be resolved: {error}",
+                        change.path
+                    )
+                })?;
+                if !resolved.starts_with(&root) {
+                    return Err(format!(
+                        "{} is a symbolic link that leaves the project root (resolves to {})",
+                        change.path,
+                        resolved.display()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The directories the generator owns; an agent change may not name them.
@@ -414,6 +457,8 @@ pub struct Session {
     pub tools: BTreeSet<String>,
     /// The credential reference (never the secret itself).
     pub credential: String,
+    /// What this session's calls consumed and how they ended (T23.07).
+    pub usage: Vec<UsageRecord>,
 }
 
 impl Session {
@@ -426,12 +471,376 @@ impl Session {
     pub fn allows(&self, tool: &str) -> bool {
         self.tools.contains(tool)
     }
+
+    /// Builds the call preview for a tool this session may use.
+    ///
+    /// A tool outside the session's allowlist is refused here, before a person is asked to
+    /// authorize anything — the allowlist and the per-call grant are two separate gates.
+    pub fn preview_tool(&self, name: &str, arguments: &str) -> Result<ToolCall, String> {
+        if !self.allows(name) {
+            return Err(format!("tool {name:?} is not in this session's tool set"));
+        }
+        Ok(ToolCall {
+            role: self.role,
+            name: name.to_owned(),
+            arguments: arguments.to_owned(),
+        })
+    }
+
+    /// Records one call.
+    ///
+    /// The record must name this session's model: a ledger that mixes models cannot answer "what
+    /// did this service cost", so a mismatched record is refused rather than silently filed.
+    pub fn record(&mut self, record: UsageRecord) -> Result<(), String> {
+        if record.model != self.model {
+            return Err(format!(
+                "the record names model {:?}, not this session's {:?}",
+                record.model, self.model
+            ));
+        }
+        self.usage.push(record);
+        Ok(())
+    }
+
+    /// The recorded calls, in order.
+    pub fn usage(&self) -> &[UsageRecord] {
+        &self.usage
+    }
+
+    /// The ledger totals.
+    pub fn totals(&self) -> UsageTotals {
+        let mut totals = UsageTotals::default();
+        for record in &self.usage {
+            totals.prompt_bytes += record.prompt_bytes;
+            totals.completion_bytes += record.completion_bytes;
+            totals.cost_micros += record.cost_micros;
+            totals.elapsed_ms += record.elapsed_ms;
+            match record.outcome {
+                InvocationOutcome::Completed => totals.completed += 1,
+                InvocationOutcome::Cancelled => totals.cancelled += 1,
+                InvocationOutcome::Broken { .. } => totals.broken += 1,
+            }
+        }
+        totals
+    }
+}
+
+/// A coder→reviewer handoff (T23.12).
+///
+/// The handoff names the candidate by digest and the revision it was based on. A reviewer's copy
+/// therefore cannot silently review a different candidate, and a document that moved on since the
+/// handoff is a conflict rather than an approval. The shared material this transfer used is listed
+/// so the host can clear it when the review ends; the model only says which paths it is.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Handoff {
+    /// The candidate digest the reviewer is asked to review.
+    pub candidate: String,
+    /// The document revision the candidate was based on.
+    pub base_revision: u64,
+    /// The role handing the candidate over.
+    pub from: Role,
+    /// The role receiving it.
+    pub to: Role,
+    /// Shared-material paths used for this transfer.
+    pub shared: Vec<String>,
+}
+
+impl Handoff {
+    /// Builds a handoff between two different roles.
+    pub fn new(
+        from: Role,
+        to: Role,
+        candidate: &Candidate,
+        shared: Vec<String>,
+    ) -> Result<Self, String> {
+        if from == to {
+            return Err("a handoff needs two different roles".to_owned());
+        }
+        Ok(Self {
+            candidate: candidate.digest.clone(),
+            base_revision: candidate.changes.base_revision,
+            from,
+            to,
+            shared,
+        })
+    }
+
+    /// Checks that the reviewer still holds the handed-over candidate and revision.
+    pub fn check(&self, candidate: &Candidate, current_revision: u64) -> Result<(), String> {
+        if self.candidate != candidate.digest {
+            return Err(format!(
+                "the handoff is for {}, but the candidate is {}",
+                self.candidate, candidate.digest
+            ));
+        }
+        if self.base_revision != current_revision {
+            return Err(format!(
+                "the handoff is based on revision {}, but the document is at {}",
+                self.base_revision, current_revision
+            ));
+        }
+        Ok(())
+    }
+
+    /// The shared-material paths the host may clear once the review is over.
+    pub fn cleanup(&self) -> &[String] {
+        &self.shared
+    }
+}
+
+/// How one model call ended.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum InvocationOutcome {
+    /// The service answered in full.
+    Completed,
+    /// A person cancelled it.
+    Cancelled,
+    /// The stream ended before the answer was complete, with the reason the service gave.
+    Broken {
+        /// Why the stream stopped.
+        reason: String,
+    },
+}
+
+impl InvocationOutcome {
+    /// The outcome's name for a report.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Broken { .. } => "broken",
+        }
+    }
+}
+
+/// One model call's consumption and outcome.
+///
+/// `cost_micros` is what the service reported, not a price table guessed by the host: a missing
+/// price is zero with the model named in the record, not a fabricated estimate.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct UsageRecord {
+    /// The model the call addressed.
+    pub model: String,
+    /// The role that made it.
+    pub role: Role,
+    /// Bytes of prompt context sent.
+    pub prompt_bytes: usize,
+    /// Bytes of completion received.
+    pub completion_bytes: usize,
+    /// Cost in millionths of the billing unit, as reported by the service; 0 when it did not.
+    pub cost_micros: u64,
+    /// Wall-clock duration of the call.
+    pub elapsed_ms: u64,
+    /// How it ended.
+    pub outcome: InvocationOutcome,
+}
+
+impl UsageRecord {
+    /// The record in one line.
+    pub fn render(&self) -> String {
+        let reason = match &self.outcome {
+            InvocationOutcome::Broken { reason } => format!(" ({reason})"),
+            _ => String::new(),
+        };
+        format!(
+            "{} {}: {} prompt / {} completion byte(s), {} us, {} ms — {}{reason}",
+            self.role.directory(),
+            self.model,
+            self.prompt_bytes,
+            self.completion_bytes,
+            self.cost_micros,
+            self.elapsed_ms,
+            self.outcome.name(),
+        )
+    }
+}
+
+/// The session ledger's totals.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UsageTotals {
+    /// Prompt bytes across every call.
+    pub prompt_bytes: usize,
+    /// Completion bytes across every call.
+    pub completion_bytes: usize,
+    /// Reported cost across every call.
+    pub cost_micros: u64,
+    /// Wall-clock milliseconds across every call.
+    pub elapsed_ms: u64,
+    /// Calls that completed.
+    pub completed: usize,
+    /// Calls a person cancelled.
+    pub cancelled: usize,
+    /// Calls whose stream broke.
+    pub broken: usize,
+}
+
+impl UsageTotals {
+    /// The totals in one line.
+    pub fn render(&self) -> String {
+        format!(
+            "{} call(s): {} completed, {} cancelled, {} broken | {} prompt / {} completion byte(s) | {} us | {} ms",
+            self.completed + self.cancelled + self.broken,
+            self.completed,
+            self.cancelled,
+            self.broken,
+            self.prompt_bytes,
+            self.completion_bytes,
+            self.cost_micros,
+            self.elapsed_ms
+        )
+    }
+}
+
+/// One external tool call a session proposes (T23.11).
+///
+/// The call is data: constructing it does not run anything. The host previews it, authorizes that
+/// exact name-and-arguments pair, and only then may a transport send it. There is no ambient
+/// “the tool is allowed” permission — a grant for `read_file` with one path does not authorize
+/// another path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ToolCall {
+    /// The role that wants to call it.
+    pub role: Role,
+    /// The tool name the transport will use.
+    pub name: String,
+    /// The arguments, as the JSON text the tool expects.
+    pub arguments: String,
+}
+
+impl ToolCall {
+    /// A digest of the exact call, used as the authorization key.
+    pub fn digest(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update((self.name.len() as u64).to_le_bytes());
+        hasher.update(self.name.as_bytes());
+        hasher.update((self.arguments.len() as u64).to_le_bytes());
+        hasher.update(self.arguments.as_bytes());
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// The human preview a person authorizes against.
+    pub fn preview(&self) -> String {
+        format!(
+            "{} wants to call {} with {}: {}",
+            self.role.directory(),
+            self.name,
+            redact_arguments(&self.arguments),
+            self.digest()
+        )
+    }
+
+    /// The MCP `tools/call` request body for this call.
+    ///
+    /// The JSON-RPC `id` belongs to the transport (it pairs the answer with the request), so this
+    /// seam does not invent one; a transport that needs one adds it around this body.
+    pub fn mcp_json(&self) -> String {
+        let mut params = crate::project::record::json::JsonObject::new();
+        params.insert(
+            "name",
+            crate::project::record::json::Json::string(self.name.clone()),
+        );
+        // The arguments are already JSON by contract; embedding them as text keeps this writer
+        // free of a second parser and lets the transport decide whether to validate them.
+        params.insert(
+            "arguments",
+            crate::project::record::json::Json::string(self.arguments.clone()),
+        );
+        let mut root = crate::project::record::json::JsonObject::new();
+        root.insert(
+            "method",
+            crate::project::record::json::Json::string("tools/call"),
+        );
+        root.insert("params", crate::project::record::json::Json::Object(params));
+        crate::project::record::json::Json::Object(root).render_compact()
+    }
+}
+
+/// Redacts values of secret-looking argument keys in a preview.
+fn redact_arguments(arguments: &str) -> String {
+    let mut out = String::with_capacity(arguments.len());
+    for part in arguments.split(',') {
+        let key = part
+            .split_once('=')
+            .or_else(|| part.split_once(':'))
+            .map(|(key, _)| key.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        let secret = ["secret", "token", "password", "passwd", "api_key"]
+            .iter()
+            .any(|word| key.contains(word));
+        if secret {
+            out.push_str("[redacted]");
+        } else {
+            out.push_str(part);
+        }
+        out.push(',');
+    }
+    out.pop();
+    out
+}
+
+/// Whether a proposed call may be sent.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ToolDecision {
+    /// A person authorized this exact call.
+    Allowed,
+    /// No grant covers this exact call.
+    Refused {
+        /// Why.
+        reason: String,
+    },
+}
+
+impl ToolDecision {
+    /// Whether the call may be sent.
+    pub fn allowed(&self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+/// Per-call grants for external tools.
+///
+/// A grant names one digest (tool + exact arguments). Authorizing one call therefore cannot be
+/// reused for another path, value or tool.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct ToolPolicy {
+    granted: BTreeSet<String>,
+}
+
+impl ToolPolicy {
+    /// Authorizes one exact call, as a person's explicit action.
+    pub fn authorize(&mut self, call: &ToolCall) {
+        self.granted.insert(call.digest());
+    }
+
+    /// Withdraws every grant.
+    pub fn clear(&mut self) {
+        self.granted.clear();
+    }
+
+    /// Decides whether a call may be sent.
+    pub fn decide(&self, call: &ToolCall) -> ToolDecision {
+        if self.granted.contains(&call.digest()) {
+            ToolDecision::Allowed
+        } else {
+            ToolDecision::Refused {
+                reason: format!(
+                    "no person authorized {} with these exact arguments",
+                    call.name
+                ),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Candidate, Change, ChangeSet, Context, ContextFile, Role, Session, Verification, Workspace,
+        Candidate, Change, ChangeSet, Context, ContextFile, Handoff, InvocationOutcome, Role,
+        Session, ToolPolicy, UsageRecord, Verification, Workspace,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -529,6 +938,42 @@ mod tests {
         assert!(current.validate_against(4).is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_that_leaves_the_project_root_is_refused() {
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        );
+        let root = std::env::temp_dir().join(format!("rustage-ai-root-{unique}"));
+        let inside = root.join("src");
+        std::fs::create_dir_all(&inside).expect("a project directory");
+        let outside = std::env::temp_dir().join(format!("rustage-ai-outside-{unique}"));
+        std::fs::create_dir_all(&outside).expect("an outside directory");
+        std::os::unix::fs::symlink(&outside, inside.join("escape")).expect("a symlink");
+
+        let escaping = ChangeSet {
+            version: 1,
+            base_revision: 1,
+            changes: vec![change("src/escape/x.rs", "", "x")],
+        };
+        let error = escaping.validate_in(&root).expect_err("a refusal");
+        assert!(error.contains("leaves the project root"), "{error}");
+
+        let new_file = ChangeSet {
+            version: 1,
+            base_revision: 1,
+            changes: vec![change("src/new.rs", "", "x")],
+        };
+        assert!(new_file.validate_in(&root).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
     #[test]
     fn a_candidate_digest_is_frozen_and_old_verification_is_refused() {
         let mut candidate = candidate();
@@ -587,6 +1032,7 @@ mod tests {
                 .map(str::to_owned)
                 .collect::<BTreeSet<_>>(),
             credential: "env:REVIEWER_TOKEN".to_owned(),
+            usage: Vec::new(),
         };
         assert_eq!(Role::Reviewer.directory(), ".ai/reviewer");
         assert!(session.allows("comment"));
@@ -599,5 +1045,157 @@ mod tests {
             &[],
         );
         assert!(!session.fits(&context));
+    }
+
+    #[test]
+    fn a_session_ledger_totals_costs_and_keeps_broken_apart_from_cancelled() {
+        let mut session = Session {
+            role: Role::Coder,
+            model: "coder".to_owned(),
+            budget: 1024,
+            tools: BTreeSet::new(),
+            credential: String::new(),
+            usage: Vec::new(),
+        };
+        for (elapsed, cost, outcome) in [
+            (10, 5, InvocationOutcome::Completed),
+            (20, 7, InvocationOutcome::Cancelled),
+            (
+                30,
+                0,
+                InvocationOutcome::Broken {
+                    reason: "the stream ended mid-answer".to_owned(),
+                },
+            ),
+        ] {
+            session
+                .record(UsageRecord {
+                    model: "coder".to_owned(),
+                    role: Role::Coder,
+                    prompt_bytes: 100,
+                    completion_bytes: 50,
+                    cost_micros: cost,
+                    elapsed_ms: elapsed,
+                    outcome,
+                })
+                .expect("the record names this session's model");
+        }
+        let totals = session.totals();
+        assert_eq!(totals.prompt_bytes, 300);
+        assert_eq!(totals.completion_bytes, 150);
+        assert_eq!(totals.cost_micros, 12);
+        assert_eq!(totals.elapsed_ms, 60);
+        assert_eq!(totals.completed, 1);
+        assert_eq!(totals.cancelled, 1);
+        assert_eq!(totals.broken, 1);
+        assert!(totals.render().contains("3 call(s)"));
+    }
+
+    #[test]
+    fn a_record_for_another_model_is_refused_rather_than_filed() {
+        let mut session = Session {
+            role: Role::Coder,
+            model: "coder".to_owned(),
+            budget: 1024,
+            tools: BTreeSet::new(),
+            credential: String::new(),
+            usage: Vec::new(),
+        };
+        let error = session
+            .record(UsageRecord {
+                model: "other".to_owned(),
+                role: Role::Coder,
+                prompt_bytes: 1,
+                completion_bytes: 1,
+                cost_micros: 0,
+                elapsed_ms: 1,
+                outcome: InvocationOutcome::Completed,
+            })
+            .expect_err("a mixed ledger is refused");
+        assert!(error.contains("other"), "{error}");
+        assert!(session.usage().is_empty());
+    }
+
+    #[test]
+    fn a_tool_call_is_previewed_only_for_an_allowlisted_tool_and_granted_per_call() {
+        let mut session = Session {
+            role: Role::Coder,
+            model: "coder".to_owned(),
+            budget: 1024,
+            tools: ["read_file"].into_iter().map(str::to_owned).collect(),
+            credential: String::new(),
+            usage: Vec::new(),
+        };
+        assert!(
+            session.preview_tool("write_file", "path=a.rs").is_err(),
+            "a tool outside the allowlist is refused before authorization"
+        );
+        let call = session
+            .preview_tool("read_file", "path=a.rs,token=abc")
+            .expect("the tool is allowlisted");
+        assert!(call.preview().contains("[redacted]"), "{}", call.preview());
+        assert!(call.mcp_json().contains("\"method\":\"tools/call\""));
+        assert!(call.mcp_json().contains("read_file"));
+
+        let mut policy = ToolPolicy::default();
+        assert!(!policy.decide(&call).allowed());
+        policy.authorize(&call);
+        assert!(policy.decide(&call).allowed());
+        let other = session
+            .preview_tool("read_file", "path=b.rs")
+            .expect("the tool is allowlisted");
+        assert!(
+            !policy.decide(&other).allowed(),
+            "a grant for one exact call must not cover another"
+        );
+        policy.clear();
+        assert!(!policy.decide(&call).allowed());
+        session
+            .record(UsageRecord {
+                model: "coder".to_owned(),
+                role: Role::Coder,
+                prompt_bytes: 0,
+                completion_bytes: 0,
+                cost_micros: 0,
+                elapsed_ms: 0,
+                outcome: InvocationOutcome::Completed,
+            })
+            .expect("the ledger still accepts a record");
+    }
+
+    #[test]
+    fn a_handoff_is_bound_to_one_candidate_digest_and_revision() {
+        let candidate = candidate();
+        let handoff = Handoff::new(
+            Role::Coder,
+            Role::Reviewer,
+            &candidate,
+            vec![".ai/share/brief.md".to_owned()],
+        )
+        .expect("two roles can hand over");
+        assert!(Handoff::new(Role::Coder, Role::Coder, &candidate, Vec::new()).is_err());
+        handoff
+            .check(&candidate, candidate.changes.base_revision)
+            .expect("the same candidate and revision are valid");
+        let conflict = handoff
+            .check(&candidate, candidate.changes.base_revision + 1)
+            .expect_err("a moved document is a conflict");
+        assert!(conflict.contains("revision"), "{conflict}");
+        assert_eq!(handoff.cleanup(), &[".ai/share/brief.md".to_owned()]);
+
+        let other = Candidate::new_at(
+            2,
+            ChangeSet {
+                version: 1,
+                base_revision: 4,
+                changes: vec![change("c.rs", "", "x")],
+            },
+            4,
+        )
+        .expect("another candidate");
+        let mismatch = handoff
+            .check(&other, 4)
+            .expect_err("a different candidate is refused");
+        assert!(mismatch.contains("candidate"), "{mismatch}");
     }
 }

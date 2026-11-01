@@ -386,6 +386,33 @@ impl CanvasState {
     pub(super) fn is_locked(&self, node: NodeId) -> bool {
         self.scene.is_locked(node)
     }
+
+    /// Hides or shows a node. Hiding a node removes it from the selection, so the window never
+    /// shows an inspector for something the canvas no longer draws.
+    pub(super) fn set_hidden(&mut self, node: NodeId, hidden: bool) {
+        self.scene.set_hidden(node, hidden);
+        if hidden {
+            self.selected.retain(|selected| *selected != node);
+        }
+        self.revision += 1;
+        self.content_revision += 1;
+    }
+
+    /// Locks or unlocks a node for design editing.
+    pub(super) fn set_locked(&mut self, node: NodeId, locked: bool) {
+        self.scene.set_locked(node, locked);
+        self.revision += 1;
+    }
+
+    /// Moves a node forward in paint and hit-test order.
+    pub(super) fn raise(&mut self, node: NodeId) -> bool {
+        let raised = self.scene.raise(node);
+        if raised {
+            self.revision += 1;
+            self.content_revision += 1;
+        }
+        raised
+    }
 }
 
 impl Default for CanvasState {
@@ -645,5 +672,32 @@ mod tests {
         assert_eq!(handles, vec![new]);
         assert!(missing.is_empty());
         assert_eq!(state.selected(), [button]);
+    }
+
+    #[test]
+    fn the_scene_menu_mutates_hide_lock_and_order_without_a_second_state() {
+        let mut state = CanvasState::demo();
+        let rows = state.row_nodes();
+        let button = rows[2];
+        let label = rows[3];
+        state.select_only(button).expect("selectable");
+
+        state.set_locked(button, true);
+        assert!(state.is_locked(button));
+        assert_eq!(state.selected(), [button], "locking keeps the selection");
+        state.set_locked(button, false);
+
+        // Raising the button puts it above the overlapping label.
+        assert_eq!(state.hit(150, 155), Some(label));
+        assert!(state.raise(button));
+        assert_eq!(state.hit(150, 155), Some(button));
+
+        // Hiding the selected node removes it from the selection; showing it again does not
+        // restore a selection the designer did not make.
+        state.set_hidden(button, true);
+        assert!(state.is_hidden(button));
+        assert!(state.selected().is_empty());
+        state.set_hidden(button, false);
+        assert!(!state.is_hidden(button));
     }
 }

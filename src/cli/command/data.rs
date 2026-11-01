@@ -33,7 +33,8 @@ impl DataOptions {
 pub struct BindingOptions {
     /// The operations: `schema:<name>:<version>`, `field:<name>:<kind>`, `slot:<node>.<property>:<type>`,
     /// `bind:<source>=<target>:<direction>:<conversion>`, `check`, `state`, `show`; a source/target
-    /// is `f:<field>` or `<node>.<property>`.
+    /// is `f:<field>` or `<node>.<property>`. `realize:<value>` realises the last admitted binding
+    /// through the library's reactive bindings, then `edit:<text>` and `live` exercise it.
     pub ops: Vec<String>,
 }
 

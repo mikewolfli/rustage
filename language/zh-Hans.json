@@ -1,0 +1,545 @@
+{
+  "language": "zh-Hans",
+  "translations": {
+    "cmd.build.run.category": {
+      "message": "构建"
+    },
+    "cmd.build.run.description": {
+      "message": "为项目目标构建，一次一个"
+    },
+    "cmd.build.run.title": {
+      "message": "运行"
+    },
+    "cmd.edit.redo.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.redo.description": {
+      "message": "恢复最近撤销的更改"
+    },
+    "cmd.edit.redo.title": {
+      "message": "重做"
+    },
+    "cmd.edit.undo.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.undo.description": {
+      "message": "撤销最近的更改，限于其所属领域"
+    },
+    "cmd.edit.undo.title": {
+      "message": "撤销"
+    },
+    "cmd.file.close.category": {
+      "message": "文件"
+    },
+    "cmd.file.close.description": {
+      "message": "关闭当前文档，并决定如何处理未保存的更改"
+    },
+    "cmd.file.close.param.decision.help": {
+      "message": "如何处理未保存的更改"
+    },
+    "cmd.file.close.title": {
+      "message": "关闭"
+    },
+    "cmd.file.save-all.category": {
+      "message": "文件"
+    },
+    "cmd.file.save-all.description": {
+      "message": "写出所有有未保存更改的文档"
+    },
+    "cmd.file.save-all.title": {
+      "message": "全部保存"
+    },
+    "cmd.file.save-as.category": {
+      "message": "文件"
+    },
+    "cmd.file.save-as.description": {
+      "message": "将文档写到另一个文件"
+    },
+    "cmd.file.save-as.title": {
+      "message": "另存为"
+    },
+    "cmd.file.save.category": {
+      "message": "文件"
+    },
+    "cmd.file.save.description": {
+      "message": "将当前文档写回磁盘"
+    },
+    "cmd.file.save.title": {
+      "message": "保存"
+    },
+    "cmd.keys.show.category": {
+      "message": "视图"
+    },
+    "cmd.keys.show.description": {
+      "message": "显示键盘快捷键"
+    },
+    "cmd.keys.show.title": {
+      "message": "键盘快捷键"
+    },
+    "cmd.panel.close.category": {
+      "message": "视图"
+    },
+    "cmd.panel.close.description": {
+      "message": "用键盘隐藏面板"
+    },
+    "cmd.panel.close.title": {
+      "message": "关闭面板"
+    },
+    "cmd.tree.activate.category": {
+      "message": "视图"
+    },
+    "cmd.tree.activate.description": {
+      "message": "打开选中的树项目"
+    },
+    "cmd.tree.activate.title": {
+      "message": "激活"
+    },
+    "cmd.view.palette.category": {
+      "message": "视图"
+    },
+    "cmd.view.palette.description": {
+      "message": "从键盘查找命令"
+    },
+    "cmd.view.palette.title": {
+      "message": "命令面板"
+    },
+    "cmd.view.welcome.category": {
+      "message": "视图"
+    },
+    "cmd.view.welcome.description": {
+      "message": "显示欢迎页"
+    },
+    "cmd.view.welcome.title": {
+      "message": "欢迎"
+    },
+    "diag.command.bad-argument": {
+      "message": "{id}：{name} 无效：{reason}"
+    },
+    "diag.command.disabled": {
+      "message": "{id} 不可用：{reason}"
+    },
+    "diag.command.missing": {
+      "message": "{id} 需要一个 {name} 参数"
+    },
+    "diag.command.no-such-command": {
+      "message": "没有命令 {id}"
+    },
+    "diag.command.not-an-id": {
+      "message": "{id} 不是命令 ID"
+    },
+    "diag.command.unauthorized": {
+      "message": "{id} 具有 {effect} 效果，但未获授权"
+    },
+    "diag.command.unknown": {
+      "message": "没有命令 {id}"
+    },
+    "menu.build.item.build.run": {
+      "message": "运行"
+    },
+    "menu.build.title": {
+      "message": "构建"
+    },
+    "menu.edit.item.edit.copy": {
+      "message": "复制"
+    },
+    "menu.edit.item.edit.cut": {
+      "message": "剪切"
+    },
+    "menu.edit.item.edit.paste": {
+      "message": "粘贴"
+    },
+    "menu.edit.item.edit.redo": {
+      "message": "重做"
+    },
+    "menu.edit.item.edit.undo": {
+      "message": "撤销"
+    },
+    "menu.edit.title": {
+      "message": "编辑"
+    },
+    "menu.file.item.file.close": {
+      "message": "关闭"
+    },
+    "menu.file.item.file.new-project": {
+      "message": "新建项目"
+    },
+    "menu.file.item.file.open-project": {
+      "message": "打开项目"
+    },
+    "menu.file.item.file.save": {
+      "message": "保存"
+    },
+    "menu.file.item.file.save-all": {
+      "message": "全部保存"
+    },
+    "menu.file.item.file.save-as": {
+      "message": "另存为"
+    },
+    "menu.file.title": {
+      "message": "文件"
+    },
+    "menu.view.item.keys.show": {
+      "message": "键盘快捷键"
+    },
+    "menu.view.item.panel.close": {
+      "message": "关闭面板"
+    },
+    "menu.view.item.tree.activate": {
+      "message": "激活树项目"
+    },
+    "menu.view.item.view.palette": {
+      "message": "命令面板"
+    },
+    "menu.view.item.view.welcome": {
+      "message": "欢迎"
+    },
+    "menu.view.submenu.panels.item.panel.inspector": {
+      "message": "检查器"
+    },
+    "menu.view.submenu.panels.item.panel.outline": {
+      "message": "大纲"
+    },
+    "menu.view.submenu.panels.title": {
+      "message": "面板"
+    },
+    "menu.view.title": {
+      "message": "视图"
+    },
+    "shell.error.prefix": {
+      "message": "rustage：{message}"
+    },
+    "shell.status.icon-strip": {
+      "message": "图标条：运行 `rustage --render-icons <directory>` 渲染它。"
+    },
+    "shell.status.not-implemented": {
+      "message": "桌面设计器尚未实现。"
+    },
+    "shell.status.probes": {
+      "message": "依赖契约探针：运行 `rustage --probe-apis <directory>`。"
+    },
+    "shell.version": {
+      "message": "rustage {version}"
+    },
+    "ui.button.add": {
+      "message": "添加"
+    },
+    "ui.button.back": {
+      "message": "后退"
+    },
+    "ui.button.bind": {
+      "message": "绑定"
+    },
+    "ui.button.clear": {
+      "message": "清除"
+    },
+    "ui.button.close": {
+      "message": "关闭"
+    },
+    "ui.button.fire": {
+      "message": "触发"
+    },
+    "ui.button.forward": {
+      "message": "前进"
+    },
+    "ui.button.open": {
+      "message": "打开"
+    },
+    "ui.button.reset": {
+      "message": "重置"
+    },
+    "ui.button.run": {
+      "message": "运行"
+    },
+    "ui.button.start": {
+      "message": "启动"
+    },
+    "ui.button.step": {
+      "message": "单步"
+    },
+    "ui.button.stop": {
+      "message": "停止"
+    },
+    "ui.button.theme": {
+      "message": "主题"
+    },
+    "ui.button.unbind": {
+      "message": "解绑"
+    },
+    "ui.button.values": {
+      "message": "值"
+    },
+    "ui.context.clear": {
+      "message": "清除输入"
+    },
+    "ui.context.inspect": {
+      "message": "检查值"
+    },
+    "ui.context.reset": {
+      "message": "重置属性"
+    },
+    "ui.context.select-parent": {
+      "message": "选择父节点"
+    },
+    "ui.context.toggle-hide": {
+      "message": "隐藏或显示"
+    },
+    "ui.context.toggle-lock": {
+      "message": "锁定或解锁"
+    },
+    "ui.context.raise": {
+      "message": "上移一层"
+    },
+    "ui.data.dataset": {
+      "message": "数据集"
+    },
+    "ui.data.diagnostic": {
+      "message": "诊断"
+    },
+    "ui.error.contracts": {
+      "message": "契约：{reason}"
+    },
+    "ui.error.contracts-differ": {
+      "message": "契约不同：{reason}"
+    },
+    "ui.error.inspect-refused": {
+      "message": "检查被拒绝：{reason}"
+    },
+    "ui.error.not-added": {
+      "message": "未添加：{reason}"
+    },
+    "ui.error.not-applied": {
+      "message": "未应用：{reason}"
+    },
+    "ui.error.not-bound": {
+      "message": "未绑定：{reason}"
+    },
+    "ui.error.not-closed": {
+      "message": "未关闭：{reason}"
+    },
+    "ui.error.not-fired": {
+      "message": "未触发：{reason}"
+    },
+    "ui.error.not-moved": {
+      "message": "未移动：{reason}"
+    },
+    "ui.error.not-opened": {
+      "message": "未打开：{reason}"
+    },
+    "ui.error.not-unbound": {
+      "message": "未解绑：{reason}"
+    },
+    "ui.error.schema-unavailable": {
+      "message": "模式不可用：{reason}"
+    },
+    "ui.error.theme-refused": {
+      "message": "主题被拒绝：{reason}"
+    },
+    "ui.inspector.accepted": {
+      "message": "可接受值"
+    },
+    "ui.inspector.default": {
+      "message": "默认值"
+    },
+    "ui.inspector.inspect": {
+      "message": "检查"
+    },
+    "ui.inspector.kind": {
+      "message": "类型"
+    },
+    "ui.inspector.node": {
+      "message": "节点"
+    },
+    "ui.inspector.selection": {
+      "message": "选择"
+    },
+    "ui.inspector.theme": {
+      "message": "主题"
+    },
+    "ui.menu.editor": {
+      "message": "编辑器"
+    },
+    "ui.menu.layout": {
+      "message": "布局"
+    },
+    "ui.menu.next-group": {
+      "message": "下一组"
+    },
+    "ui.menu.quit": {
+      "message": "退出"
+    },
+    "ui.menu.reset-layout": {
+      "message": "重置布局"
+    },
+    "ui.menu.save-layout": {
+      "message": "保存布局"
+    },
+    "ui.menu.split-right": {
+      "message": "向右分屏"
+    },
+    "ui.note.data": {
+      "message": "数据 v{version} · 效果 {effects} · 运行时：无"
+    },
+    "ui.note.events": {
+      "message": "{status} | 修订 {revision} | 处理器：{handlers} | {wiring} | {last}"
+    },
+    "ui.note.inspector": {
+      "message": "设计 v{version} · 效果 {effects} · 只读"
+    },
+    "ui.note.pages": {
+      "message": "{count} 个页面 · 当前 {current} · 修订 {revision}"
+    },
+    "ui.panel.data": {
+      "message": "数据与状态"
+    },
+    "ui.panel.debug": {
+      "message": "调试"
+    },
+    "ui.panel.events": {
+      "message": "事件"
+    },
+    "ui.panel.inspector": {
+      "message": "检查器"
+    },
+    "ui.panel.messages": {
+      "message": "消息"
+    },
+    "ui.panel.outline": {
+      "message": "大纲"
+    },
+    "ui.panel.pages": {
+      "message": "页面"
+    },
+    "ui.panel.problems": {
+      "message": "问题"
+    },
+    "ui.placeholder.handler-name": {
+      "message": "处理器名称"
+    },
+    "ui.placeholder.mixed": {
+      "message": "混合 — 输入将应用到所有选中节点"
+    },
+    "ui.placeholder.page-name": {
+      "message": "页面名称"
+    },
+    "ui.placeholder.theme-name": {
+      "message": "主题名称（dark）"
+    },
+    "ui.status.bound": {
+      "message": "已将 {event} 绑定到 {handler}（节点 {node}，修订 {revision}）"
+    },
+    "ui.status.closing": {
+      "message": "正在关闭"
+    },
+    "ui.status.command-palette": {
+      "message": "命令面板"
+    },
+    "ui.status.data-applied": {
+      "message": "{field} = {value}（数据 v{version}）"
+    },
+    "ui.status.editor-split": {
+      "message": "编辑器已分屏"
+    },
+    "ui.status.focus-group": {
+      "message": "焦点组 {group}"
+    },
+    "ui.status.hidden": {
+      "message": "已隐藏 {id}"
+    },
+    "ui.status.inspected": {
+      "message": "已检查节点；设计 v{version}，效果 {effects}"
+    },
+    "ui.status.inspector-cleared": {
+      "message": "输入已清除；有效值 {name} 为 {value}"
+    },
+    "ui.status.layout-not-saved": {
+      "message": "布局未保存：{reason}"
+    },
+    "ui.status.layout-reset": {
+      "message": "布局已重置"
+    },
+    "ui.status.layout-saved": {
+      "message": "已保存布局到 {path}"
+    },
+    "ui.status.navigation-declared": {
+      "message": "已声明导航 {from} -> {to}（修订 {revision}）"
+    },
+    "ui.status.no-document": {
+      "message": "无文档"
+    },
+    "ui.status.no-layout-path": {
+      "message": "未提供 --layout 路径"
+    },
+    "ui.status.no-panel": {
+      "message": "没有面板 {id}"
+    },
+    "ui.status.no-problems": {
+      "message": "没有问题"
+    },
+    "ui.status.now-on": {
+      "message": "当前位于 {page}"
+    },
+    "ui.status.page-declared": {
+      "message": "已声明页面 {name}（修订 {revision}）"
+    },
+    "ui.status.palette-closed": {
+      "message": "命令面板已关闭"
+    },
+    "ui.status.palette-could-not-focus": {
+      "message": "命令面板无法获得键盘焦点"
+    },
+    "ui.status.ready": {
+      "message": "就绪"
+    },
+    "ui.status.reset-nodes": {
+      "message": "已将 {count} 个节点重置为结构名称"
+    },
+    "ui.status.shown": {
+      "message": "已显示 {id}"
+    },
+    "ui.status.theme-applied": {
+      "message": "{message}"
+    },
+    "ui.status.unbound": {
+      "message": "已解绑 {event}（节点 {node}，修订 {revision}）"
+    },
+    "ui.status.unknown-action": {
+      "message": "未知操作 {action}"
+    },
+    "ui.status.no-parent": {
+      "message": "节点 {node} 没有父节点"
+    },
+    "ui.status.locked": {
+      "message": "已锁定 {name}"
+    },
+    "ui.status.unlocked": {
+      "message": "已解锁 {name}"
+    },
+    "ui.status.hidden-node": {
+      "message": "已隐藏 {name}"
+    },
+    "ui.status.shown-node": {
+      "message": "已显示 {name}"
+    },
+    "ui.status.raised": {
+      "message": "已上移 {name}"
+    },
+    "ui.status.already-top": {
+      "message": "{name} 已在最上层"
+    },
+    "ui.toolbar.commands": {
+      "message": "命令"
+    },
+    "ui.toolbar.next-group": {
+      "message": "下一组"
+    },
+    "ui.toolbar.reset-layout": {
+      "message": "重置布局"
+    },
+    "ui.toolbar.save-layout": {
+      "message": "保存布局"
+    },
+    "ui.toolbar.split": {
+      "message": "分屏"
+    }
+  }
+}

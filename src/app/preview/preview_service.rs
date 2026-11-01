@@ -508,6 +508,7 @@ impl Preview {
         for node in &document.nodes {
             self.install(node.node)?;
         }
+        self.prune_controls(document);
         Ok(MountReport {
             widgets_created: report.widgets_created,
             issues: report.errors.len(),
@@ -594,6 +595,7 @@ impl Preview {
         for node in &document.nodes {
             self.install(node.node)?;
         }
+        self.prune_controls(document);
         Ok(UpdateReport {
             patches: report.patch_count(),
             replaced_subtrees: report.replaced_subtrees,
@@ -722,6 +724,50 @@ impl Preview {
         self.view_ids.iter().copied().collect()
     }
 
+    /// Drops controls the mounted tree no longer contains (blue21 O-9).
+    ///
+    /// The document is flat — root plus one ordered child list — so the engine's tree index names
+    /// each live control by path: `[]` is the root and `[i]` is the child at position `i`. A control
+    /// the index no longer answers for was removed or replaced by an update; it is unregistered and
+    /// forgotten here, so a long editing session does not accumulate the ids of every control it
+    /// ever created. A control a failed update left behind is handled the same way, because `create`
+    /// adds it to `view_ids` before the tree accepts it.
+    fn prune_controls(&mut self, document: &Document) {
+        let Some(engine) = &self.engine else {
+            return;
+        };
+        let index = engine.tree_index();
+        let mut current = BTreeSet::new();
+        if let Some(root) = index.id_at(&[]) {
+            current.insert(root);
+        }
+        for position in 0..document.nodes.len() {
+            if let Some(id) = index.id_at(&[position]) {
+                current.insert(id);
+            }
+        }
+        let stale: Vec<ObjectId> = self
+            .view_ids
+            .iter()
+            .copied()
+            .filter(|id| !current.contains(id))
+            .collect();
+        for id in &stale {
+            rust_widgets::widget::runtime::unregister(*id);
+            self.view_ids.remove(id);
+        }
+        if !stale.is_empty() {
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::preview::service",
+                &format!(
+                    "released {} control(s) the view no longer contains",
+                    stale.len()
+                ),
+            );
+        }
+    }
+
     /// Captures the focused control as a [`state_keep::Capture`].
     ///
     /// Only focus is captured: it is the one live state the library exposes generically. Scroll has
@@ -800,6 +846,7 @@ impl Preview {
         for node in &document.nodes {
             self.install(node.node)?;
         }
+        self.prune_controls(document);
         Ok(())
     }
 
@@ -1208,6 +1255,38 @@ mod tests {
         let index = preview.view_index().expect("an index");
         assert!(index.root().is_some());
 
+        cleanup(preview);
+    }
+
+    #[test]
+    fn an_update_releases_the_control_of_a_removed_node() {
+        let mut preview = running();
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let two = Document::new("group_box")
+            .with(DocumentNode::new(node(1), "label", "alpha"))
+            .with(DocumentNode::new(node(2), "label", "removed"));
+        preview.mount_view(&two, &make).expect("a mount");
+        let removed = control(&preview, "2");
+        assert!(runtime::is_mounted(removed));
+
+        preview
+            .update_view(&document("beta"), &make)
+            .expect("an update");
+
+        assert!(
+            !runtime::is_mounted(removed),
+            "the removed node's control is unregistered"
+        );
+        assert!(
+            !preview.control_ids().contains(&removed),
+            "the session forgets the removed control"
+        );
+        assert_eq!(
+            preview.live_controls(),
+            2,
+            "the root and the surviving child"
+        );
         cleanup(preview);
     }
 

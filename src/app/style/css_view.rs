@@ -423,6 +423,34 @@ impl Css {
         Self { rules }
     }
 
+    /// The valid rules as CSS text, in document order.
+    ///
+    /// The library's cascade trace takes sheet text rather than this module's rule model, so the
+    /// inspector hands it the same rules it computed from, in the same order.
+    pub fn render_source(&self) -> String {
+        let mut text = String::new();
+        for rule in &self.rules {
+            let Rule::Valid {
+                selector,
+                declarations,
+                ..
+            } = rule
+            else {
+                continue;
+            };
+            text.push_str(&selector.render());
+            text.push_str(" {");
+            for declaration in declarations {
+                text.push_str(&format!(
+                    " {}: {};",
+                    declaration.property, declaration.value
+                ));
+            }
+            text.push_str(" }\n");
+        }
+        text
+    }
+
     /// How many rules the parser could not read.
     pub fn invalid_count(&self) -> usize {
         self.rules.iter().filter(|rule| !rule.is_valid()).count()
@@ -496,6 +524,84 @@ impl Computed {
                 format!("{property}: {value}  <- {}", source.render())
             })
             .collect()
+    }
+}
+
+/// A property the host's computed style and the library's cascade trace decide differently.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Disagreement {
+    /// The property.
+    pub property: String,
+    /// The value the host computed.
+    pub host: String,
+    /// The value the library traced.
+    pub library: String,
+}
+
+impl Disagreement {
+    /// The disagreement in one line.
+    pub fn render(&self) -> String {
+        format!(
+            "{}: host {} vs library {}",
+            self.property, self.host, self.library
+        )
+    }
+}
+
+/// Compares the host's computed winners with [`rust_widgets::style::css_trace::trace_cascade`]
+/// (task T11.03).
+///
+/// The host keeps the authority because its computed style carries each declaration's byte span,
+/// which the library trace does not, and because it computes properties the widget apply does not
+/// act on. The library trace is the cross-check for the properties both understand: a value they
+/// decide differently is a defect in one of them, and this is where it becomes visible.
+///
+/// The library trace takes at most one class, so an element with several compound classes is not
+/// cross-checked rather than checked against a selector it does not have.
+pub fn trace_disagreements(
+    css: &Css,
+    element: &Element,
+    state: Option<State>,
+) -> Vec<Disagreement> {
+    if element.classes.len() > 1 {
+        return Vec::new();
+    }
+    let source = css.render_source();
+    let trace = rust_widgets::style::css_trace::trace_cascade(
+        &element.tag,
+        element.classes.first().map(String::as_str),
+        element.id.as_deref(),
+        state.map(pseudo_state),
+        &[rust_widgets::style::css_trace::TracedSheet {
+            name: "document",
+            css: &source,
+            priority: 0,
+        }],
+    );
+    let computed = compute_in(css, element, state);
+    let mut disagreements = Vec::new();
+    for origin in &trace.origins {
+        let Some(host) = computed.value_of(&origin.property) else {
+            continue;
+        };
+        if host.trim() != origin.value.trim() {
+            disagreements.push(Disagreement {
+                property: origin.property.clone(),
+                host: host.trim().to_owned(),
+                library: origin.value.trim().to_owned(),
+            });
+        }
+    }
+    disagreements
+}
+
+/// The library's name for a host style state.
+fn pseudo_state(state: State) -> rust_widgets::style::WidgetState {
+    match state {
+        State::Hover => rust_widgets::style::WidgetState::Hover,
+        State::Active => rust_widgets::style::WidgetState::Pressed,
+        State::Focus => rust_widgets::style::WidgetState::Focused,
+        State::Disabled => rust_widgets::style::WidgetState::Disabled,
     }
 }
 
@@ -634,7 +740,10 @@ fn identifier_len(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Css, Declaration, Element, Rule, Selector, Span, State, compute, compute_in};
+    use super::{
+        Css, Declaration, Element, Rule, Selector, Span, State, compute, compute_in,
+        trace_disagreements,
+    };
 
     #[test]
     fn a_valid_rule_keeps_its_declarations_and_span() {
@@ -867,5 +976,34 @@ mod tests {
             compute_in(&css, &element, Some(State::Focus)).value_of("color"),
             Some("red")
         );
+    }
+
+    #[test]
+    fn the_library_trace_agrees_with_the_host_on_the_properties_it_knows() {
+        let css = Css::parse(
+            "button { color: #ff0000; background: #00ff00; }\n.button { padding: 4px; border-radius: 2px; }",
+        );
+        let mut element = Element::new("button");
+        element.classes.push("button".to_owned());
+        let disagreements = trace_disagreements(&css, &element, None);
+        assert!(disagreements.is_empty(), "{disagreements:?}");
+        // The trace saw the properties: the host computed them too.
+        assert_eq!(compute(&css, &element).value_of("color"), Some("#ff0000"));
+    }
+
+    #[test]
+    fn the_rendered_source_is_the_valid_rules_in_document_order() {
+        let css = Css::parse("button { color: red; }\n#id { padding: 2px; }");
+        let source = css.render_source();
+        assert_eq!(source, "button { color: red; }\n#id { padding: 2px; }\n");
+    }
+
+    #[test]
+    fn an_element_with_several_compound_classes_is_not_cross_checked() {
+        let css = Css::parse("button { color: red; }");
+        let mut element = Element::new("button");
+        element.classes.push("a".to_owned());
+        element.classes.push("b".to_owned());
+        assert!(trace_disagreements(&css, &element, None).is_empty());
     }
 }

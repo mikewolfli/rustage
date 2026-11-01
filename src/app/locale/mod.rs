@@ -12,9 +12,9 @@
 //!   decision, and a language the build does not bundle is refused rather than approximated.
 //! * **Only the languages the build ships are offered.** [`vocabulary`] is the identified string set;
 //!   [`catalog::Catalog::for_language`] answers [`catalog::NotBundled`] for a language there is no pack
-//!   for, and the packs are keyed by the same identified vocabulary: English is *derived* from it
-//!   and Simplified Chinese ([`zh_hans`]) is translated against it, so neither can drift from what
-//!   the interface shows.
+//!   for. The two packs are JSON language files under `packs/` (`en.json`, `zh-Hans.json`), compiled
+//!   into the binary and read by [`catalog::Pack::decode`]; the English pack is checked against the
+//!   registry-derived vocabulary by tests, so the interface and the data cannot drift apart.
 //! * **Switching the interface language changes nothing else.** Nothing here reads or writes the design
 //!   document, a resource identity or a generated artifact; the catalog is text, and the generated
 //!   application's own language resources are a separate product boundary (T24.04).
@@ -23,5 +23,5 @@
 //! order, with the collation rule named so a list never claims an ordering it does not have.
 pub mod catalog;
 pub mod format;
+pub mod tools;
 pub mod vocabulary;
-pub mod zh_hans;

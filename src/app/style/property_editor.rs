@@ -930,6 +930,7 @@ mod tests {
             profile: "desktop".to_owned(),
             triple: "x86_64".to_owned(),
             control: "button".to_owned(),
+            category: "input".to_owned(),
             aliases: Vec::new(),
             alias_of: String::new(),
             properties: vec![

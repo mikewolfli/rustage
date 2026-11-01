@@ -196,6 +196,91 @@ impl Environment {
     }
 }
 
+/// A host binding realised with the library's reactive bindings and value pipeline (task T13.02).
+///
+/// The model and the control are two [`rust_widgets::data_binding::Binding`]s joined two-way, and
+/// edits go through [`rust_widgets::data_binding::BindingPipeline`]'s
+/// `source → format → validate → target` chain. Only an identity conversion can be realised: a
+/// lossy conversion is refused here for the same reason [`Graph::admit`] refuses it two-way, so a
+/// realised pair cannot oscillate.
+pub struct Realized {
+    model: rust_widgets::data_binding::Binding<String>,
+    control: rust_widgets::data_binding::Binding<String>,
+    pipeline: rust_widgets::data_binding::BindingPipeline<String, PlainText, NoValidation>,
+}
+
+/// The formatter a text binding uses: the control shows the value unchanged.
+struct PlainText;
+
+impl rust_widgets::data_binding::Formatter<String> for PlainText {
+    fn format(&self, value: &String) -> String {
+        value.clone()
+    }
+
+    fn parse(&self, text: &str) -> Result<String, rust_widgets::data_binding::ValidationError> {
+        Ok(text.to_owned())
+    }
+}
+
+/// The validator a text binding uses: it accepts every parsed value.
+struct NoValidation;
+
+impl rust_widgets::data_binding::Validator<String> for NoValidation {
+    fn validate(
+        &self,
+        value: String,
+    ) -> Result<String, rust_widgets::data_binding::ValidationError> {
+        Ok(value)
+    }
+}
+
+impl Realized {
+    /// Realises an admitted binding whose conversion is the identity.
+    pub fn new(binding: &Binding, value: impl Into<String>) -> Result<Self, String> {
+        if binding.conversion.is_lossy() {
+            return Err(format!(
+                "the {} conversion cannot be realised as a two-way text binding",
+                binding.conversion.name()
+            ));
+        }
+        let value = value.into();
+        let model = rust_widgets::data_binding::Binding::new(value.clone());
+        let control = rust_widgets::data_binding::Binding::new(value);
+        model.bind_to(&control);
+        let pipeline = rust_widgets::data_binding::BindingPipeline::new(
+            model.clone(),
+            PlainText,
+            NoValidation,
+            control.clone(),
+        );
+        Ok(Self {
+            model,
+            control,
+            pipeline,
+        })
+    }
+
+    /// Commits edited text through the pipeline; both bindings hold the accepted value.
+    pub fn edit(&self, text: &str) -> Result<(), String> {
+        self.pipeline.edit(text).map_err(|error| error.message)
+    }
+
+    /// The text the control should show.
+    pub fn render(&self) -> String {
+        self.pipeline.render()
+    }
+
+    /// The model's current value.
+    pub fn model(&self) -> String {
+        self.model.get()
+    }
+
+    /// The control's current value.
+    pub fn control(&self) -> String {
+        self.control.get()
+    }
+}
+
 /// One binding: a source, a target, a direction and a conversion.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Binding {
@@ -484,7 +569,8 @@ fn render_path(path: &[Origin]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Binding, Conversion, Direction, Environment, Graph, Origin, Verdict, carrier, find_cycle,
+        Binding, Conversion, Direction, Environment, Graph, Origin, Realized, Verdict, carrier,
+        find_cycle,
     };
     use crate::app::data::data_model::{FieldKind, Schema};
     use crate::app::style::property_editor::PropertyType;
@@ -837,5 +923,40 @@ mod tests {
                 .reason()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn a_realized_text_binding_mirrors_edits_without_oscillating() {
+        let one = binding(
+            field("label"),
+            slot(1, "text"),
+            Direction::TwoWay,
+            Conversion::Identity,
+        );
+        assert!(Graph::new().admit(&one, &environment()).is_accepted());
+        let live = Realized::new(&one, "hello").expect("a realized binding");
+        assert_eq!(live.model(), "hello");
+        assert_eq!(live.control(), "hello");
+        assert_eq!(live.render(), "hello");
+
+        live.edit("world").expect("an edit");
+        assert_eq!(live.model(), "world");
+        assert_eq!(live.control(), "world");
+        assert_eq!(live.render(), "world");
+    }
+
+    #[test]
+    fn a_lossy_conversion_cannot_be_realized_as_a_two_way_text_binding() {
+        let one = binding(
+            field("count"),
+            slot(1, "width"),
+            Direction::OneWay,
+            Conversion::Scale(2.0),
+        );
+        let error = match Realized::new(&one, "1") {
+            Ok(_) => panic!("a lossy conversion cannot be realized"),
+            Err(error) => error,
+        };
+        assert!(error.contains("cannot be realised"), "{error}");
     }
 }

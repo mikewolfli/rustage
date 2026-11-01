@@ -270,17 +270,28 @@ pub(super) fn extension(options: &crate::cli::ExtensionOptions) -> bool {
                     Ok(package) => package,
                     Err(reason) => return super::report(reason),
                 };
-                let id = package.manifest.id.clone();
-                let version = package.manifest.version.render();
+                id = package.manifest.id.clone();
+                version = package.manifest.version;
                 let digest = package.digest();
                 let source = package.source.clone();
+                // Keep the invocation's own fields in step with what was installed, so a following
+                // `show` describes the package rather than the empty defaults it started with.
+                host_min = package.manifest.host_min;
+                host_max = package.manifest.host_max;
+                license = package.manifest.license.clone();
+                capabilities = package.manifest.capabilities.clone();
+                permissions = package.manifest.permissions.clone();
+                provides = package.manifest.provides.clone();
+                files = package.files.clone();
                 let checks = match check_permissions(&permission_service, &package.manifest) {
                     Ok(checks) => checks,
                     Err(reason) => return super::report(reason),
                 };
                 registry.install(package, &host).map(|_| {
-                    let mut lines =
-                        vec![format!("installed {id} {version} ({digest}) from {source}")];
+                    let mut lines = vec![format!(
+                        "installed {id} {} ({digest}) from {source}",
+                        version.render()
+                    )];
                     lines.extend(checks);
                     lines
                 })

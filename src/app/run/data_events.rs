@@ -216,13 +216,16 @@ pub(super) fn data(options: &crate::cli::DataOptions) -> bool {
 }
 
 pub(super) fn binding(options: &crate::cli::BindingOptions) -> bool {
-    use crate::app::data::binding::{Binding, Conversion, Direction, Environment, Graph, SlotKind};
+    use crate::app::data::binding::{
+        Binding, Conversion, Direction, Environment, Graph, Realized, SlotKind,
+    };
     use crate::app::data::data_model::{DataField, FieldKind, Schema};
     use crate::contracts::identity::NodeId;
     use crate::contracts::model::PropertyName;
 
     let mut environment = Environment::new(Schema::new("(none)", 0));
     let mut graph = Graph::new();
+    let mut realized: Option<Realized> = None;
     for op in &options.ops {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<Vec<String>, String> = match verb {
@@ -332,6 +335,45 @@ pub(super) fn binding(options: &crate::cli::BindingOptions) -> bool {
                     "bind needs <source>=<target>:<direction>:<conversion>, got {argument:?}"
                 )),
             },
+            "realize" => {
+                let Some(binding) = graph.bindings.last() else {
+                    return report("realize needs an admitted binding".to_owned());
+                };
+                match Realized::new(binding, argument) {
+                    Ok(live) => {
+                        let line =
+                            format!("realized {} = {:?}", binding.source.render(), live.model());
+                        realized = Some(live);
+                        Ok(vec![line])
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "edit" => {
+                let Some(live) = realized.as_ref() else {
+                    return report("edit needs a realized binding".to_owned());
+                };
+                match live.edit(argument) {
+                    Ok(()) => Ok(vec![format!(
+                        "model {:?}, control {:?}, text {:?}",
+                        live.model(),
+                        live.control(),
+                        live.render()
+                    )]),
+                    Err(reason) => Err(reason),
+                }
+            }
+            "live" => {
+                let Some(live) = realized.as_ref() else {
+                    return report("live needs a realized binding".to_owned());
+                };
+                Ok(vec![format!(
+                    "model {:?}, control {:?}, text {:?}",
+                    live.model(),
+                    live.control(),
+                    live.render()
+                )])
+            }
             "check" => {
                 let diagnostics = graph.check(&environment);
                 if diagnostics.is_empty() {

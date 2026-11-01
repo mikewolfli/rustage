@@ -75,6 +75,7 @@ impl InspectState {
         let mut tokens = TokenSet::new();
         tokens.define(TokenKind::Colour, "--accent", "#0a84ff");
         tokens.define_theme("dark", &[("--accent".to_owned(), "#ff9f0a".to_owned())]);
+        tokens.install_standard_themes();
         let mut state = Self {
             schema,
             sample,

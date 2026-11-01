@@ -15,7 +15,13 @@ pub struct ReleaseOptions {
     /// `license:<text>`, `package-license:<name>@<version>:<licence>`, `verify-file:<path>`,
     /// `sbom:<file>`, `sbom-lock:<Cargo.lock>:<file>`, `update:<from>:<to>`,
     /// `verify-update:<path>`, `install`, `rollback`, `channel:<stable|candidate>`,
-    /// `maintenance:<branch>:<matrix>`, `limit:<text>`, `show`.
+    /// `maintenance:<branch>:<matrix>`, `limit:<text>`, `show`; offline installation and the
+    /// maintenance policy: `deploy-check:<stage>:<root>`, `deploy:<stage>:<root>`,
+    /// `undeploy:<root>`, `boundaries`, `policy`, `drill:<stage>`,
+    /// `upgrade:<old facts>:<new facts>` (facts are `<widget>,<toolchain>,<version>`),
+    /// `rc:<binary>:<clean-work-directory>`, `provenance:<Cargo.lock>:<report>`,
+    /// `verify-provenance:<report>:<artifact>`, `sign:<artifact>:<identity>`,
+    /// `notarize:<artifact>:<keychain-profile>`."
     ///
     /// `journal:<file>` makes every later transition write its record to `<file>`;
     /// `journal-recover:<file>` marks a recorded `Installing` state as `Interrupted` and answers the

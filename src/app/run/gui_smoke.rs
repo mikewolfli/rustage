@@ -355,11 +355,11 @@ impl Bridge {
                 handle: Some(handle),
             }),
             Ok(Err(reason)) => {
-                let _ = handle.join();
+                join_worker(handle, "the worker thread");
                 Err(reason)
             }
             Err(error) => {
-                let _ = handle.join();
+                join_worker(handle, "the worker thread");
                 Err(format!("the worker did not answer its handshake: {error}"))
             }
         }
@@ -374,8 +374,24 @@ impl Bridge {
     pub(super) fn finish(mut self) {
         drop(self.sender);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            join_worker(handle, "the worker thread");
         }
+    }
+}
+
+/// Joins a worker, recording a panic rather than discarding it (principle #22).
+fn join_worker(handle: std::thread::JoinHandle<()>, what: &str) {
+    if let Err(payload) = handle.join() {
+        let reason = payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a non-string panic payload".to_owned());
+        emit(
+            Level::Error,
+            "host::gui-smoke",
+            &format!("{what} panicked: {reason}"),
+        );
     }
 }
 

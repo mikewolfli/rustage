@@ -18,34 +18,31 @@
 //! * **Selection is a set of node ids.** [`Scene::resolve_selection`] maps a selection to the handles
 //!   that are currently valid, dropping (and reporting) the ones that are not, so a selection survives
 //!   a rebuild honestly rather than pointing at an instance that no longer exists.
-//! * **Key/path lookups are one derived snapshot.** [`SceneIndex`] mirrors the read-only contract of
-//!   the library's `rust_widgets::view::TreeIndex` (`id_at`, `id_of_key`, `path_of`, `key_of`, `keys`,
-//!   `duplicate_keys`, `generation`), but over host [`NodeId`]s. It is rebuilt lazily from the scene's
-//!   instances and paint order after a generation bump; it is never written to independently, so it
-//!   cannot become a second source of truth.
+//! * **Key/path lookups are one derived snapshot.** [`SceneIndex`] is the library's
+//!   `rust_widgets::view::TreeIndex<NodeId>` — the same type the view engine uses, over this
+//!   module's durable [`NodeId`]s. It is rebuilt lazily from the scene's instances and paint order
+//!   after a generation bump; it is never written to independently, so it cannot become a second
+//!   source of truth.
 //!
 //! Geometry here is a plain rectangle; a real backend's hit test is the library's, and this module is
 //! what the object tree, the canvas and the checker share so they agree on which node a point means.
 //!
-//! # Why the library's `TreeIndex` is not embedded directly
+//! # Why the index is the library type
 //!
-//! The pinned upstream revision exposes `TreeIndex` as a **read-only** snapshot: its `build`
-//! constructor is `pub(crate)`, and the only public producer is `ViewEngine::tree_index`, which walks
-//! a mounted declarative view tree and stores the engine's `ObjectId` (`u64`). The design canvas is not
-//! mounted in a `ViewEngine`, and it owns durable `NodeId`s, not runtime `ObjectId`s — the library's
-//! own contract says those two must not be conflated. There is therefore no public API by which this
-//! module can hand a host `NodeId` tree to `TreeIndex`.
-//!
-//! [`SceneIndex`] is the documented adapter for that gap. It reproduces the published lookup rules
-//! (sibling-scoped keys, duplicate keys answer `None` and are reported, paths are snapshot-addressed)
-//! but substitutes `NodeId` for `ObjectId`. Replace it with the library type when upstream exposes a
-//! public/generic constructor; until then this is a derived view of [`Scene`], not a second identity
-//! store.
+//! Earlier revisions of this module carried a host-side `SceneIndex` adapter, because the pinned
+//! upstream revision exposed `TreeIndex` as a read-only snapshot with a `pub(crate)` constructor and
+//! only `ViewEngine::tree_index` could produce one. Upstream 3.2.0 publishes
+//! [`TreeIndexBuilder`](rust_widgets::view::TreeIndexBuilder), which derives the same maps for a tree
+//! the caller owns and takes the caller's id type. The host therefore builds the library type
+//! directly (blue21 W-2f); the sibling-scoped key rules, duplicate-key reporting and snapshot-addressed
+//! paths are the library's own, not a copy.
 
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
+
+use rust_widgets::view::{TreeIndex, TreeIndexBuilder};
 
 use crate::contracts::identity::NodeId;
 
@@ -186,177 +183,97 @@ struct Instance {
 
 /// A snapshot of the scene's key/path ↔ [`NodeId`] mapping.
 ///
-/// This is the host-side adapter for `rust_widgets::view::TreeIndex` (see the module docs for the
-/// exact upstream gap). Its rules are the library's:
-///
-/// * A **path** is the child-index sequence from a virtual root, so a top-level node is `[i]` and its
-///   first child is `[i, 0]`. It is valid only for the generation it was taken from; an insertion or
-///   removal moves the later paths.
-/// * A **key** is scoped to its siblings. A key claimed twice under one parent maps to neither
-///   claimant, and is named by [`Self::duplicate_keys`] instead of being resolved arbitrarily.
-///
-/// The snapshot is derived from [`Scene`]'s instances and paint order. It has no mutator and is only
-/// replaced when the scene's generation changes.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct SceneIndex {
-    generation: u64,
-    /// The node at each path. The `Arc` is shared with `node_to_path`, mirroring the library's
-    /// one-allocation-per-node snapshot (G-167).
-    path_to_node: BTreeMap<Arc<[usize]>, NodeId>,
-    /// The path of each node, in the same snapshot.
-    node_to_path: BTreeMap<NodeId, Arc<[usize]>>,
-    /// The unique keyed node under each parent.
-    key_to_node: BTreeMap<(Option<NodeId>, String), NodeId>,
-    /// The unique key of each node, so `key_of` is a lookup rather than a scan.
-    node_to_key: BTreeMap<NodeId, String>,
-    /// Keys claimed more than once under one parent, sorted.
-    duplicated_keys: Vec<(Option<NodeId>, String)>,
-}
+/// This is the library's `TreeIndex` with the host's id type: the rules (sibling-scoped keys, a key
+/// claimed twice mapping to neither claimant and being reported, paths valid for one generation) are
+/// upstream's, and [`build_index`] only supplies the declared tree.
+pub type SceneIndex = TreeIndex<NodeId>;
 
-impl SceneIndex {
-    /// The scene generation this snapshot describes.
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// How many nodes the snapshot holds.
-    pub fn len(&self) -> usize {
-        self.path_to_node.len()
-    }
-
-    /// Whether the snapshot holds no nodes.
-    pub fn is_empty(&self) -> bool {
-        self.path_to_node.is_empty()
-    }
-
-    /// The node at `path`, or `None` when the path addresses nothing in this snapshot.
-    pub fn id_at(&self, path: &[usize]) -> Option<NodeId> {
-        self.path_to_node.get(path).copied()
-    }
-
-    /// The node keyed `key` under `parent`, or `None`.
-    ///
-    /// `parent` is `None` for top-level nodes. A duplicated key answers `None`; ask
-    /// [`Self::duplicate_keys`] to tell that condition from "no such key".
-    pub fn id_of_key(&self, parent: Option<NodeId>, key: &str) -> Option<NodeId> {
-        self.key_to_node.get(&(parent, key.to_owned())).copied()
-    }
-
-    /// Every key claimed more than once under one parent, sorted.
-    pub fn duplicate_keys(&self) -> &[(Option<NodeId>, String)] {
-        &self.duplicated_keys
-    }
-
-    /// The path of `node` in this snapshot, or `None` when the node is not part of it.
-    pub fn path_of(&self, node: NodeId) -> Option<&[usize]> {
-        self.node_to_path.get(&node).map(|path| path.as_ref())
-    }
-
-    /// The key of `node`, when it declared a unique one and is part of this snapshot.
-    pub fn key_of(&self, node: NodeId) -> Option<&str> {
-        self.node_to_key.get(&node).map(String::as_str)
-    }
-
-    /// Every uniquely keyed node as `(parent, key, node)`, sorted by `(parent, key)`.
-    ///
-    /// A duplicated key is absent: it maps to no single node.
-    pub fn keys(&self) -> Vec<(Option<NodeId>, &str, NodeId)> {
-        self.key_to_node
-            .iter()
-            .map(|((parent, key), node)| (*parent, key.as_str(), *node))
-            .collect()
-    }
-
-    /// Walks the scene once, assigning paths and key scopes from the live instances.
-    fn build(scene: &Scene) -> Self {
-        // Group children in paint order once, so the walk does not filter the whole order per node.
-        let mut children_of: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-        let mut roots = Vec::new();
-        for node in &scene.order {
-            let parent = scene
-                .instances
-                .get(node)
-                .and_then(|instance| instance.parent);
-            match parent {
-                Some(parent) if scene.instances.contains_key(&parent) => {
-                    children_of.entry(parent).or_default().push(*node);
-                }
-                // A missing parent is treated as a virtual-root child: a removed ancestor must not
-                // make a still-live descendant unaddressable.
-                _ => roots.push(*node),
+/// Walks the scene once and hands its nodes to the library's public [`TreeIndexBuilder`].
+fn build_index(scene: &Scene) -> SceneIndex {
+    // Group children in paint order once, so the walk does not filter the whole order per node.
+    let mut children_of: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    let mut roots = Vec::new();
+    for node in &scene.order {
+        let parent = scene
+            .instances
+            .get(node)
+            .and_then(|instance| instance.parent);
+        match parent {
+            Some(parent) if scene.instances.contains_key(&parent) => {
+                children_of.entry(parent).or_default().push(*node);
             }
+            // A missing parent is treated as a virtual-root child: a removed ancestor must not
+            // make a still-live descendant unaddressable.
+            _ => roots.push(*node),
         }
+    }
 
-        let mut index = Self {
-            generation: scene.generation,
-            ..Self::default()
-        };
-        let mut visited = BTreeSet::new();
-        let mut path = Vec::new();
-        let mut next_root = 0usize;
-        for root in roots {
+    let mut declared: Vec<(Vec<usize>, NodeId, Option<String>)> = Vec::new();
+    let mut visited = BTreeSet::new();
+    let mut path = Vec::new();
+    let mut next_root = 0usize;
+    for root in roots {
+        path.clear();
+        path.push(next_root);
+        next_root += 1;
+        declare(
+            scene,
+            root,
+            &mut path,
+            &mut visited,
+            &children_of,
+            &mut declared,
+        );
+    }
+    // A malformed parent cycle has no root; anchor each remaining component at its first node in
+    // paint order so every live instance is still addressable and the walk always terminates.
+    for node in &scene.order {
+        if !visited.contains(node) {
             path.clear();
             path.push(next_root);
             next_root += 1;
-            index.walk(root, &mut path, &mut visited, &children_of);
+            declare(
+                scene,
+                *node,
+                &mut path,
+                &mut visited,
+                &children_of,
+                &mut declared,
+            );
         }
-        // A malformed parent cycle has no root; anchor each remaining component at its first node in
-        // paint order so every live instance is still addressable and the walk always terminates.
-        for node in &scene.order {
-            if !visited.contains(node) {
-                path.clear();
-                path.push(next_root);
-                next_root += 1;
-                index.walk(*node, &mut path, &mut visited, &children_of);
-            }
-        }
-
-        // The key map is derived last, from the same instances the path map describes. Building it
-        // from `path_to_node` values (rather than a separate declaration) keeps the two in step.
-        for node in index.path_to_node.values() {
-            let Some(instance) = scene.instances.get(node) else {
-                continue;
-            };
-            let Some(key) = &instance.key else {
-                continue;
-            };
-            let claimed = (instance.parent, key.clone());
-            if index.duplicated_keys.contains(&claimed) {
-                continue;
-            }
-            if let Some(previous) = index.key_to_node.remove(&claimed) {
-                // A second claimant makes the key identify neither, exactly as the library does.
-                index.node_to_key.remove(&previous);
-                index.duplicated_keys.push(claimed);
-            } else {
-                index.key_to_node.insert(claimed, *node);
-                index.node_to_key.insert(*node, key.clone());
-            }
-        }
-        index.duplicated_keys.sort();
-        index
     }
 
-    /// Depth-first walk that records one shared path allocation for both directions.
-    fn walk(
-        &mut self,
-        node: NodeId,
-        path: &mut Vec<usize>,
-        visited: &mut BTreeSet<NodeId>,
-        children_of: &BTreeMap<NodeId, Vec<NodeId>>,
-    ) {
-        if !visited.insert(node) {
-            return;
-        }
-        let shared: Arc<[usize]> = Arc::from(path.as_slice());
-        self.path_to_node.insert(Arc::clone(&shared), node);
-        self.node_to_path.insert(node, shared);
-        if let Some(children) = children_of.get(&node) {
-            for (position, child) in children.iter().enumerate() {
-                path.push(position);
-                self.walk(*child, path, visited, children_of);
-                path.pop();
-            }
+    let mut builder = TreeIndexBuilder::new().generation(scene.generation);
+    for (path, node, key) in declared {
+        // The scene does not carry a widget type name; the document does. The index's widget column
+        // is therefore empty here and the canvas reads the kind from its own model.
+        builder = builder.node(&path, node, "", key.as_deref());
+    }
+    builder.build()
+}
+
+/// Depth-first declaration of one node and its children.
+fn declare(
+    scene: &Scene,
+    node: NodeId,
+    path: &mut Vec<usize>,
+    visited: &mut BTreeSet<NodeId>,
+    children_of: &BTreeMap<NodeId, Vec<NodeId>>,
+    declared: &mut Vec<(Vec<usize>, NodeId, Option<String>)>,
+) {
+    if !visited.insert(node) {
+        return;
+    }
+    let key = scene
+        .instances
+        .get(&node)
+        .and_then(|instance| instance.key.clone());
+    declared.push((path.clone(), node, key));
+    if let Some(children) = children_of.get(&node) {
+        for (position, child) in children.iter().enumerate() {
+            path.push(position);
+            declare(scene, *child, path, visited, children_of, declared);
+            path.pop();
         }
     }
 }
@@ -379,7 +296,7 @@ impl Scene {
     /// or key is valid for exactly the generation it was read at, which is why
     /// [`Self::generation`] is exposed alongside it.
     pub fn index(&self) -> &SceneIndex {
-        self.index.get_or_init(|| SceneIndex::build(self))
+        self.index.get_or_init(|| build_index(self))
     }
 
     /// Inserts a node's instance, leaving it on top.

@@ -30,13 +30,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rust_widgets::app::{ButtonHandle, WidgetHandle, WindowHandle};
+use rust_widgets::app::{ButtonHandle, MenuHandle, WidgetHandle, WindowHandle};
 use rust_widgets::control_backend::get_control_backend_for_widget;
 use rust_widgets::core::{Point, Rect};
 use rust_widgets::layout::{BoxLayout, Layout as _, LayoutConstraints, Orientation, SizePolicy};
+use rust_widgets::widget::PropertyGrid;
 use rust_widgets::widget::capability::CapabilityValue;
 use rust_widgets::widget::runtime::{clear_focus, focus_widget, focused_widget, with_widget_mut};
 use rust_widgets::widget::special_widgets::code_editor::CodeEditor;
+use rust_widgets::widget::{GroupBox, Menu, ToolBar};
 
 use crate::app::canvas::scene::Rect as SceneRect;
 use crate::app::commands::command::{Context, Registry, built_in};
@@ -77,15 +79,15 @@ const EXTRA_PANELS: [(&str, &str, Dock); 4] = [
     ("debug", "Debug", Dock::Right),
 ];
 
-/// The Inspector's list, value field, Apply/Clear/Reset/Values buttons, theme field and theme
-/// button, then the error line and note.
-type InspectorControls = (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64);
+/// The Inspector's property grid, the Clear/Reset/Values buttons, the theme field and button,
+/// then the error line and note.
+type InspectorControls = (u64, u64, u64, u64, u64, u64, u64, u64);
 
 /// The Events panel's list, handler field, Bind/Unbind/Fire buttons, error line and note.
 type EventControls = (u64, u64, u64, u64, u64, u64, u64);
 
-/// The Data panel's list, field, Apply button, error line and note.
-type DataControls = (u64, u64, u64, u64, u64);
+/// The Data panel's property grid, error line and note.
+type DataControls = (u64, u64, u64);
 
 /// The Pages panel's list, field, Add/Open/Back/Fwd/Close buttons, error line and note.
 type PageControls = (u64, u64, u64, u64, u64, u64, u64, u64, u64);
@@ -97,6 +99,80 @@ struct GroupView {
     editor: u64,
     /// The group's ids, so hiding a group hides its tab strip and editor together.
     all: Vec<u64>,
+}
+
+/// One interface label the window can re-read after a translation reload.
+#[derive(Clone, Copy)]
+enum LabelKind {
+    /// A control whose `text` property is the label.
+    Text,
+    /// A `Menu` widget whose `title` is the label.
+    MenuTitle,
+    /// A `GroupBox` panel whose `title` is the label.
+    PanelTitle,
+}
+
+struct Translatable {
+    id: u64,
+    key: String,
+    kind: LabelKind,
+}
+
+/// A translated label, through the library's global manager (loaded by `main` from the same JSON
+/// packs the CLI reads).
+fn tr(key: &str) -> String {
+    rust_widgets::i18n::translate(key)
+}
+
+/// A translated label with its `{name}` placeholders filled.
+fn tr_args(key: &str, arguments: &[(&str, &str)]) -> String {
+    rust_widgets::i18n::translate_with_args(key, None, 0, arguments)
+}
+
+/// The catalog key for a panel id.
+fn panel_key(id: &str) -> &'static str {
+    match id {
+        "pages" => "ui.panel.pages",
+        "outline" => "ui.panel.outline",
+        "events" => "ui.panel.events",
+        "inspector" => "ui.panel.inspector",
+        "data" => "ui.panel.data",
+        "messages" => "ui.panel.messages",
+        "problems" => "ui.panel.problems",
+        "debug" => "ui.panel.debug",
+        _ => "ui.panel.outline",
+    }
+}
+
+/// Adds one menu leaf and remembers its label key.
+///
+/// A registry menu leaf's key is `menu.<menu>.item.<command>`; the menu model also names planned
+/// leaves, whose key exists for the same reason (the label is visible even when the command is not
+/// implemented yet). The model's `title` is the fallback when a pack does not carry the key.
+fn add_menu_leaf(
+    handle: &WindowHandle,
+    menu: &MenuHandle,
+    key: &str,
+    command: &str,
+    title: &str,
+    actions: &mut BTreeMap<u64, String>,
+    gui: &Arc<Mutex<Gui>>,
+) {
+    let translated = tr(key);
+    let label = if translated == key {
+        title.to_owned()
+    } else {
+        translated
+    };
+    let item = handle.new_menu_item(menu, &label, None);
+    actions.insert(item.raw_id(), format!("command:{command}"));
+    if let Ok(mut gui) = gui.lock() {
+        gui.translatable.push(Translatable {
+            id: item.raw_id(),
+            key: key.to_owned(),
+            kind: LabelKind::Text,
+        });
+    }
 }
 
 /// Everything the callbacks need. Kept behind one mutex so a button and the menu poller cannot
@@ -122,9 +198,14 @@ struct Gui {
     recents: Recents,
     /// The Inspector's one editable property and the controls that mirror it.
     property: PropertyState,
-    property_field: u64,
+    /// The library's property grid that shows and edits the Inspector's rows.
+    property_grid: u64,
+    /// The grid row of the editable property, so a committed cell is the one the model validates.
+    property_row: usize,
+    /// Rows the Values button read from the inspection, shown under the property rows until the
+    /// selection changes.
+    inspect_extra: Vec<String>,
     property_error: u64,
-    inspector_list: u64,
     /// The object tree, the canvas scene and the one selection both views read (T09.02–T09.04).
     scene: CanvasState,
     outline_list: u64,
@@ -146,10 +227,9 @@ struct Gui {
     events_error: u64,
     events_note: u64,
     events_selected: usize,
-    /// The Data panel and the read-only inspector over the same document version.
+    /// The Data panel: a property grid over the sample schema, and the read-only inspection.
     inspect: InspectState,
-    data_list: u64,
-    data_field: u64,
+    data_grid: u64,
     data_error: u64,
     data_note: u64,
     data_selected: usize,
@@ -174,6 +254,15 @@ struct Gui {
     outline_rows: Vec<String>,
     outline_index: BTreeMap<NodeId, usize>,
     outline_content_revision: u64,
+    /// Labels re-read after a translation hot reload.
+    translatable: Vec<Translatable>,
+    /// The toolbar and the catalog keys of its items, so a reload can rebuild its labels.
+    toolbar: u64,
+    toolbar_items: Vec<(&'static str, &'static str)>,
+    /// The Inspector's right-click menu.
+    context_menu: u64,
+    /// The scene node's right-click menu.
+    scene_menu: u64,
 }
 
 /// One visible node as the canvas paints it: rectangle, label, and hidden/locked/selected flags.
@@ -235,7 +324,11 @@ fn show_panel_if_available(panels: &mut Panels, id: &str, services: &BTreeSet<St
 
 impl Gui {
     fn status_line(&self) -> String {
-        let document = self.workbench.document().unwrap_or("no document");
+        let document = self
+            .workbench
+            .document()
+            .map(str::to_owned)
+            .unwrap_or_else(|| tr("ui.status.no-document"));
         let target = self
             .workbench
             .status()
@@ -464,6 +557,92 @@ fn subscribe_string(
     }
 }
 
+/// Subscribes one payload-carrying signal shaped `(row index, text)`.
+///
+/// `PropertyGrid::cell_changed` carries the row and the committed text as a tuple; the generic
+/// `subscribe_index` helper only unwraps a bare `UInt`, so this is the one place that knows the
+/// shape.
+fn subscribe_cell(
+    id: u64,
+    event: &'static str,
+    mut callback: impl FnMut(u64, &str) + Send + Sync + 'static,
+) {
+    let subscribed = with_widget_mut(id, move |widget| {
+        widget.event_signal_dyn(event).map(|signal| {
+            signal.subscribe(Box::new(move |payload| {
+                if let CapabilityValue::Tuple(values) = payload
+                    && let (Some(CapabilityValue::UInt(row)), Some(CapabilityValue::String(text))) =
+                        (values.first(), values.get(1))
+                {
+                    callback(*row, text);
+                }
+            }))
+        })
+    })
+    .flatten()
+    .is_some();
+    if !subscribed {
+        crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::workbench",
+            &format!("control {id} publishes no {event} signal"),
+        );
+    }
+}
+
+/// A row as the property grid shows it: name, value, and whether a person may edit it.
+type GridRow = (String, String, bool);
+
+/// Replaces every row of a `PropertyGrid`.
+///
+/// The grid owns the rows; the host only hands it the current model. `clear` + `add_property` is
+/// the widget's own structure-change path, so its cached display rows and hit test follow.
+fn set_property_rows(id: u64, rows: &[GridRow], selected: Option<usize>) {
+    if id == 0 {
+        return;
+    }
+    let rows = rows.to_vec();
+    let changed = with_widget_mut(id, move |widget| {
+        let Some(grid) = (widget as &mut dyn Any).downcast_mut::<PropertyGrid>() else {
+            return false;
+        };
+        grid.clear();
+        for (name, value, editable) in &rows {
+            grid.add_property(name.clone(), value.clone(), *editable);
+        }
+        grid.set_selected_index(selected);
+        true
+    })
+    .unwrap_or(false);
+    if !changed {
+        warn_failure(
+            "the property grid could not be filled",
+            "the mounted control was not a PropertyGrid",
+        );
+    }
+}
+
+/// Rewrites one cell of a `PropertyGrid` without rebuilding the row set.
+fn set_property_cell(id: u64, row: usize, value: &str) {
+    if id == 0 {
+        return;
+    }
+    let value = value.to_owned();
+    let changed = with_widget_mut(id, move |widget| {
+        let Some(grid) = (widget as &mut dyn Any).downcast_mut::<PropertyGrid>() else {
+            return false;
+        };
+        grid.set_value(row, value)
+    })
+    .unwrap_or(false);
+    if !changed {
+        warn_failure(
+            "a property cell could not be rewritten",
+            format!("row {row} is not in the grid"),
+        );
+    }
+}
+
 /// Logs when a control gains keyboard focus.
 ///
 /// Focus traversal is the library's: the platform consumes Tab and calls `focus_next` in the
@@ -525,6 +704,87 @@ fn sync_palette(gui: &mut Gui) {
     });
 }
 
+/// Re-reads every remembered label and the toolbar from the global catalogue.
+///
+/// This is what a hot reload paints: the catalogue changed on disk, so the controls are handed the
+/// new text without rebuilding the window. A control that no longer exists is skipped by
+/// `with_widget_mut`/`set_widget_text` returning false, not treated as a reason to stop.
+fn retranslate(gui: &mut Gui) {
+    for label in &gui.translatable {
+        let text = tr(&label.key);
+        match label.kind {
+            LabelKind::Text => rust_widgets::set_widget_text(label.id, &text),
+            LabelKind::MenuTitle => {
+                let _ = with_widget_mut(label.id, move |widget| {
+                    let Some(menu) = (widget as &mut dyn Any).downcast_mut::<Menu>() else {
+                        return false;
+                    };
+                    menu.set_title(text);
+                    true
+                });
+            }
+            LabelKind::PanelTitle => {
+                let _ = with_widget_mut(label.id, move |widget| {
+                    let Some(panel) = (widget as &mut dyn Any).downcast_mut::<GroupBox>() else {
+                        return false;
+                    };
+                    panel.set_title(text);
+                    true
+                });
+            }
+        }
+    }
+    if gui.toolbar != 0 {
+        let items: Vec<(String, String)> = gui
+            .toolbar_items
+            .iter()
+            .map(|(key, action)| (tr(key), (*action).to_owned()))
+            .collect();
+        let _ = with_widget_mut(gui.toolbar, move |widget| {
+            let Some(bar) = (widget as &mut dyn Any).downcast_mut::<ToolBar>() else {
+                return false;
+            };
+            bar.clear();
+            for (index, (label, action)) in items.iter().enumerate() {
+                bar.insert_item(
+                    index,
+                    rust_widgets::widget::menu_toolbar::tool_bar::ToolBarItem::new(
+                        action.as_str(),
+                        label.as_str(),
+                    ),
+                );
+            }
+            true
+        });
+    }
+    update_status(gui);
+}
+
+/// Drives the library's translation hot reload from the main thread.
+///
+/// The watcher is enabled over the `language/` directory; this poll drains its events and repaints
+/// the remembered labels. It is deliberately a timer rather than a per-pixel hook: translation
+/// files change at human speed, and a 250 ms poll costs one mutex check per tick.
+fn schedule_i18n(gui: Arc<Mutex<Gui>>) {
+    let next = Arc::clone(&gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(250), move || {
+        let applied = rust_widgets::i18n::pump_hot_reload();
+        if applied > 0
+            && let Ok(mut gui) = next.lock()
+        {
+            retranslate(&mut gui);
+            gui.message = format!("language reloaded: {applied} file event(s)");
+            update_status(&gui);
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-i18n",
+                &format!("translation hot reload applied {applied} event(s)"),
+            );
+        }
+        schedule_i18n(next);
+    });
+}
+
 /// Mirrors `gui.message` into the real status bar for callback paths that do not go through
 /// [`apply_action`].
 fn update_status(gui: &Gui) {
@@ -551,79 +811,89 @@ fn refresh_inspector(gui: &mut Gui) {
     } else {
         gui.property.node().get().to_string()
     };
-    let mut items = vec![
-        format!("node: {nodes}"),
-        format!("kind: {kind} · {contract}"),
-        format!(
-            "{}: {}",
-            gui.property.name().as_str(),
-            gui.property.summary()
+    // The grid's own rows carry the Inspector's contract facts; the editable row is the one the
+    // model validates, and every other row is a read-only answer beside it (blue21 W-2d).
+    let mut rows: Vec<GridRow> = vec![
+        (tr("ui.inspector.node"), nodes, false),
+        (
+            tr("ui.inspector.kind"),
+            format!("{kind} · {contract}"),
+            false,
         ),
-        format!(
-            "theme: {} · computed background {}",
-            gui.inspect.theme().unwrap_or("(none)"),
-            gui.inspect
-                .background(gui.property.node())
-                .unwrap_or("(not themed)")
+        (
+            gui.property.name().as_str().to_owned(),
+            gui.property.summary(),
+            true,
+        ),
+        (
+            tr("ui.inspector.theme"),
+            format!(
+                "{} · computed background {}",
+                gui.inspect.theme().unwrap_or("(none)"),
+                gui.inspect
+                    .background(gui.property.node())
+                    .unwrap_or("(not themed)")
+            ),
+            false,
         ),
     ];
     // The contract's default and accepted tokens are shown beside the value, so an enum property
     // does not ask a person to type a token the schema already enumerates.
     if let Some(default) = gui.property.contract_default() {
-        items.push(format!("default: {default}"));
+        rows.push((tr("ui.inspector.default"), default, false));
     }
     let tokens = gui.property.accepted_tokens();
     if !tokens.is_empty() {
-        items.push(format!("accepted: {}", tokens.join(" | ")));
+        rows.push((tr("ui.inspector.accepted"), tokens.join(" | "), false));
     }
-    rust_widgets::list_box_clear_items(gui.inspector_list);
-    for item in &items {
-        let _ = rust_widgets::list_box_add_item(gui.inspector_list, item);
+    for line in &gui.inspect_extra {
+        rows.push((tr("ui.inspector.inspect"), line.clone(), false));
     }
+    if gui.property.is_mixed() {
+        rows.push((
+            tr("ui.inspector.selection"),
+            tr("ui.placeholder.mixed"),
+            false,
+        ));
+    }
+    set_property_rows(gui.property_grid, &rows, Some(gui.property_row));
     // Contract facts are reported instead of hidden behind one node's schema: an unavailable
     // schema refuses edits, and a selection whose properties disagree is not agreement.
     if gui.property_error != 0 {
         let note = gui
             .property
             .schema_unavailable()
-            .map(|reason| format!("schema unavailable: {reason}"))
+            .map(|reason| tr_args("ui.error.schema-unavailable", &[("reason", reason)]))
             .or_else(|| {
                 gui.property
                     .incompatible()
-                    .map(|reason| format!("contracts differ: {reason}"))
+                    .map(|reason| tr_args("ui.error.contracts-differ", &[("reason", reason)]))
             })
             .or_else(|| {
                 gui.property
                     .contract_note()
-                    .map(|note| format!("contracts: {note}"))
+                    .map(|note| tr_args("ui.error.contracts", &[("reason", note)]))
             });
         if let Some(note) = note {
             rust_widgets::set_widget_text(gui.property_error, &note);
         }
     }
-    rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
-    rust_widgets::set_widget_placeholder(
-        gui.property_field,
-        if gui.property.is_mixed() {
-            "mixed — typing applies to every selected node"
-        } else {
-            ""
-        },
-    );
     if gui.inspect_note != 0 {
         rust_widgets::set_widget_text(
             gui.inspect_note,
-            &format!(
-                "design v{} · effects {} · read-only",
-                gui.inspect.version(),
-                gui.inspect.effects()
+            &tr_args(
+                "ui.note.inspector",
+                &[
+                    ("version", &gui.inspect.version().to_string()),
+                    ("effects", &gui.inspect.effects().to_string()),
+                ],
             ),
         );
     }
     crate::host::log::emit(
         crate::host::log::Level::Info,
         "app::run::workbench-property",
-        &format!("inspector rows: {} [contract {contract}]", items[2]),
+        &format!("inspector rows: {} [contract {contract}]", rows[2].1),
     );
     if let Some(note) = gui.property.contract_note() {
         crate::host::log::emit(
@@ -658,9 +928,15 @@ fn sync_events(gui: &mut Gui) {
     let wiring = gui.events.wiring_rows().join("; ");
     rust_widgets::set_widget_text(
         gui.events_note,
-        &format!(
-            "{status} | rev {} | handlers: {handlers} | {wiring} | {last}",
-            gui.events.revision()
+        &tr_args(
+            "ui.note.events",
+            &[
+                ("status", &status),
+                ("revision", &gui.events.revision().to_string()),
+                ("handlers", &handlers),
+                ("wiring", &wiring),
+                ("last", &last),
+            ],
         ),
     );
     let list = gui.events_list;
@@ -676,38 +952,50 @@ fn sync_events(gui: &mut Gui) {
     });
 }
 
-/// Mirrors the Data model into its list and its labels.
+/// Mirrors the Data model into its property grid and its labels.
+///
+/// The grid's first row names the dataset and is read-only; every field after it is editable, so
+/// committing a cell edits exactly the field whose row it was.
 fn sync_data(gui: &mut Gui) {
-    let rows = gui.inspect.rows();
     let fields = gui.inspect.fields();
-    let selected = gui.data_selected.min(fields.len().saturating_sub(1));
-    gui.data_selected = selected;
-    let value = fields
-        .get(selected)
-        .and_then(|field| gui.inspect.value_of(field))
-        .unwrap_or_default();
-    rust_widgets::set_widget_text(gui.data_field, &value);
-    if let Some(problem) = gui.inspect.problem() {
-        rust_widgets::set_widget_text(gui.data_error, &format!("not applied: {problem}"));
-    }
-    rust_widgets::set_widget_text(
-        gui.data_note,
-        &format!(
-            "data v{} · effects {} · runtime: none",
+    let mut rows: Vec<GridRow> = vec![(
+        tr("ui.data.dataset"),
+        format!(
+            "form v{} · effects {} · runtime none",
             gui.inspect.version(),
             gui.inspect.effects()
         ),
-    );
-    let list = gui.data_list;
-    if list == 0 {
-        return;
+        false,
+    )];
+    for field in &fields {
+        let value = gui.inspect.value_of(field).unwrap_or_default();
+        rows.push((field.clone(), value, true));
     }
-    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for row in &rows {
-            let _ = rust_widgets::list_box_add_item(list, row);
+    // Keep the schema's diagnostics visible instead of hiding them behind the editable rows.
+    for diagnostic in gui.inspect.rows() {
+        if diagnostic.starts_with("problem:") || diagnostic.starts_with("sample refused:") {
+            rows.push((tr("ui.data.diagnostic"), diagnostic, false));
         }
-    });
+    }
+    let selected = gui.data_selected.min(fields.len().saturating_sub(1));
+    gui.data_selected = selected;
+    set_property_rows(gui.data_grid, &rows, Some(selected + 1));
+    if let Some(problem) = gui.inspect.problem() {
+        rust_widgets::set_widget_text(
+            gui.data_error,
+            &tr_args("ui.error.not-applied", &[("reason", problem)]),
+        );
+    }
+    rust_widgets::set_widget_text(
+        gui.data_note,
+        &tr_args(
+            "ui.note.data",
+            &[
+                ("version", &gui.inspect.version().to_string()),
+                ("effects", &gui.inspect.effects().to_string()),
+            ],
+        ),
+    );
 }
 
 /// Mirrors the Pages model into its list and its labels.
@@ -716,11 +1004,13 @@ fn sync_pages(gui: &mut Gui) {
     let selected = gui.pages_selected;
     rust_widgets::set_widget_text(
         gui.pages_note,
-        &format!(
-            "{} page(s) · current {} · revision {}",
-            gui.pages.pages().len(),
-            gui.pages.current().unwrap_or("(none)"),
-            gui.pages.revision()
+        &tr_args(
+            "ui.note.pages",
+            &[
+                ("count", &gui.pages.pages().len().to_string()),
+                ("current", gui.pages.current().unwrap_or("(none)")),
+                ("revision", &gui.pages.revision().to_string()),
+            ],
         ),
     );
     let list = gui.pages_list;
@@ -750,15 +1040,14 @@ fn retarget_panels(gui: &mut Gui) {
     sync_data(gui);
 }
 
-/// Commits the field's text through the schema editor (task T11.01).
-fn apply_property(gui: &mut Gui) {
-    let text = rust_widgets::get_widget_text(gui.property_field);
+/// Commits a typed text through the schema editor (task T11.01).
+fn apply_property(gui: &mut Gui, text: &str) {
     crate::host::log::emit(
         crate::host::log::Level::Info,
         "app::run::workbench-property",
         &format!("inspector Apply text {} character(s)", text.chars().count()),
     );
-    match gui.property.apply(&text) {
+    match gui.property.apply(text) {
         Ok(revision) => {
             let nodes = gui.property.nodes().to_vec();
             // Only a `title` contract is the tree's structural name. A button/label's `text` is
@@ -767,7 +1056,7 @@ fn apply_property(gui: &mut Gui) {
             let mut applied = Vec::new();
             for node in &nodes {
                 if renames {
-                    match gui.scene.rename(*node, &text) {
+                    match gui.scene.rename(*node, text) {
                         Ok(()) => applied.push(node.get().to_string()),
                         Err(reason) => applied.push(format!("{} refused: {reason}", node.get())),
                     }
@@ -811,7 +1100,10 @@ fn apply_property(gui: &mut Gui) {
         }
         Err(reason) => {
             let reason = gui.property.problem().map(str::to_owned).unwrap_or(reason);
-            rust_widgets::set_widget_text(gui.property_error, &format!("not applied: {reason}"));
+            rust_widgets::set_widget_text(
+                gui.property_error,
+                &tr_args("ui.error.not-applied", &[("reason", &reason)]),
+            );
             gui.message = format!(
                 "{} not applied at revision {}: {reason}",
                 gui.property.name().as_str(),
@@ -827,6 +1119,106 @@ fn apply_property(gui: &mut Gui) {
                 ),
             );
         }
+    }
+    update_status(gui);
+}
+
+/// Empties the Inspector's editable cell without changing the valid model value.
+fn clear_property(gui: &mut Gui) {
+    set_property_cell(gui.property_grid, gui.property_row, "");
+    rust_widgets::set_widget_text(gui.property_error, "");
+    gui.message = tr_args(
+        "ui.status.inspector-cleared",
+        &[
+            ("name", gui.property.name().as_str()),
+            ("value", &format!("{:?}", gui.property.value_text())),
+        ],
+    );
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-property",
+        &format!(
+            "inspector field cleared; valid value unchanged: {:?}",
+            gui.property.value_text()
+        ),
+    );
+}
+
+/// Takes the explicit edit away and restores each node's structural name.
+fn reset_property(gui: &mut Gui) {
+    let nodes = gui.property.nodes().to_vec();
+    let renames = gui.property.edits_node_name();
+    let (count, lines) = gui.property.reset();
+    gui.inspect_extra.clear();
+    if renames {
+        for node in &nodes {
+            if let Some(value) = gui.property.value_for(*node)
+                && let Err(reason) = gui.scene.rename(*node, &value)
+            {
+                warn_failure("a node could not be renamed on reset", reason);
+            }
+        }
+    }
+    rust_widgets::set_widget_text(gui.property_error, &lines.join(" | "));
+    refresh_inspector(gui);
+    sync_outline(gui);
+    sync_canvas(gui);
+    gui.message = tr_args("ui.status.reset-nodes", &[("count", &count.to_string())]);
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-property",
+        &format!("inspector reset {count} node(s): {}", lines.join("; ")),
+    );
+}
+
+/// Reads design/computed/runtime and the source location without dispatching a trigger.
+fn inspect_values(gui: &mut Gui) {
+    let selected = gui.scene.selected().to_vec();
+    {
+        let Gui { inspect, scene, .. } = &mut *gui;
+        inspect.retarget(scene, &selected);
+    }
+    match gui.inspect.inspect() {
+        Ok(lines) => {
+            gui.inspect_extra = lines.clone();
+            refresh_inspector(gui);
+            gui.message = tr_args(
+                "ui.status.inspected",
+                &[
+                    ("version", &gui.inspect.version().to_string()),
+                    ("effects", &gui.inspect.effects().to_string()),
+                ],
+            );
+            rust_widgets::set_widget_text(gui.property_error, "");
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-inspect",
+                &format!(
+                    "inspect rows: {} (effects {})",
+                    lines.len(),
+                    gui.inspect.effects()
+                ),
+            );
+        }
+        Err(reason) => {
+            let text = tr_args("ui.error.inspect-refused", &[("reason", &reason)]);
+            rust_widgets::set_widget_text(gui.property_error, &text);
+            gui.message = text;
+        }
+    }
+    if gui.inspect_note != 0 {
+        rust_widgets::set_widget_text(
+            gui.inspect_note,
+            &tr_args(
+                "ui.note.inspector",
+                &[
+                    ("version", &gui.inspect.version().to_string()),
+                    ("effects", &gui.inspect.effects().to_string()),
+                ],
+            ),
+        );
     }
     update_status(gui);
 }
@@ -1016,6 +1408,67 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
     });
 }
 
+/// Applies one scene context-menu action to the primary selection.
+///
+/// The actions mutate the same `CanvasState` the Outline and canvas clicks use, so a menu entry and
+/// a pointer gesture cannot disagree. A hidden node leaves the selection (the canvas no longer
+/// draws it); a locked node stays selected but is refused by the design gestures it would block.
+fn scene_context_action(gui: &mut Gui, action: &str) {
+    let Some(node) = gui.scene.primary() else {
+        gui.message = tr("ui.status.unknown-action");
+        update_status(gui);
+        return;
+    };
+    let name = gui.scene.name(node).unwrap_or("?").to_owned();
+    match action {
+        "select-parent" => match gui.scene.parent(node) {
+            Some(parent) => select_node(gui, parent, "context"),
+            None => {
+                let node_text = node.get().to_string();
+                gui.message = tr_args("ui.status.no-parent", &[("node", &node_text)]);
+                update_status(gui);
+            }
+        },
+        "toggle-lock" => {
+            let locked = !gui.scene.is_locked(node);
+            gui.scene.set_locked(node, locked);
+            gui.message = if locked {
+                tr_args("ui.status.locked", &[("name", &name)])
+            } else {
+                tr_args("ui.status.unlocked", &[("name", &name)])
+            };
+            retarget_panels(gui);
+            sync_canvas(gui);
+            sync_outline(gui);
+            update_status(gui);
+        }
+        "toggle-hide" => {
+            let hidden = !gui.scene.is_hidden(node);
+            gui.scene.set_hidden(node, hidden);
+            gui.message = if hidden {
+                tr_args("ui.status.hidden-node", &[("name", &name)])
+            } else {
+                tr_args("ui.status.shown-node", &[("name", &name)])
+            };
+            retarget_panels(gui);
+            sync_canvas(gui);
+            sync_outline(gui);
+            update_status(gui);
+        }
+        "raise" => {
+            if gui.scene.raise(node) {
+                gui.message = tr_args("ui.status.raised", &[("name", &name)]);
+            } else {
+                gui.message = tr_args("ui.status.already-top", &[("name", &name)]);
+            }
+            sync_canvas(gui);
+            sync_outline(gui);
+            update_status(gui);
+        }
+        _ => {}
+    }
+}
+
 /// Selects one node from a tree row, a canvas button or a canvas click.
 ///
 /// A hidden or locked node is refused with the reason the scene gives; the Outline then snaps back
@@ -1039,7 +1492,7 @@ fn select_node(gui: &mut Gui, node: NodeId, source: &str) {
                 }
             };
             gui.message = format!("selected node {} ({name})", node.get());
-            rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
+            gui.inspect_extra.clear();
             rust_widgets::set_widget_text(gui.property_error, "");
             refresh_inspector(gui);
             retarget_panels(gui);
@@ -1108,7 +1561,7 @@ fn marquee_select(gui: &mut Gui, rect: SceneRect) {
             .map(|(node, contract, name)| (*node, contract.clone(), name.as_str()))
             .collect();
         gui.property.retarget_many_contracts(&refs, &problems);
-        rust_widgets::set_widget_text(gui.property_field, &gui.property.value_text());
+        gui.inspect_extra.clear();
         rust_widgets::set_widget_text(gui.property_error, "");
         refresh_inspector(gui);
         if let Some(reason) = gui.property.incompatible() {
@@ -1198,14 +1651,14 @@ fn open_palette(gui: &mut Gui) {
     gui.refresh_layout();
     sync_palette(gui);
     if gui.palette_surface != 0 && focus_widget(gui.palette_surface) {
-        gui.message = "command palette".to_owned();
+        gui.message = tr("ui.status.command-palette");
         crate::host::log::emit(
             crate::host::log::Level::Info,
             "app::run::workbench-palette",
             &format!("palette opened; previous focus {previous:?}"),
         );
     } else {
-        gui.message = "the command palette could not take the keyboard".to_owned();
+        gui.message = tr("ui.status.palette-could-not-focus");
         crate::host::log::emit(
             crate::host::log::Level::Info,
             "app::run::workbench-palette",
@@ -1281,8 +1734,10 @@ fn run_palette_id(gui: &mut Gui, id: &str) {
             return;
         }
         "view.welcome" => {
-            gui.workbench.set_mode(Mode::Welcome);
-            format!("{id}: welcome mode")
+            open_onboarding(gui);
+            gui.message = format!("{id}: welcome opened");
+            update_status(gui);
+            return;
         }
         "panel.close" => {
             // Focus tracking for docked panels is a later T04.07 slice; hiding an arbitrary panel
@@ -1302,17 +1757,108 @@ fn run_palette_id(gui: &mut Gui, id: &str) {
     );
 }
 
+fn run_command(gui: &mut Gui, command: &str) {
+    let outcome = match command {
+        "view.palette" => {
+            open_palette(gui);
+            return;
+        }
+        "view.welcome" => {
+            open_onboarding(gui);
+            return;
+        }
+        "panel.outline" => {
+            apply_action(gui, "toggle:outline");
+            return;
+        }
+        "panel.inspector" => {
+            apply_action(gui, "toggle:inspector");
+            return;
+        }
+        "panel.close" => "no focused docked panel is tracked in this window yet".to_owned(),
+        "keys.show" => shortcut_summary(),
+        other => format!("{other}: resolved; the workbench has no handler for it yet"),
+    };
+    gui.message = outcome;
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-menu",
+        &format!("menu command {command}: {}", gui.message),
+    );
+}
+
+/// Opens the onboarding document in the focused editor group.
+///
+/// The text is built from the live command registry, so the “what can I do?” page cannot list a
+/// command the build does not have (task T24.07). Opening it is the `view.welcome` command's work:
+/// the mode changes and a real document appears, rather than a mode flag with no surface.
+fn open_onboarding(gui: &mut Gui) {
+    let text = onboarding_text(&gui.registry);
+    gui.workbench.set_mode(Mode::Welcome);
+    gui.groups.pin("WELCOME.md");
+    if gui.groups.text("WELCOME.md") != Some(text.as_str())
+        && let Err(reason) = gui.groups.type_into(text)
+    {
+        warn_failure("the onboarding document could not be filled", reason);
+    }
+    gui.sync_editors();
+    gui.message = tr("ui.status.ready");
+    update_status(gui);
+}
+
+/// The onboarding page: a short guided flow plus every command this build registers.
+fn onboarding_text(registry: &Registry) -> String {
+    let mut text = String::from(
+        "# Welcome to rustage\n\n\
+         rustage designs a rust-widgets interface as a document, previews it without a build, and\n\
+         generates Rust source for the selected target.\n\n\
+         ## Try this first\n\n\
+         1. Open the command palette: toolbar “Commands”, View → Command Palette.\n\
+         2. Select a node in the Outline or on the canvas; edit it in the Inspector.\n\
+         3. Run a live edit and watch the preview update without cargo.\n\
+         4. Generate source for the current target and check it builds.\n\n\
+         `--help` lists the non-window workflows; `--headless` runs validate/generate/check in CI.\n\n\
+         ## Commands in this build\n\n",
+    );
+    let mut by_category: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for command in registry.commands() {
+        by_category
+            .entry(command.category())
+            .or_default()
+            .push(format!(
+                "- `{}` — {}: {}",
+                command.id(),
+                command.title(),
+                command.help()
+            ));
+    }
+    for (category, lines) in by_category {
+        text.push_str(&format!("### {category}\n\n"));
+        for line in lines {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text.push('\n');
+    }
+    text
+}
+
 fn apply_action(gui: &mut Gui, action: &str) {
+    if let Some(command) = action.strip_prefix("command:") {
+        run_command(gui, command);
+        return;
+    }
     if let Some(id) = action.strip_prefix("toggle:") {
         if gui.panels.layout().shown().iter().any(|shown| shown == id) {
             if let Err(error) = gui.panels.hide(id) {
                 warn_failure("a panel could not be hidden", error.message());
             }
-            gui.message = format!("hidden {id}");
+            gui.message = tr_args("ui.status.hidden", &[("id", id)]);
         } else if gui.panels.show(id).is_ok() {
-            gui.message = format!("shown {id}");
+            gui.message = tr_args("ui.status.shown", &[("id", id)]);
         } else {
-            gui.message = format!("no panel {id}");
+            gui.message = tr_args("ui.status.no-panel", &[("id", id)]);
         }
         gui.sync_panels();
         gui.sync_editors();
@@ -1322,23 +1868,33 @@ fn apply_action(gui: &mut Gui, action: &str) {
         "palette:open" => open_palette(gui),
         "palette:close" => {
             close_palette(gui);
-            gui.message = "command palette closed".to_owned();
+            gui.message = tr("ui.status.palette-closed");
         }
         "layout:save" => match &gui.layout_path {
             Some(path) => {
                 let layout = Layout::captured("workbench", &gui.groups, &gui.panels, false, false);
                 match std::fs::write(path, layout.to_json()) {
-                    Ok(()) => gui.message = format!("saved layout to {}", path.display()),
-                    Err(error) => gui.message = format!("layout not saved: {error}"),
+                    Ok(()) => {
+                        gui.message = tr_args(
+                            "ui.status.layout-saved",
+                            &[("path", &path.display().to_string())],
+                        );
+                    }
+                    Err(error) => {
+                        gui.message = tr_args(
+                            "ui.status.layout-not-saved",
+                            &[("reason", &error.to_string())],
+                        );
+                    }
                 }
             }
-            None => gui.message = "no --layout path was given".to_owned(),
+            None => gui.message = tr("ui.status.no-layout-path"),
         },
         "layout:reset" => {
             if let Err(error) = gui.default_layout.apply(&mut gui.groups, &mut gui.panels) {
                 warn_failure("the default layout could not be applied", error.message());
             }
-            gui.message = "layout reset".to_owned();
+            gui.message = tr("ui.status.layout-reset");
             gui.sync_panels();
             gui.sync_editors();
         }
@@ -1351,18 +1907,21 @@ fn apply_action(gui: &mut Gui, action: &str) {
             if let Some(document) = document {
                 gui.groups.another_view(document);
             }
-            gui.message = "editor split".to_owned();
+            gui.message = tr("ui.status.editor-split");
             gui.sync_editors();
         }
         "group:next" => {
             gui.groups.focus_next();
-            gui.message = format!("focus group {}", gui.groups.focus().get());
+            gui.message = tr_args(
+                "ui.status.focus-group",
+                &[("group", &gui.groups.focus().get().to_string())],
+            );
         }
         "quit" => {
-            gui.message = "closing".to_owned();
+            gui.message = tr("ui.status.closing");
             rust_widgets::quit();
         }
-        other => gui.message = format!("unknown action {other}"),
+        other => gui.message = tr_args("ui.status.unknown-action", &[("action", other)]),
     }
     rust_widgets::set_widget_text(
         gui.status,
@@ -1518,8 +2077,8 @@ pub(super) fn workbench_gui(
         .map(str::to_owned)
         .collect();
     let mut panels = built_in_panels();
-    for (id, title, dock) in EXTRA_PANELS {
-        if let Err(error) = panels.register(PanelSpec::new(id, title, dock, 300)) {
+    for (id, _title, dock) in EXTRA_PANELS {
+        if let Err(error) = panels.register(PanelSpec::new(id, tr(panel_key(id)), dock, 300)) {
             warn_failure("an extra panel could not be registered", error.message());
         }
     }
@@ -1534,6 +2093,15 @@ pub(super) fn workbench_gui(
         "debug",
     ] {
         show_panel_if_available(&mut panels, id, &services);
+    }
+    // §2.2's ledger: every required panel is accounted for, and the ones this slice does not have
+    // are recorded as missing rather than drawn as empty panels.
+    if let Some(summary) = panels.accounting_lines(&services).first() {
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-gui",
+            summary,
+        );
     }
 
     let mut groups = Groups::new(8);
@@ -1603,7 +2171,7 @@ pub(super) fn workbench_gui(
         panel_widgets: BTreeMap::new(),
         group_views: Vec::new(),
         status: 0,
-        message: "ready".to_owned(),
+        message: tr("ui.status.ready"),
         window,
         placements: Vec::new(),
         palette: Palette::new(),
@@ -1611,9 +2179,10 @@ pub(super) fn workbench_gui(
         registry: built_in(),
         recents: Recents::new(8),
         property,
-        property_field: 0,
+        property_grid: 0,
+        property_row: 2,
+        inspect_extra: Vec::new(),
         property_error: 0,
-        inspector_list: 0,
         scene,
         outline_list: 0,
         canvas_panel: 0,
@@ -1630,8 +2199,7 @@ pub(super) fn workbench_gui(
         events_note: 0,
         events_selected: 0,
         inspect: InspectState::new(),
-        data_list: 0,
-        data_field: 0,
+        data_grid: 0,
         data_error: 0,
         data_note: 0,
         data_selected: 0,
@@ -1651,7 +2219,35 @@ pub(super) fn workbench_gui(
         outline_rows: Vec::new(),
         outline_index: BTreeMap::new(),
         outline_content_revision: u64::MAX,
+        translatable: Vec::new(),
+        toolbar: 0,
+        toolbar_items: Vec::new(),
+        context_menu: 0,
+        scene_menu: 0,
     }));
+
+    // The interface catalogue is runtime data under `language/`; load it into the library's manager
+    // and watch the directory so an edit appears without restarting (blue21 L-4 items 3/5).
+    if let Err(reason) = crate::app::locale::catalog::install_global() {
+        warn_failure("the interface language could not be loaded", reason);
+    }
+    let language_dir = crate::app::locale::vocabulary::language_dir();
+    match rust_widgets::i18n::enable_global_hot_reload(&language_dir) {
+        Ok(loaded) => crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-i18n",
+            &format!(
+                "watching {} for language packs ({loaded} loaded)",
+                language_dir.display()
+            ),
+        ),
+        Err(reason) => crate::host::log::emit(
+            crate::host::log::Level::Warn,
+            "app::run::workbench-i18n",
+            &format!("language hot reload is unavailable: {reason}"),
+        ),
+    }
+    schedule_i18n(Arc::clone(&gui));
 
     // Menu bar. The toolbar is the portable path (macOS paints no native menus in this revision);
     // the menu bar is still created because on the other hosts it is the native one.
@@ -1666,66 +2262,163 @@ pub(super) fn workbench_gui(
         gui.placements.push((bar.raw_id(), Area::Menu));
     }
     let mut menu_actions: BTreeMap<u64, String> = BTreeMap::new();
-    for (menu_name, entries) in [
-        ("File", vec![("Quit", "quit")]),
+    // The menu tree is the registry's, not a second hand-spelled copy: every leaf names the command
+    // it binds, and the label is the identified vocabulary key (`menu.<id>.item.<command>`). This is
+    // what blue21 L-2/T05.02 asked for — the same menu the catalog covers is the one the window paints.
+    for menu in crate::app::commands::menu::built_in() {
+        let title_key = format!("menu.{}.title", menu.id());
+        let handle_menu = handle.new_menu(&bar, &tr(&title_key), 0, 0, 0, 0);
+        if let Ok(mut gui) = gui.lock() {
+            gui.translatable.push(Translatable {
+                id: handle_menu.raw_id(),
+                key: title_key,
+                kind: LabelKind::MenuTitle,
+            });
+        }
+        for item in menu.items() {
+            match item {
+                crate::app::commands::menu::Item::Command { title, command }
+                | crate::app::commands::menu::Item::Planned { title, command, .. } => {
+                    add_menu_leaf(
+                        &handle,
+                        &handle_menu,
+                        &format!("menu.{}.item.{command}", menu.id()),
+                        command,
+                        title,
+                        &mut menu_actions,
+                        &gui,
+                    );
+                }
+                crate::app::commands::menu::Item::Submenu { id, items, .. } => {
+                    // The window's API has no nested menu, so a submenu's leaves are flattened under
+                    // its parent but keep the submenu-qualified key.
+                    for child in items {
+                        match child {
+                            crate::app::commands::menu::Item::Command { title, command }
+                            | crate::app::commands::menu::Item::Planned {
+                                title, command, ..
+                            } => {
+                                add_menu_leaf(
+                                    &handle,
+                                    &handle_menu,
+                                    &format!("menu.{}.submenu.{id}.item.{command}", menu.id()),
+                                    command,
+                                    title,
+                                    &mut menu_actions,
+                                    &gui,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                crate::app::commands::menu::Item::Separator => {}
+            }
+        }
+        // The window's own leaves live in the registry menu that names their subject: Quit in File,
+        // panel toggles in View. They are workbench actions, not registry commands, so their action
+        // strings stay in this window's vocabulary.
+        match menu.id() {
+            "file" => {
+                let item = handle.new_menu_item(&handle_menu, &tr("ui.menu.quit"), None);
+                menu_actions.insert(item.raw_id(), "quit".to_owned());
+                if let Ok(mut gui) = gui.lock() {
+                    gui.translatable.push(Translatable {
+                        id: item.raw_id(),
+                        key: "ui.menu.quit".to_owned(),
+                        kind: LabelKind::Text,
+                    });
+                }
+            }
+            "view" => {
+                // Outline and Inspector are already leaves of the registry's View menu
+                // (`panel.outline`/`panel.inspector`, which `run_command` maps to the toggles); the
+                // window-only panels are appended here so View stays one menu, not two.
+                for (key, action) in [
+                    ("ui.panel.pages", "toggle:pages"),
+                    ("ui.panel.messages", "toggle:messages"),
+                    ("ui.panel.problems", "toggle:problems"),
+                    ("ui.panel.events", "toggle:events"),
+                    ("ui.panel.data", "toggle:data"),
+                    ("ui.panel.debug", "toggle:debug"),
+                ] {
+                    let item = handle.new_menu_item(&handle_menu, &tr(key), None);
+                    menu_actions.insert(item.raw_id(), action.to_owned());
+                    if let Ok(mut gui) = gui.lock() {
+                        gui.translatable.push(Translatable {
+                            id: item.raw_id(),
+                            key: key.to_owned(),
+                            kind: LabelKind::Text,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // The window's own groups are not registry commands: layout persistence and editor splitting
+    // are workbench actions, so they stay spelled here.
+    for (menu_key, entries) in [
         (
-            "View",
+            "ui.menu.layout",
             vec![
-                ("Command Palette", "palette:open"),
-                ("Pages", "toggle:pages"),
-                ("Outline", "toggle:outline"),
-                ("Inspector", "toggle:inspector"),
-                ("Messages", "toggle:messages"),
-                ("Problems", "toggle:problems"),
-                ("Events", "toggle:events"),
-                ("Data & State", "toggle:data"),
-                ("Debug", "toggle:debug"),
+                ("ui.menu.save-layout", "layout:save"),
+                ("ui.menu.reset-layout", "layout:reset"),
             ],
         ),
         (
-            "Layout",
+            "ui.menu.editor",
             vec![
-                ("Save layout", "layout:save"),
-                ("Reset layout", "layout:reset"),
+                ("ui.menu.split-right", "group:split"),
+                ("ui.menu.next-group", "group:next"),
             ],
-        ),
-        (
-            "Editor",
-            vec![("Split right", "group:split"), ("Next group", "group:next")],
         ),
     ] {
-        let menu = handle.new_menu(&bar, menu_name, 0, 0, 0, 0);
-        for (label, action) in entries {
-            let item = handle.new_menu_item(&menu, label, None);
+        let menu = handle.new_menu(&bar, &tr(menu_key), 0, 0, 0, 0);
+        if let Ok(mut gui) = gui.lock() {
+            gui.translatable.push(Translatable {
+                id: menu.raw_id(),
+                key: menu_key.to_owned(),
+                kind: LabelKind::MenuTitle,
+            });
+        }
+        for (key, action) in entries {
+            let item = handle.new_menu_item(&menu, &tr(key), None);
             menu_actions.insert(item.raw_id(), action.to_owned());
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: item.raw_id(),
+                    key: key.to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
         }
     }
 
     // Toolbar. The strip is the library's `ToolBar`, and each action is one of its items; the
     // model still decides what an action does, so a click and a menu entry share `apply_action`.
-    let toolbar_items: Vec<(&str, &str)> = vec![
-        ("Commands", "palette:open"),
-        ("Outline", "toggle:outline"),
-        ("Inspector", "toggle:inspector"),
-        ("Messages", "toggle:messages"),
-        ("Problems", "toggle:problems"),
-        ("Events", "toggle:events"),
-        ("Data", "toggle:data"),
-        ("Split", "group:split"),
-        ("Next group", "group:next"),
-        ("Save layout", "layout:save"),
-        ("Reset layout", "layout:reset"),
+    let toolbar_items: Vec<(&'static str, &'static str)> = vec![
+        ("ui.toolbar.commands", "palette:open"),
+        ("ui.panel.outline", "toggle:outline"),
+        ("ui.panel.inspector", "toggle:inspector"),
+        ("ui.panel.messages", "toggle:messages"),
+        ("ui.panel.problems", "toggle:problems"),
+        ("ui.panel.events", "toggle:events"),
+        ("ui.panel.data", "toggle:data"),
+        ("ui.toolbar.split", "group:split"),
+        ("ui.toolbar.next-group", "group:next"),
+        ("ui.toolbar.save-layout", "layout:save"),
+        ("ui.toolbar.reset-layout", "layout:reset"),
     ];
     let tool_bar = handle.new_tool_bar(8, TOOLBAR_Y, WIDTH - 16, TOOLBAR_HEIGHT);
     let inserted = with_widget_mut(tool_bar.raw_id(), |widget| {
-        let Some(bar) = (widget as &mut dyn Any).downcast_mut::<rust_widgets::widget::ToolBar>()
-        else {
+        let Some(bar) = (widget as &mut dyn Any).downcast_mut::<ToolBar>() else {
             return false;
         };
-        for (index, (label, action)) in toolbar_items.iter().enumerate() {
+        for (index, (key, action)) in toolbar_items.iter().enumerate() {
             bar.insert_item(
                 index,
-                rust_widgets::widget::menu_toolbar::tool_bar::ToolBarItem::new(*action, *label),
+                rust_widgets::widget::menu_toolbar::tool_bar::ToolBarItem::new(*action, tr(key)),
             );
         }
         true
@@ -1746,33 +2439,95 @@ pub(super) fn workbench_gui(
         });
     }
     if let Ok(mut gui) = gui.lock() {
+        gui.toolbar = tool_bar.raw_id();
+        gui.toolbar_items = toolbar_items.clone();
         gui.placements
             .push((tool_bar.raw_id(), Area::Toolbar { index: 0, count: 1 }));
+    }
+
+    // The Inspector's context menu (blue21 §3.3). The popup is the library's own `Menu`; the
+    // PropertyGrid emits `context_menu_requested`, and this window opens the menu at that point.
+    // Labels are the catalog's, and the action map is keyed by the same translated label, so a
+    // language reload cannot make a right-click run the wrong command.
+    let context_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+    let mut context_actions: BTreeMap<String, String> = BTreeMap::new();
+    for (key, action) in [
+        ("ui.context.clear", "clear"),
+        ("ui.context.reset", "reset"),
+        ("ui.context.inspect", "inspect"),
+    ] {
+        let label = tr(key);
+        handle.new_menu_item(&context_menu, &label, None);
+        context_actions.insert(label, action.to_owned());
+    }
+    {
+        let gui = Arc::clone(&gui);
+        let actions = context_actions.clone();
+        context_menu.on_triggered(move |label| {
+            if let Ok(mut gui) = gui.lock() {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                match action.as_str() {
+                    "clear" => clear_property(&mut gui),
+                    "reset" => reset_property(&mut gui),
+                    "inspect" => inspect_values(&mut gui),
+                    _ => {}
+                }
+            }
+        });
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.context_menu = context_menu.raw_id();
+    }
+
+    // The scene's context menu (blue21 §3.3, object-tree/canvas node). The canvas publishes
+    // `context_menu_requested`; the menu's actions mutate the scene the same way the Outline and
+    // the canvas clicks do. The actions are the ones this slice can carry honestly: selecting the
+    // parent, design lock, design hide and raising. Extract-component, events and source are not
+    // wired because their models are not on this surface yet, and a menu entry that does nothing
+    // would be worse than its absence.
+    let scene_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+    let mut scene_actions: BTreeMap<String, String> = BTreeMap::new();
+    for (key, action) in [
+        ("ui.context.select-parent", "select-parent"),
+        ("ui.context.toggle-lock", "toggle-lock"),
+        ("ui.context.toggle-hide", "toggle-hide"),
+        ("ui.context.raise", "raise"),
+    ] {
+        let label = tr(key);
+        handle.new_menu_item(&scene_menu, &label, None);
+        scene_actions.insert(label, action.to_owned());
+    }
+    {
+        let gui = Arc::clone(&gui);
+        let actions = scene_actions.clone();
+        scene_menu.on_triggered(move |label| {
+            if let Ok(mut gui) = gui.lock() {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                scene_context_action(&mut gui, &action);
+            }
+        });
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.scene_menu = scene_menu.raw_id();
     }
 
     // Docked panels. The model owns which panels exist and whether they are shown; the responsive
     // layout owns where they sit, and each panel's own `BoxLayout` owns its title/list split. A
     // panel therefore keeps its internal proportions when the window scales.
-    let (inspector_node, inspector_name, inspector_value, inspector_kind, outline_items) = {
+    let outline_items = {
         let gui = gui.lock().expect("the workbench state is not poisoned");
-        (
-            gui.property.node().get(),
-            gui.property.name().as_str().to_owned(),
-            gui.property.value_text(),
-            gui.scene
-                .kind(gui.property.node())
-                .map(|kind| kind.name())
-                .unwrap_or("?")
-                .to_owned(),
-            gui.scene.rows(),
-        )
+        gui.scene.rows()
     };
     let mut inspector_controls: Option<InspectorControls> = None;
     let mut events_controls: Option<EventControls> = None;
     let mut data_controls: Option<DataControls> = None;
     let mut pages_controls: Option<PageControls> = None;
     let mut outline_list: Option<u64> = None;
-    for (id, title, rect, area) in [
+    for (id, _title, rect, area) in [
         (
             "pages",
             "Pages",
@@ -1817,40 +2572,55 @@ pub(super) fn workbench_gui(
         ),
     ] {
         let panel = handle.new_panel(rect.0, rect.1, rect.2, rect.3);
-        panel.set_title(title);
+        let title_key = panel_key(id);
+        panel.set_title(&tr(title_key));
+        if let Ok(mut gui) = gui.lock() {
+            gui.translatable.push(Translatable {
+                id: panel.raw_id(),
+                key: title_key.to_owned(),
+                kind: LabelKind::PanelTitle,
+            });
+        }
         // The panel is the library's `GroupBox`: `set_title` draws the title band itself, so the
         // list starts below that band. A second same-named label used to duplicate the title
         // (blue21 W-2e).
         // Child factories parent the controls to the panel, so the panel's layout, clipping and
         // teardown own them; asking the window for them (2.8.10 and earlier) left the parent link
         // as an implicit contract (feedback-20261020 §3.1, closed by 2.8.11).
-        let list = panel.new_list_box(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 38);
-        let focus_name = match id {
-            "pages" => "pages list",
-            "outline" => "outline list",
-            "events" => "events list",
-            "inspector" => "inspector list",
-            "data" => "data list",
-            "messages" => "messages list",
-            "problems" => "problems list",
-            _ => "panel list",
+        // The Inspector and Data panels edit through the library's `PropertyGrid` rather than a
+        // list plus a hand-built field row (blue21 W-2d), so they create no list at all.
+        let list_id = if id == "inspector" || id == "data" {
+            0
+        } else {
+            let list = panel.new_list_box(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 38);
+            let focus_name = match id {
+                "pages" => "pages list",
+                "outline" => "outline list",
+                "events" => "events list",
+                "messages" => "messages list",
+                "problems" => "problems list",
+                _ => "panel list",
+            };
+            watch_focus(list.raw_id(), focus_name);
+            list.raw_id()
         };
-        watch_focus(list.raw_id(), focus_name);
         let mut inner = BoxLayout::new(Orientation::Vertical, 4, 8);
-        inner.add_widget(list.raw_id(), 1);
-        inner.set_size_policy(list.raw_id(), SizePolicy::Expanding);
+        if list_id != 0 {
+            inner.add_widget(list_id, 1);
+            inner.set_size_policy(list_id, SizePolicy::Expanding);
+        }
         let mut extra_widgets: Vec<u64> = Vec::new();
         if id == "pages" {
             let field =
                 panel.new_line_edit("", rect.0 + 8, rect.1 + rect.3 as i32 - 96, rect.2 - 16, 26);
-            field.set_placeholder("page name");
+            field.set_placeholder(&tr("ui.placeholder.page-name"));
             watch_focus(field.raw_id(), "pages field");
             let actions = panel.new_panel(rect.0 + 8, rect.1 + rect.3 as i32 - 66, rect.2 - 16, 26);
-            let add = actions.new_button("Add", 0, 0, 44, 26);
-            let open = actions.new_button("Open", 0, 0, 44, 26);
-            let back = actions.new_button("Back", 0, 0, 44, 26);
-            let forward = actions.new_button("Fwd", 0, 0, 44, 26);
-            let close = actions.new_button("Close", 0, 0, 44, 26);
+            let add = actions.new_button(&tr("ui.button.add"), 0, 0, 44, 26);
+            let open = actions.new_button(&tr("ui.button.open"), 0, 0, 44, 26);
+            let back = actions.new_button(&tr("ui.button.back"), 0, 0, 44, 26);
+            let forward = actions.new_button(&tr("ui.button.forward"), 0, 0, 44, 26);
+            let close = actions.new_button(&tr("ui.button.close"), 0, 0, 44, 26);
             let mut action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
             for widget in [
                 add.raw_id(),
@@ -1878,7 +2648,7 @@ pub(super) fn workbench_gui(
                 inner.set_size_policy(widget, SizePolicy::Fixed);
             }
             pages_controls = Some((
-                list.raw_id(),
+                list_id,
                 field.raw_id(),
                 add.raw_id(),
                 open.raw_id(),
@@ -1888,6 +2658,21 @@ pub(super) fn workbench_gui(
                 error.raw_id(),
                 note.raw_id(),
             ));
+            if let Ok(mut gui) = gui.lock() {
+                for (id, key) in [
+                    (add.raw_id(), "ui.button.add"),
+                    (open.raw_id(), "ui.button.open"),
+                    (back.raw_id(), "ui.button.back"),
+                    (forward.raw_id(), "ui.button.forward"),
+                    (close.raw_id(), "ui.button.close"),
+                ] {
+                    gui.translatable.push(Translatable {
+                        id,
+                        key: key.to_owned(),
+                        kind: LabelKind::Text,
+                    });
+                }
+            }
             extra_widgets.extend([
                 field.raw_id(),
                 actions.raw_id(),
@@ -1901,41 +2686,45 @@ pub(super) fn workbench_gui(
             ]);
         }
         if id == "inspector" {
-            // The value row and its error line are real controls inside the Inspector panel, not
-            // a second floating form: the panel's own layout owns their geometry.
+            // The property rows are the library's `PropertyGrid` (blue21 W-2d): the widget paints the
+            // name/value columns, owns row selection and emits `cell_changed`, while the contract
+            // schema still validates whatever text it commits. The panel's own layout owns the
+            // grid's geometry, like every other child control.
+            let grid = handle
+                .mount_widget_by_name(
+                    "property_grid",
+                    Rect::new(rect.0 + 8, rect.1 + 30, rect.2 - 16, 104),
+                    "",
+                )
+                .expect("the library registers the property grid widget");
+            watch_focus(grid.raw_id(), "inspector property grid");
             let theme_y = rect.1 + rect.3 as i32 - 80;
-            let value_y = rect.1 + rect.3 as i32 - 110;
-            let row = panel.new_panel(rect.0 + 8, value_y, rect.2 - 16, 26);
-            let field = row.new_line_edit(&inspector_value, rect.0 + 8, value_y, rect.2 - 96, 26);
-            let apply = row.new_button("Apply", rect.0 + rect.2 as i32 - 250, value_y, 54, 26);
-            let clear = row.new_button("Clear", rect.0 + rect.2 as i32 - 192, value_y, 48, 26);
-            let reset = row.new_button("Reset", rect.0 + rect.2 as i32 - 140, value_y, 54, 26);
-            let inspect = row.new_button("Values", rect.0 + rect.2 as i32 - 82, value_y, 58, 26);
+            let actions_y = rect.1 + rect.3 as i32 - 116;
+            let actions = panel.new_panel(rect.0 + 8, actions_y, rect.2 - 16, 26);
+            let clear = actions.new_button(&tr("ui.button.clear"), 0, 0, 72, 26);
+            let reset = actions.new_button(&tr("ui.button.reset"), 0, 0, 72, 26);
+            let inspect = actions.new_button(&tr("ui.button.values"), 0, 0, 72, 26);
+            let mut action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            for widget in [clear.raw_id(), reset.raw_id(), inspect.raw_id()] {
+                action_layout.add_widget(widget, 1);
+                action_layout.set_size_policy(widget, SizePolicy::Expanding);
+            }
+            actions.set_layout(Box::new(action_layout));
             let theme_row = panel.new_panel(rect.0 + 8, theme_y, rect.2 - 16, 26);
             let theme_field = theme_row.new_line_edit("", rect.0 + 8, theme_y, rect.2 - 96, 26);
-            theme_field.set_placeholder("theme name (dark)");
-            watch_focus(field.raw_id(), "inspector value field");
+            theme_field.set_placeholder(&tr("ui.placeholder.theme-name"));
             watch_focus(theme_field.raw_id(), "inspector theme field");
-            let theme_button =
-                theme_row.new_button("Theme", rect.0 + rect.2 as i32 - 80, theme_y, 72, 26);
+            let theme_button = theme_row.new_button(
+                &tr("ui.button.theme"),
+                rect.0 + rect.2 as i32 - 80,
+                theme_y,
+                72,
+                26,
+            );
             let error =
                 panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 50, rect.2 - 16, 16);
             let note =
                 panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 30, rect.2 - 16, 16);
-            let mut row_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
-            row_layout.add_widget(field.raw_id(), 1);
-            row_layout.set_size_policy(field.raw_id(), SizePolicy::Expanding);
-            for (widget, width) in [
-                (apply.raw_id(), 54),
-                (clear.raw_id(), 48),
-                (reset.raw_id(), 54),
-                (inspect.raw_id(), 58),
-            ] {
-                row_layout.add_widget(widget, 0);
-                row_layout.set_constraints(widget, LayoutConstraints::new(width, Some(width)));
-                row_layout.set_size_policy(widget, SizePolicy::Fixed);
-            }
-            row.set_layout(Box::new(row_layout));
             let mut theme_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
             theme_layout.add_widget(theme_field.raw_id(), 1);
             theme_layout.set_size_policy(theme_field.raw_id(), SizePolicy::Expanding);
@@ -1945,7 +2734,8 @@ pub(super) fn workbench_gui(
             theme_layout.set_size_policy(theme_button.raw_id(), SizePolicy::Fixed);
             theme_row.set_layout(Box::new(theme_layout));
             for (widget, height) in [
-                (row.raw_id(), 26),
+                (grid.raw_id(), 104),
+                (actions.raw_id(), 26),
                 (theme_row.raw_id(), 26),
                 (error.raw_id(), 16),
                 (note.raw_id(), 16),
@@ -1955,9 +2745,7 @@ pub(super) fn workbench_gui(
                 inner.set_size_policy(widget, SizePolicy::Fixed);
             }
             inspector_controls = Some((
-                list.raw_id(),
-                field.raw_id(),
-                apply.raw_id(),
+                grid.raw_id(),
                 clear.raw_id(),
                 reset.raw_id(),
                 inspect.raw_id(),
@@ -1966,10 +2754,23 @@ pub(super) fn workbench_gui(
                 error.raw_id(),
                 note.raw_id(),
             ));
+            if let Ok(mut gui) = gui.lock() {
+                for (id, key) in [
+                    (clear.raw_id(), "ui.button.clear"),
+                    (reset.raw_id(), "ui.button.reset"),
+                    (inspect.raw_id(), "ui.button.values"),
+                    (theme_button.raw_id(), "ui.button.theme"),
+                ] {
+                    gui.translatable.push(Translatable {
+                        id,
+                        key: key.to_owned(),
+                        kind: LabelKind::Text,
+                    });
+                }
+            }
             extra_widgets.extend([
-                row.raw_id(),
-                field.raw_id(),
-                apply.raw_id(),
+                grid.raw_id(),
+                actions.raw_id(),
                 clear.raw_id(),
                 reset.raw_id(),
                 inspect.raw_id(),
@@ -1985,7 +2786,7 @@ pub(super) fn workbench_gui(
             // the status line above keeps *declared*, *wired* and *fired* apart.
             let field =
                 panel.new_line_edit("", rect.0 + 8, rect.1 + rect.3 as i32 - 96, rect.2 - 16, 26);
-            field.set_placeholder("handler name");
+            field.set_placeholder(&tr("ui.placeholder.handler-name"));
             watch_focus(field.raw_id(), "events handler field");
             field.on_value_changed(|text| {
                 crate::host::log::emit(
@@ -1995,9 +2796,9 @@ pub(super) fn workbench_gui(
                 );
             });
             let actions = panel.new_panel(rect.0 + 8, rect.1 + rect.3 as i32 - 66, rect.2 - 16, 26);
-            let bind = actions.new_button("Bind", 0, 0, 72, 26);
-            let unbind = actions.new_button("Unbind", 0, 0, 72, 26);
-            let fire = actions.new_button("Fire", 0, 0, 72, 26);
+            let bind = actions.new_button(&tr("ui.button.bind"), 0, 0, 72, 26);
+            let unbind = actions.new_button(&tr("ui.button.unbind"), 0, 0, 72, 26);
+            let fire = actions.new_button(&tr("ui.button.fire"), 0, 0, 72, 26);
             let mut action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
             for widget in [bind.raw_id(), unbind.raw_id(), fire.raw_id()] {
                 action_layout.add_widget(widget, 1);
@@ -2019,7 +2820,7 @@ pub(super) fn workbench_gui(
                 inner.set_size_policy(widget, SizePolicy::Fixed);
             }
             events_controls = Some((
-                list.raw_id(),
+                list_id,
                 field.raw_id(),
                 bind.raw_id(),
                 unbind.raw_id(),
@@ -2027,6 +2828,19 @@ pub(super) fn workbench_gui(
                 error.raw_id(),
                 note.raw_id(),
             ));
+            if let Ok(mut gui) = gui.lock() {
+                for (id, key) in [
+                    (bind.raw_id(), "ui.button.bind"),
+                    (unbind.raw_id(), "ui.button.unbind"),
+                    (fire.raw_id(), "ui.button.fire"),
+                ] {
+                    gui.translatable.push(Translatable {
+                        id,
+                        key: key.to_owned(),
+                        kind: LabelKind::Text,
+                    });
+                }
+            }
             extra_widgets.extend([
                 field.raw_id(),
                 actions.raw_id(),
@@ -2038,24 +2852,22 @@ pub(super) fn workbench_gui(
             ]);
         }
         if id == "data" {
-            let row_y = rect.1 + rect.3 as i32 - 74;
-            let row = panel.new_panel(rect.0 + 8, row_y, rect.2 - 16, 26);
-            let field = row.new_line_edit("", rect.0 + 8, row_y, rect.2 - 96, 26);
-            watch_focus(field.raw_id(), "data field");
-            let apply = row.new_button("Apply", rect.0 + rect.2 as i32 - 80, row_y, 72, 26);
-            let mut row_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
-            row_layout.add_widget(field.raw_id(), 1);
-            row_layout.set_size_policy(field.raw_id(), SizePolicy::Expanding);
-            row_layout.add_widget(apply.raw_id(), 0);
-            row_layout.set_constraints(apply.raw_id(), LayoutConstraints::new(72, Some(72)));
-            row_layout.set_size_policy(apply.raw_id(), SizePolicy::Fixed);
-            row.set_layout(Box::new(row_layout));
+            // The sample schema's fields are the library's `PropertyGrid` as well (blue21 W-2d):
+            // one editable row per field, with the dataset row as read-only context.
+            let grid = handle
+                .mount_widget_by_name(
+                    "property_grid",
+                    Rect::new(rect.0 + 8, rect.1 + 30, rect.2 - 16, 176),
+                    "",
+                )
+                .expect("the library registers the property grid widget");
+            watch_focus(grid.raw_id(), "data property grid");
             let error =
                 panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 44, rect.2 - 16, 16);
             let note =
                 panel.new_label("", rect.0 + 8, rect.1 + rect.3 as i32 - 24, rect.2 - 16, 16);
             for (widget, height) in [
-                (row.raw_id(), 26),
+                (grid.raw_id(), 176),
                 (error.raw_id(), 16),
                 (note.raw_id(), 16),
             ] {
@@ -2063,57 +2875,39 @@ pub(super) fn workbench_gui(
                 inner.set_constraints(widget, LayoutConstraints::new(height, Some(height)));
                 inner.set_size_policy(widget, SizePolicy::Fixed);
             }
-            data_controls = Some((
-                list.raw_id(),
-                field.raw_id(),
-                apply.raw_id(),
-                error.raw_id(),
-                note.raw_id(),
-            ));
-            extra_widgets.extend([
-                row.raw_id(),
-                field.raw_id(),
-                apply.raw_id(),
-                error.raw_id(),
-                note.raw_id(),
-            ]);
+            data_controls = Some((grid.raw_id(), error.raw_id(), note.raw_id()));
+            extra_widgets.extend([grid.raw_id(), error.raw_id(), note.raw_id()]);
         }
         panel.set_layout(Box::new(inner));
         let items: Vec<String> = match id {
             "outline" => outline_items.clone(),
-            "inspector" => vec![
-                format!("node: {inspector_node}"),
-                format!("kind: {inspector_kind}"),
-                format!("{inspector_name}: {inspector_value}"),
-            ],
-            "messages" => vec!["ready".to_owned()],
-            // The Events and Data lists are filled from their models once the controls exist.
-            "events" | "data" => Vec::new(),
-            // Pages is filled from its model too; the empty list is replaced on the first sync.
-            "pages" => Vec::new(),
-            _ => vec!["no problems".to_owned()],
+            "messages" => vec![tr("ui.status.ready")],
+            // The Events, Data and Pages lists are filled from their models once the controls exist;
+            // the Inspector and Data panels own a property grid instead of a list.
+            "events" | "data" | "pages" | "inspector" => Vec::new(),
+            _ => vec![tr("ui.status.no-problems")],
         };
         for item in items {
-            let _ = rust_widgets::list_box_add_item(list.raw_id(), &item);
+            if list_id != 0 {
+                let _ = rust_widgets::list_box_add_item(list_id, &item);
+            }
         }
         if id == "outline" {
-            outline_list = Some(list.raw_id());
+            outline_list = Some(list_id);
         }
         if let Ok(mut gui) = gui.lock() {
             gui.placements.push((panel.raw_id(), area));
             let entry = gui.panel_widgets.entry(id.to_owned()).or_default();
             entry.push(panel.raw_id());
-            entry.push(list.raw_id());
+            entry.push(list_id);
             entry.extend(extra_widgets);
         }
     }
 
-    // The Inspector's editor: Apply commits the typed text through the schema editor, and a
-    // double-click on the property row moves the keyboard to the field.
+    // The Inspector's editor: the property grid commits a cell through `cell_changed`, and the
+    // schema editor validates the text before any node changes.
     if let Some((
-        list_id,
-        field_id,
-        apply_id,
+        grid_id,
         clear_id,
         reset_id,
         inspect_id,
@@ -2124,21 +2918,40 @@ pub(super) fn workbench_gui(
     )) = inspector_controls
     {
         if let Ok(mut gui) = gui.lock() {
-            gui.inspector_list = list_id;
-            gui.property_field = field_id;
+            gui.property_grid = grid_id;
             gui.property_error = error_id;
             gui.inspect_note = note_id;
         }
         {
             let gui = Arc::clone(&gui);
-            ButtonHandle::from_raw(apply_id).on_click(move || {
-                if let Ok(mut gui) = gui.lock() {
-                    crate::host::log::emit(
-                        crate::host::log::Level::Info,
-                        "app::run::workbench-property",
-                        "inspector Apply pressed",
+            subscribe_cell(grid_id, "cell_changed", move |row, text| {
+                if let Ok(mut gui) = gui.lock()
+                    && row as usize == gui.property_row
+                {
+                    apply_property(&mut gui, text);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            subscribe_string(grid_id, "context_menu_requested", move |payload| {
+                let Some((x, y)) = payload
+                    .split_once(',')
+                    .and_then(|(x, y)| Some((x.trim().parse().ok()?, y.trim().parse().ok()?)))
+                else {
+                    return;
+                };
+                if let Ok(gui) = gui.lock()
+                    && gui.context_menu != 0
+                {
+                    let opened = MenuHandle::from_raw(gui.context_menu).open_at(
+                        x,
+                        y,
+                        Rect::new(0, 0, WIDTH, HEIGHT),
                     );
-                    apply_property(&mut gui);
+                    if !opened {
+                        warn_failure("the Inspector context menu could not open", payload);
+                    }
                 }
             });
         }
@@ -2146,22 +2959,7 @@ pub(super) fn workbench_gui(
             let gui = Arc::clone(&gui);
             ButtonHandle::from_raw(clear_id).on_click(move || {
                 if let Ok(mut gui) = gui.lock() {
-                    rust_widgets::set_widget_text(gui.property_field, "");
-                    rust_widgets::set_widget_text(gui.property_error, "");
-                    gui.message = format!(
-                        "field cleared; the valid {} is {:?}",
-                        gui.property.name().as_str(),
-                        gui.property.value_text()
-                    );
-                    update_status(&gui);
-                    crate::host::log::emit(
-                        crate::host::log::Level::Info,
-                        "app::run::workbench-property",
-                        &format!(
-                            "inspector field cleared; valid value unchanged: {:?}",
-                            gui.property.value_text()
-                        ),
-                    );
+                    clear_property(&mut gui);
                 }
             });
         }
@@ -2169,31 +2967,7 @@ pub(super) fn workbench_gui(
             let gui = Arc::clone(&gui);
             ButtonHandle::from_raw(reset_id).on_click(move || {
                 if let Ok(mut gui) = gui.lock() {
-                    // Reset is the T11.02 half the Clear button does not do: the explicit edit is
-                    // taken away and each node returns to the structural name it started from.
-                    let nodes = gui.property.nodes().to_vec();
-                    let renames = gui.property.edits_node_name();
-                    let (count, lines) = gui.property.reset();
-                    if renames {
-                        for node in &nodes {
-                            if let Some(value) = gui.property.value_for(*node)
-                                && let Err(reason) = gui.scene.rename(*node, &value)
-                            {
-                                warn_failure("a node could not be renamed on reset", reason);
-                            }
-                        }
-                    }
-                    rust_widgets::set_widget_text(gui.property_error, &lines.join(" | "));
-                    refresh_inspector(&mut gui);
-                    sync_outline(&mut gui);
-                    sync_canvas(&mut gui);
-                    gui.message = format!("reset {count} node(s) to the structural title");
-                    update_status(&gui);
-                    crate::host::log::emit(
-                        crate::host::log::Level::Info,
-                        "app::run::workbench-property",
-                        &format!("inspector reset {count} node(s): {}", lines.join("; ")),
-                    );
+                    reset_property(&mut gui);
                 }
             });
         }
@@ -2201,54 +2975,7 @@ pub(super) fn workbench_gui(
             let gui = Arc::clone(&gui);
             ButtonHandle::from_raw(inspect_id).on_click(move || {
                 if let Ok(mut gui) = gui.lock() {
-                    // The read-only half of T14.05: re-record the current selection, then read
-                    // design/computed/runtime and the source location. No trigger is dispatched.
-                    let selected = gui.scene.selected().to_vec();
-                    {
-                        let Gui { inspect, scene, .. } = &mut *gui;
-                        inspect.retarget(scene, &selected);
-                    }
-                    match gui.inspect.inspect() {
-                        Ok(lines) => {
-                            rust_widgets::list_box_clear_items(gui.inspector_list);
-                            for line in &lines {
-                                let _ = rust_widgets::list_box_add_item(gui.inspector_list, line);
-                            }
-                            gui.message = format!(
-                                "inspected node; design v{}, effects {}",
-                                gui.inspect.version(),
-                                gui.inspect.effects()
-                            );
-                            rust_widgets::set_widget_text(gui.property_error, "");
-                            crate::host::log::emit(
-                                crate::host::log::Level::Info,
-                                "app::run::workbench-inspect",
-                                &format!(
-                                    "inspect rows: {} (effects {})",
-                                    lines.len(),
-                                    gui.inspect.effects()
-                                ),
-                            );
-                        }
-                        Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.property_error,
-                                &format!("inspect refused: {reason}"),
-                            );
-                            gui.message = format!("inspect refused: {reason}");
-                        }
-                    }
-                    if gui.inspect_note != 0 {
-                        rust_widgets::set_widget_text(
-                            gui.inspect_note,
-                            &format!(
-                                "design v{} · effects {} · read-only",
-                                gui.inspect.version(),
-                                gui.inspect.effects()
-                            ),
-                        );
-                    }
-                    update_status(&gui);
+                    inspect_values(&mut gui);
                 }
             });
         }
@@ -2265,7 +2992,8 @@ pub(super) fn workbench_gui(
                     match gui.inspect.apply_theme(&name, &selected) {
                         Ok(lines) => {
                             rust_widgets::set_widget_text(gui.property_error, "");
-                            gui.message = lines[0].clone();
+                            gui.message =
+                                tr_args("ui.status.theme-applied", &[("message", &lines[0])]);
                             refresh_inspector(&mut gui);
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
@@ -2275,11 +3003,9 @@ pub(super) fn workbench_gui(
                         }
                         Err(reason) => {
                             let reason = gui.inspect.refuse(reason);
-                            rust_widgets::set_widget_text(
-                                gui.property_error,
-                                &format!("theme refused: {reason}"),
-                            );
-                            gui.message = format!("theme refused: {reason}");
+                            let text = tr_args("ui.error.theme-refused", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.property_error, &text);
+                            gui.message = text;
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
                                 "app::run::workbench-inspect",
@@ -2288,21 +3014,6 @@ pub(super) fn workbench_gui(
                         }
                     }
                     update_status(&gui);
-                }
-            });
-        }
-        {
-            let gui = Arc::clone(&gui);
-            subscribe_index(list_id, "item_activated", move |index| {
-                if index == 2
-                    && let Ok(gui) = gui.lock()
-                {
-                    let focused = focus_widget(gui.property_field);
-                    crate::host::log::emit(
-                        crate::host::log::Level::Info,
-                        "app::run::workbench-property",
-                        &format!("inspector title row activated; field focused {focused}"),
-                    );
                 }
             });
         }
@@ -2388,13 +3099,24 @@ pub(super) fn workbench_gui(
                             let from = from.trim();
                             let to = to.trim();
                             gui.pages.add_edge(from, to).map(|revision| {
-                                format!(
-                                    "declared navigation {from:?} -> {to:?} (revision {revision})"
+                                tr_args(
+                                    "ui.status.navigation-declared",
+                                    &[
+                                        ("from", &format!("{from:?}")),
+                                        ("to", &format!("{to:?}")),
+                                        ("revision", &revision.to_string()),
+                                    ],
                                 )
                             })
                         }
                         None => gui.pages.add_page(&name).map(|revision| {
-                            format!("declared page {name:?} (revision {revision})")
+                            tr_args(
+                                "ui.status.page-declared",
+                                &[
+                                    ("name", &format!("{name:?}")),
+                                    ("revision", &revision.to_string()),
+                                ],
+                            )
                         }),
                     };
                     match outcome {
@@ -2408,11 +3130,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.pages_error,
-                                &format!("not added: {reason}"),
-                            );
-                            gui.message = format!("not added: {reason}");
+                            let text = tr_args("ui.error.not-added", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.pages_error, &text);
+                            gui.message = text;
                         }
                     }
                     sync_pages(&mut gui);
@@ -2439,11 +3159,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.pages_error,
-                                &format!("not opened: {reason}"),
-                            );
-                            gui.message = format!("not opened: {reason}");
+                            let text = tr_args("ui.error.not-opened", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.pages_error, &text);
+                            gui.message = text;
                         }
                     }
                     sync_pages(&mut gui);
@@ -2463,7 +3181,8 @@ pub(super) fn workbench_gui(
                     match outcome {
                         Ok(page) => {
                             rust_widgets::set_widget_text(gui.pages_error, "");
-                            gui.message = format!("now on {page:?}");
+                            gui.message =
+                                tr_args("ui.status.now-on", &[("page", &format!("{page:?}"))]);
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
                                 "app::run::workbench-pages",
@@ -2474,11 +3193,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.pages_error,
-                                &format!("not moved: {reason}"),
-                            );
-                            gui.message = format!("not moved: {reason}");
+                            let text = tr_args("ui.error.not-moved", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.pages_error, &text);
+                            gui.message = text;
                         }
                     }
                     sync_pages(&mut gui);
@@ -2501,11 +3218,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.pages_error,
-                                &format!("not closed: {reason}"),
-                            );
-                            gui.message = format!("not closed: {reason}");
+                            let text = tr_args("ui.error.not-closed", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.pages_error, &text);
+                            gui.message = text;
                         }
                     }
                     sync_pages(&mut gui);
@@ -2566,8 +3281,14 @@ pub(super) fn workbench_gui(
                         Ok(revision) => {
                             rust_widgets::set_widget_text(gui.events_error, "");
                             let node = gui.events.node().get();
-                            gui.message = format!(
-                                "bound {event} -> {handler} on node {node} (revision {revision})"
+                            gui.message = tr_args(
+                                "ui.status.bound",
+                                &[
+                                    ("event", &event),
+                                    ("handler", &handler),
+                                    ("node", &node.to_string()),
+                                    ("revision", &revision.to_string()),
+                                ],
                             );
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
@@ -2578,11 +3299,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.events_error,
-                                &format!("not bound: {reason}"),
-                            );
-                            gui.message = format!("not bound: {reason}");
+                            let text = tr_args("ui.error.not-bound", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.events_error, &text);
+                            gui.message = text;
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
                                 "app::run::workbench-events",
@@ -2605,9 +3324,13 @@ pub(super) fn workbench_gui(
                     match gui.events.unbind(&event) {
                         Ok(revision) => {
                             rust_widgets::set_widget_text(gui.events_error, "");
-                            gui.message = format!(
-                                "unbound {event} on node {} (revision {revision})",
-                                gui.events.node().get()
+                            gui.message = tr_args(
+                                "ui.status.unbound",
+                                &[
+                                    ("event", &event),
+                                    ("node", &gui.events.node().get().to_string()),
+                                    ("revision", &revision.to_string()),
+                                ],
                             );
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
@@ -2619,11 +3342,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.events_error,
-                                &format!("not unbound: {reason}"),
-                            );
-                            gui.message = format!("not unbound: {reason}");
+                            let text = tr_args("ui.error.not-unbound", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.events_error, &text);
+                            gui.message = text;
                         }
                     }
                     sync_events(&mut gui);
@@ -2649,11 +3370,9 @@ pub(super) fn workbench_gui(
                             );
                         }
                         Err(reason) => {
-                            rust_widgets::set_widget_text(
-                                gui.events_error,
-                                &format!("not fired: {reason}"),
-                            );
-                            gui.message = format!("not fired: {reason}");
+                            let text = tr_args("ui.error.not-fired", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.events_error, &text);
+                            gui.message = text;
                         }
                     }
                     sync_events(&mut gui);
@@ -2664,46 +3383,43 @@ pub(super) fn workbench_gui(
     }
 
     // The Data panel (T13.04/T14.05). The sample dataset is edited through the typed schema;
-    // the running layer stays unavailable because no instance is started in a design session.
-    if let Some((list_id, field_id, apply_id, error_id, note_id)) = data_controls {
+    // the running layer stays unavailable because no instance is started in a design session. The
+    // grid's cell commit is the Apply action: row 0 is the dataset label, so field rows start at 1.
+    if let Some((grid_id, error_id, note_id)) = data_controls {
         if let Ok(mut gui) = gui.lock() {
-            gui.data_list = list_id;
-            gui.data_field = field_id;
+            gui.data_grid = grid_id;
             gui.data_error = error_id;
             gui.data_note = note_id;
             sync_data(&mut gui);
         }
         {
             let gui = Arc::clone(&gui);
-            subscribe_index(list_id, "item_selected", move |index| {
+            subscribe_cell(grid_id, "cell_changed", move |row, text| {
                 if let Ok(mut gui) = gui.lock() {
-                    // Row 0 is the dataset label, so field rows start at 1.
-                    gui.data_selected = (index as usize).saturating_sub(1);
-                    sync_data(&mut gui);
-                    crate::host::log::emit(
-                        crate::host::log::Level::Info,
-                        "app::run::workbench-data",
-                        &format!(
-                            "data row {index} -> field {:?}",
-                            gui.inspect.fields().get(gui.data_selected)
-                        ),
-                    );
-                }
-            });
-        }
-        {
-            let gui = Arc::clone(&gui);
-            ButtonHandle::from_raw(apply_id).on_click(move || {
-                if let Ok(mut gui) = gui.lock() {
-                    let fields = gui.inspect.fields();
-                    let Some(field) = fields.get(gui.data_selected).cloned() else {
+                    // Row 0 is the dataset label; field rows start at 1.
+                    if row == 0 {
+                        return;
+                    }
+                    let Some(field) = gui
+                        .inspect
+                        .fields()
+                        .get((row as usize).saturating_sub(1))
+                        .cloned()
+                    else {
                         return;
                     };
-                    let text = rust_widgets::get_widget_text(gui.data_field);
-                    match gui.inspect.edit(&field, &text) {
+                    gui.data_selected = (row as usize).saturating_sub(1);
+                    match gui.inspect.edit(&field, text) {
                         Ok(version) => {
                             rust_widgets::set_widget_text(gui.data_error, "");
-                            gui.message = format!("{field} = {text:?} (data v{version})");
+                            gui.message = tr_args(
+                                "ui.status.data-applied",
+                                &[
+                                    ("field", &field),
+                                    ("value", &format!("{text:?}")),
+                                    ("version", &version.to_string()),
+                                ],
+                            );
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
                                 "app::run::workbench-data",
@@ -2715,14 +3431,9 @@ pub(super) fn workbench_gui(
                         }
                         Err(reason) => {
                             let reason = gui.inspect.refuse(reason);
-                            rust_widgets::set_widget_text(
-                                gui.data_error,
-                                &format!("not applied: {reason}"),
-                            );
-                            gui.message = format!(
-                                "{field} not applied at version {}: {reason}",
-                                gui.inspect.version()
-                            );
+                            let message = tr_args("ui.error.not-applied", &[("reason", &reason)]);
+                            rust_widgets::set_widget_text(gui.data_error, &message);
+                            gui.message = message;
                             crate::host::log::emit(
                                 crate::host::log::Level::Info,
                                 "app::run::workbench-data",
@@ -2741,7 +3452,8 @@ pub(super) fn workbench_gui(
     // thread; the panel only ever shows a snapshot the worker sent, so a slow adapter cannot
     // freeze the window.
     let debug_panel = handle.new_panel(WIDTH as i32 - 320, 458, 320, 184);
-    let debug_title = debug_panel.new_label("Debug", WIDTH as i32 - 312, 466, 304, 20);
+    let debug_title =
+        debug_panel.new_label(&tr(panel_key("debug")), WIDTH as i32 - 312, 466, 304, 20);
     let debug_rows_panel = debug_panel.new_panel(WIDTH as i32 - 312, 490, 304, 100);
     let mut debug_rows_layout = BoxLayout::new(Orientation::Vertical, 2, 0);
     let mut debug_row_labels = Vec::new();
@@ -2756,10 +3468,10 @@ pub(super) fn workbench_gui(
     }
     debug_rows_panel.set_layout(Box::new(debug_rows_layout));
     let debug_actions = debug_panel.new_panel(WIDTH as i32 - 312, 606, 304, 28);
-    let debug_start = debug_actions.new_button("Start", 0, 0, 73, 28);
-    let debug_continue = debug_actions.new_button("Run", 0, 0, 73, 28);
-    let debug_step = debug_actions.new_button("Step", 0, 0, 73, 28);
-    let debug_stop = debug_actions.new_button("Stop", 0, 0, 73, 28);
+    let debug_start = debug_actions.new_button(&tr("ui.button.start"), 0, 0, 73, 28);
+    let debug_continue = debug_actions.new_button(&tr("ui.button.run"), 0, 0, 73, 28);
+    let debug_step = debug_actions.new_button(&tr("ui.button.step"), 0, 0, 73, 28);
+    let debug_stop = debug_actions.new_button(&tr("ui.button.stop"), 0, 0, 73, 28);
     let mut debug_action_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
     for id in [
         debug_start.raw_id(),
@@ -2799,6 +3511,23 @@ pub(super) fn workbench_gui(
             debug_stop.raw_id(),
         ]);
         entry.extend(debug_row_labels.iter().copied());
+        gui.translatable.push(Translatable {
+            id: debug_title.raw_id(),
+            key: "ui.panel.debug".to_owned(),
+            kind: LabelKind::Text,
+        });
+        for (id, key) in [
+            (debug_start.raw_id(), "ui.button.start"),
+            (debug_continue.raw_id(), "ui.button.run"),
+            (debug_step.raw_id(), "ui.button.step"),
+            (debug_stop.raw_id(), "ui.button.stop"),
+        ] {
+            gui.translatable.push(Translatable {
+                id,
+                key: key.to_owned(),
+                kind: LabelKind::Text,
+            });
+        }
     }
     wire_debug_button(&debug_start, DebugCommand::Start, &gui);
     wire_debug_button(&debug_continue, DebugCommand::Continue, &gui);
@@ -2982,6 +3711,38 @@ pub(super) fn workbench_gui(
             }
         });
     }
+    {
+        let gui = Arc::clone(&gui);
+        subscribe_string(canvas_surface, "context_menu_requested", move |payload| {
+            let Some((x, y)) = payload.split_once(',').and_then(|(x, y)| {
+                Some((x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?))
+            }) else {
+                return;
+            };
+            if let Ok(mut gui) = gui.lock() {
+                let Some(design) = canvas_point(gui.canvas_panel, x, y) else {
+                    return;
+                };
+                let Some(node) = gui.scene.hit(design.0, design.1) else {
+                    // A right-click on empty canvas has no node menu; the selection is left as it
+                    // was rather than cleared as a side effect of opening nothing.
+                    return;
+                };
+                if gui.scene.primary() != Some(node) {
+                    select_node(&mut gui, node, "context");
+                }
+                if gui.scene_menu != 0
+                    && !MenuHandle::from_raw(gui.scene_menu).open_at(
+                        x,
+                        y,
+                        Rect::new(0, 0, WIDTH, HEIGHT),
+                    )
+                {
+                    warn_failure("the scene context menu could not open", payload);
+                }
+            }
+        });
+    }
 
     // Command palette (T05.04/T05.05). It is the library's `CommandPalette`, mounted after the
     // docked panels so the painter's creation order keeps it above them; its geometry comes from
@@ -3018,6 +3779,25 @@ pub(super) fn workbench_gui(
                 });
             }
             {
+                // Upstream 3.2.0 publishes `dismissed`: Escape now closes the palette again, the way
+                // the hand-built field's `editing_finished` did (feedback-20261030 F-12).
+                let gui = Arc::clone(&gui);
+                subscribe_unit(id, "dismissed", move || {
+                    if let Ok(mut gui) = gui.lock()
+                        && gui.palette.is_open()
+                    {
+                        close_palette(&mut gui);
+                        gui.message = tr("ui.status.palette-closed");
+                        update_status(&gui);
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench-palette",
+                            "palette dismissed by Escape",
+                        );
+                    }
+                });
+            }
+            {
                 let gui = Arc::clone(&gui);
                 let _ = with_widget_mut(id, move |widget| {
                     widget.base().focus_lost.connect(move || {
@@ -3025,7 +3805,7 @@ pub(super) fn workbench_gui(
                             && gui.palette.is_open()
                         {
                             close_palette(&mut gui);
-                            gui.message = "command palette closed".to_owned();
+                            gui.message = tr("ui.status.palette-closed");
                             update_status(&gui);
                         }
                     });
@@ -3121,4 +3901,24 @@ fn schedule_menu(gui: Arc<Mutex<Gui>>, actions: Arc<BTreeMap<u64, String>>) {
         }
         schedule_menu(next, next_actions);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::onboarding_text;
+    use crate::app::commands::command::built_in;
+
+    #[test]
+    fn the_onboarding_page_lists_every_registered_command() {
+        let registry = built_in();
+        let text = onboarding_text(&registry);
+        assert!(text.contains("# Welcome to rustage"));
+        for command in registry.commands() {
+            assert!(
+                text.contains(&command.id().to_string()),
+                "{} is missing from the onboarding page",
+                command.id()
+            );
+        }
+    }
 }

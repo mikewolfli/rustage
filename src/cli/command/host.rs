@@ -146,7 +146,7 @@ pub(super) fn parse_host(
             return Some(Ok(Command::Launch(options)));
         }
         "--render-icons" | "--probe-apis" | "--probe-host" | "--project-check"
-        | "--locale-report" => {
+        | "--locale-report" | "--locale-audit" => {
             let Some(value) = arguments.next() else {
                 return Some(Err(ParseError { argument }));
             };
@@ -160,6 +160,7 @@ pub(super) fn parse_host(
                 "--probe-apis" => Command::ProbeApis(path),
                 "--project-check" => Command::ProjectCheck(path),
                 "--locale-report" => Command::LocaleReport(path),
+                "--locale-audit" => Command::LocaleAudit(path),
                 _ => Command::ProbeHost(path),
             }));
         }
@@ -196,6 +197,10 @@ mod tests {
         assert_eq!(
             parse(["--locale-report", "out/locale"]),
             Ok(Command::LocaleReport(PathBuf::from("out/locale")))
+        );
+        assert_eq!(
+            parse(["--locale-audit", "src"]),
+            Ok(Command::LocaleAudit(PathBuf::from("src")))
         );
     }
 

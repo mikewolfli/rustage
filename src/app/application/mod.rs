@@ -14,6 +14,7 @@
 //! * the target application's tool bar and status bar ([`toolbar`]),
 //! * context menus, scope and dynamic enablement ([`context`]),
 //! * dialogs, modality and focus ([`dialog`]),
+//! * the shared wizard shell and the wizards roadmap §3.4 requires ([`wizard`]),
 //! * docking and persisted layout as a target capability ([`dock`]),
 //! * and the end-to-end walk that proves one action fires once ([`regression`]).
 //!
@@ -28,3 +29,4 @@ pub mod menu;
 pub mod regression;
 pub mod shell;
 pub mod toolbar;
+pub mod wizard;

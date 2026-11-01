@@ -6,7 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::app::ai::{
-    Candidate, Change, ChangeSet, Context, ContextFile, Role, Session, Verification, Workspace,
+    Candidate, Change, ChangeSet, Context, ContextFile, Handoff, InvocationOutcome, Role, Session,
+    ToolCall, ToolPolicy, UsageRecord, Verification, Workspace,
 };
 
 /// Runs the optional AI operations, printing each answer as it is read.
@@ -17,10 +18,22 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
         budget: 65_536,
         tools: BTreeSet::new(),
         credential: String::new(),
+        usage: Vec::new(),
     };
     let mut files = Vec::new();
     let mut ignored = Vec::new();
+    let mut root: Option<std::path::PathBuf> = None;
     let mut context: Option<Context> = None;
+    let mut prompt_bytes = 0usize;
+    let mut completion_bytes = 0usize;
+    let mut cost_micros = 0u64;
+    let mut elapsed_ms = 0u64;
+    let mut outcome = InvocationOutcome::Completed;
+    let mut tool_arguments = String::new();
+    let mut tool_preview: Option<ToolCall> = None;
+    let mut tool_policy = ToolPolicy::default();
+    let mut shared: Vec<String> = Vec::new();
+    let mut handoff: Option<Handoff> = None;
     let mut changes = Vec::new();
     let mut base_revision = 1;
     let mut candidate: Option<Candidate> = None;
@@ -65,9 +78,190 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                     "not allowed"
                 }
             )]),
+            // The controlled external-tool seam (T23.11): the call is previewed against the
+            // session allowlist, authorized by exact digest, and printed as an MCP `tools/call`
+            // body. No transport is configured in this build, and the tool does not pretend one is.
+            "tool-arguments" => {
+                tool_arguments = argument.to_owned();
+                Ok(vec![format!(
+                    "tool arguments {} byte(s)",
+                    tool_arguments.len()
+                )])
+            }
+            "tool-preview" => match session.preview_tool(argument, &tool_arguments) {
+                Ok(call) => {
+                    let lines = vec![call.preview()];
+                    tool_preview = Some(call);
+                    Ok(lines)
+                }
+                Err(reason) => Err(reason),
+            },
+            "tool-authorize" => match tool_preview.as_ref() {
+                Some(call) => {
+                    tool_policy.authorize(call);
+                    Ok(vec![format!("authorized {}", call.digest())])
+                }
+                None => Err("preview a tool call first".to_owned()),
+            },
+            "tool-decision" => match tool_preview.as_ref() {
+                Some(call) => {
+                    let decision = tool_policy.decide(call);
+                    if decision.allowed() {
+                        Ok(vec!["decision allowed".to_owned()])
+                    } else {
+                        match decision {
+                            crate::app::ai::ToolDecision::Refused { reason } => {
+                                Ok(vec![format!("decision refused: {reason}")])
+                            }
+                            crate::app::ai::ToolDecision::Allowed => {
+                                Ok(vec!["decision allowed".to_owned()])
+                            }
+                        }
+                    }
+                }
+                None => Err("preview a tool call first".to_owned()),
+            },
+            "tool-mcp" => match tool_preview.as_ref() {
+                Some(call) => Ok(vec![call.mcp_json()]),
+                None => Err("preview a tool call first".to_owned()),
+            },
+            "tool-clear" => {
+                tool_policy.clear();
+                tool_preview = None;
+                Ok(vec!["tool grants cleared".to_owned()])
+            }
+            // Two-agent session governance (T23.12): a handoff carries the candidate digest and
+            // its base revision, so a review cannot silently target another candidate or a
+            // document that moved on; the shared-material paths are listed for cleanup.
+            "share" => {
+                shared.push(argument.to_owned());
+                Ok(vec![format!("shared material {argument}")])
+            }
+            "handoff" => {
+                let to = match argument {
+                    "coder" => Role::Coder,
+                    "reviewer" => Role::Reviewer,
+                    other => return super::report(format!("{other:?} is not coder or reviewer")),
+                };
+                let Some(candidate) = candidate.as_ref() else {
+                    return super::report("build a candidate before handing it over".to_owned());
+                };
+                match Handoff::new(session.role, to, candidate, shared.clone()) {
+                    Ok(record) => {
+                        let lines = vec![format!(
+                            "handoff {} -> {} for candidate {}",
+                            record.from.directory(),
+                            record.to.directory(),
+                            record.candidate
+                        )];
+                        handoff = Some(record);
+                        Ok(lines)
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "handoff-check" => {
+                let revision: u64 = match argument.parse() {
+                    Ok(value) => value,
+                    Err(_) => return super::report(format!("{argument:?} is not a revision")),
+                };
+                match (handoff.as_ref(), candidate.as_ref()) {
+                    (Some(record), Some(candidate)) => record
+                        .check(candidate, revision)
+                        .map(|_| vec![format!("handoff valid at revision {revision}")]),
+                    _ => Err("create a handoff before checking it".to_owned()),
+                }
+            }
+            "handoff-cleanup" => match handoff.as_ref() {
+                Some(record) => Ok(record
+                    .cleanup()
+                    .iter()
+                    .map(|path| format!("cleanup {path}"))
+                    .collect()),
+                None => Err("create a handoff before listing its material".to_owned()),
+            },
             "credential" => {
                 session.credential = argument.to_owned();
                 Ok(vec![format!("credential {argument}")])
+            }
+            // The usage ledger (T23.07): a call's bytes, reported cost, duration and how it
+            // ended are recorded together, so a broken stream and a cancellation are distinct
+            // facts rather than a failed request with no accounting.
+            "prompt-bytes" => match argument.parse() {
+                Ok(value) => {
+                    prompt_bytes = value;
+                    Ok(vec![format!("prompt bytes {value}")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a byte count")),
+            },
+            "completion-bytes" => match argument.parse() {
+                Ok(value) => {
+                    completion_bytes = value;
+                    Ok(vec![format!("completion bytes {value}")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a byte count")),
+            },
+            "cost-micros" => match argument.parse() {
+                Ok(value) => {
+                    cost_micros = value;
+                    Ok(vec![format!("cost {value} us")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a micro-unit cost")),
+            },
+            "elapsed-ms" => match argument.parse() {
+                Ok(value) => {
+                    elapsed_ms = value;
+                    Ok(vec![format!("elapsed {value} ms")])
+                }
+                Err(_) => Err(format!("{argument:?} is not a millisecond duration")),
+            },
+            "completed" => {
+                outcome = InvocationOutcome::Completed;
+                Ok(vec!["outcome completed".to_owned()])
+            }
+            "cancelled" => {
+                outcome = InvocationOutcome::Cancelled;
+                Ok(vec!["outcome cancelled".to_owned()])
+            }
+            "broken" => {
+                let reason = if argument.is_empty() {
+                    "the stream ended without a reason".to_owned()
+                } else {
+                    argument.to_owned()
+                };
+                outcome = InvocationOutcome::Broken { reason };
+                Ok(vec!["outcome broken".to_owned()])
+            }
+            "record" => {
+                let record = UsageRecord {
+                    model: session.model.clone(),
+                    role: session.role,
+                    prompt_bytes,
+                    completion_bytes,
+                    cost_micros,
+                    elapsed_ms,
+                    outcome: outcome.clone(),
+                };
+                match session.record(record) {
+                    Ok(()) => {
+                        // One record is one call: the counters start clean so the next call cannot
+                        // inherit this one's bytes or cost.
+                        prompt_bytes = 0;
+                        completion_bytes = 0;
+                        cost_micros = 0;
+                        elapsed_ms = 0;
+                        outcome = InvocationOutcome::Completed;
+                        Ok(vec!["recorded one call".to_owned()])
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+            "usage" => {
+                let mut lines = vec![session.totals().render()];
+                for record in session.usage() {
+                    lines.push(record.render());
+                }
+                Ok(lines)
             }
             "context" => match argument.split_once(':') {
                 Some((path, text)) => {
@@ -138,6 +332,10 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                     "change needs <path>:<before>:<after>, got {argument:?}"
                 )),
             },
+            "root" => {
+                root = Some(std::path::PathBuf::from(argument));
+                Ok(vec![format!("project root {argument}")])
+            }
             "candidate" => match argument.parse() {
                 Ok(id) => {
                     let set = ChangeSet {
@@ -145,6 +343,11 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                         base_revision,
                         changes: changes.clone(),
                     };
+                    if let Some(root) = &root
+                        && let Err(reason) = set.validate_in(root)
+                    {
+                        return super::report(reason);
+                    }
                     let built = match Candidate::new_at(id, set, base_revision) {
                         Ok(built) => built,
                         Err(reason) => return super::report(reason),

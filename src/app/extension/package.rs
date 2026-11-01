@@ -911,4 +911,24 @@ mod tests {
         values.insert("count".to_owned(), "many".to_owned());
         assert!(template.render(&values).is_err());
     }
+
+    #[test]
+    fn the_example_package_still_matches_its_manifest_and_this_host() {
+        // T22.07's compatibility example: the checked-in package is loaded the same way
+        // `install-dir` loads one, so an edit to the payload without the digest (or a host range
+        // the host no longer satisfies) fails here rather than at a user's install.
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("extension-hello");
+        let package = Package::from_directory(&directory).expect("the example package loads");
+        package
+            .verify_digest()
+            .expect("the example manifest's digest matches its files");
+        package
+            .manifest
+            .validate(&host())
+            .expect("the example package supports this host");
+        assert_eq!(package.manifest.id, "com.example.hello");
+        assert_eq!(package.manifest.provides, vec!["hello-card".to_owned()]);
+    }
 }

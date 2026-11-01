@@ -191,6 +191,178 @@ impl TokenSet {
         self.themes.contains_key(name)
     }
 
+    /// Fills in the standard themes this set does not already define (task T24.02).
+    ///
+    /// Only role tokens the document actually defines are overridden: the preset does not invent
+    /// `--background` on a document that never declared it. An existing theme of the same name is
+    /// left alone, so a document's `dark` is not replaced by the preset. `high-contrast` is the
+    /// third standard theme and uses maximum-luminance pairs rather than a bigger font.
+    pub fn install_standard_themes(&mut self) -> Vec<&'static str> {
+        const STANDARD: [(&str, [(&str, &str); 4]); 3] = [
+            (
+                "light",
+                [
+                    ("--background", "#ffffff"),
+                    ("--foreground", "#1f2328"),
+                    ("--accent", "#0a84ff"),
+                    ("--border", "#d0d7de"),
+                ],
+            ),
+            (
+                "dark",
+                [
+                    ("--background", "#1e1e1e"),
+                    ("--foreground", "#e6e6e6"),
+                    ("--accent", "#60a5fa"),
+                    ("--border", "#3d444d"),
+                ],
+            ),
+            (
+                "high-contrast",
+                [
+                    ("--background", "#000000"),
+                    ("--foreground", "#ffffff"),
+                    ("--accent", "#ffff00"),
+                    ("--border", "#ffffff"),
+                ],
+            ),
+        ];
+        let mut installed = Vec::new();
+        for (name, roles) in STANDARD {
+            if self.themes.contains_key(name) {
+                continue;
+            }
+            let values: Vec<(String, String)> = roles
+                .iter()
+                .filter(|(role, _)| self.tokens.contains_key(*role))
+                .map(|(role, value)| ((*role).to_owned(), (*value).to_owned()))
+                .collect();
+            if values.is_empty() {
+                continue;
+            }
+            self.define_theme(name, &values);
+            installed.push(name);
+        }
+        installed
+    }
+
+    /// Loads a theme JSON file through the library's [`rust_widgets::theme::ThemeManager`] and
+    /// records it as one of this set's themes (task T11.04).
+    ///
+    /// Only the roles this set declares are taken from the file, exactly as
+    /// [`TokenSet::install_standard_themes`] only fills declared roles: the widget theme's
+    /// background, foreground, accent and outline map to `--background`, `--foreground`,
+    /// `--accent` and `--border`. A role the widget theme carries but the document does not
+    /// declare is not invented here.
+    pub fn load_theme_file(&mut self, path: impl AsRef<std::path::Path>) -> Result<String, String> {
+        let path = path.as_ref();
+        let path_text = path
+            .to_str()
+            .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?;
+        let mut manager = rust_widgets::theme::ThemeManager::new();
+        // `load_and_activate_theme` is the load half that reports the name recorded in the file:
+        // `load_theme` only registers, and a file may be named anything while the theme keeps its
+        // own name.
+        let name = manager
+            .load_and_activate_theme(path_text)
+            .map_err(|error| {
+                format!(
+                    "the theme file {} could not be loaded: {error}",
+                    path.display()
+                )
+            })?;
+        let theme = manager.current_theme().ok_or_else(|| {
+            format!(
+                "the theme file {} loaded but no theme is active",
+                path.display()
+            )
+        })?;
+        let colours = [
+            ("--background", theme.colors.background),
+            ("--foreground", theme.colors.foreground),
+            ("--accent", theme.colors.accent),
+            ("--border", theme.colors.outline),
+        ];
+        let values: Vec<(String, String)> = colours
+            .into_iter()
+            .filter(|(role, _)| self.tokens.contains_key(*role))
+            .map(|(role, colour)| (role.to_owned(), colour.to_hex_rgb()))
+            .collect();
+        let count = values.len();
+        self.define_theme(name.clone(), &values);
+        Ok(format!(
+            "theme {name}: {count} override(s) from {}",
+            path.display()
+        ))
+    }
+
+    /// Writes one theme to a JSON file through [`rust_widgets::theme::ThemeManager::save_theme`]
+    /// (task T11.04).
+    ///
+    /// A value is expanded first, so a reference is inlined at the generation boundary rather than
+    /// written as `var(--x)` the widget theme cannot read. A theme with no widget colour role is
+    /// refused: writing the library's default palette while claiming it is the document's theme
+    /// would be a file that looks saved and is not.
+    pub fn save_theme_file(
+        &self,
+        name: &str,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), String> {
+        let path = path.as_ref();
+        let path_text = path
+            .to_str()
+            .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?;
+        let host = self
+            .themes
+            .get(name)
+            .ok_or_else(|| format!("no theme {name:?} is defined"))?;
+        let mut theme = rust_widgets::theme::Theme {
+            name: name.to_owned(),
+            ..rust_widgets::theme::Theme::default()
+        };
+        let mut written = 0;
+        for (role, value) in &host.values {
+            if !matches!(
+                role.as_str(),
+                "--background" | "--foreground" | "--accent" | "--border"
+            ) {
+                continue;
+            }
+            let literal = self
+                .expand(value, Some(name))
+                .map_err(|error| format!("theme {name}, {role}: {error:?}"))?
+                .value;
+            let colour = rust_widgets::core::Color::from_hex(&literal)
+                .map_err(|error| format!("theme {name}, {role}: {error}"))?;
+            match role.as_str() {
+                "--background" => theme.colors.background = colour,
+                "--foreground" => theme.colors.foreground = colour,
+                "--accent" => theme.colors.accent = colour,
+                "--border" => theme.colors.outline = colour,
+                _ => continue,
+            }
+            written += 1;
+        }
+        if written == 0 {
+            return Err(format!(
+                "theme {name:?} has no --background, --foreground, --accent or --border to save"
+            ));
+        }
+        let mut manager = rust_widgets::theme::ThemeManager::new();
+        manager.register_theme(theme);
+        if !manager.set_theme(name) {
+            return Err(format!(
+                "theme {name:?} was registered but could not be made active for saving"
+            ));
+        }
+        manager.save_theme(path_text).map_err(|error| {
+            format!(
+                "theme {name:?} could not be written to {}: {error}",
+                path.display()
+            )
+        })
+    }
+
     /// Expands a value to a literal, naming the tokens it went through.
     ///
     /// This is the generation step: the model around it keeps the references.
@@ -441,6 +613,51 @@ mod tests {
     }
 
     #[test]
+    fn the_standard_themes_include_high_contrast_without_replacing_a_document_theme() {
+        let mut set = TokenSet::new();
+        for role in ["--background", "--foreground", "--accent", "--border"] {
+            set.define(TokenKind::Colour, role, "#000000");
+        }
+        set.define_theme("dark", &[("--accent".to_owned(), "#ff9f0a".to_owned())]);
+        let installed = set.install_standard_themes();
+        assert!(installed.contains(&"high-contrast"), "{installed:?}");
+        assert!(installed.contains(&"light"), "{installed:?}");
+        assert!(
+            !installed.contains(&"dark"),
+            "a document's dark theme is not replaced"
+        );
+        assert_eq!(
+            set.expand("var(--accent)", Some("high-contrast"))
+                .expect("high contrast")
+                .value,
+            "#ffff00"
+        );
+        assert_eq!(
+            set.expand("var(--foreground)", Some("high-contrast"))
+                .expect("high contrast")
+                .value,
+            "#ffffff"
+        );
+        assert_eq!(
+            set.expand("var(--accent)", Some("dark"))
+                .expect("the document's dark")
+                .value,
+            "#ff9f0a"
+        );
+    }
+
+    #[test]
+    fn a_standard_theme_does_not_invent_a_token_the_document_does_not_define() {
+        let mut set = TokenSet::new();
+        set.define(TokenKind::Colour, "--accent", "#0a84ff");
+        let installed = set.install_standard_themes();
+        assert!(installed.contains(&"high-contrast"), "{installed:?}");
+        let theme = set.themes.get("high-contrast").expect("the theme");
+        assert_eq!(theme.values.len(), 1);
+        assert!(theme.values.contains_key("--accent"));
+    }
+
+    #[test]
     fn a_theme_that_does_not_exist_is_refused() {
         let set = tokens();
         assert_eq!(
@@ -549,5 +766,79 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("tokens: 2, themes: 1"))
         );
+    }
+
+    fn theme_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "rustage-theme-{}-{}-{name}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
+    #[test]
+    fn a_theme_round_trips_through_the_library_theme_file() {
+        let mut set = TokenSet::new();
+        set.define(TokenKind::Colour, "--background", "#ffffff");
+        set.define(TokenKind::Colour, "--foreground", "#1f2328");
+        set.define(TokenKind::Colour, "--accent", "#0a84ff");
+        set.define(TokenKind::Colour, "--border", "#d0d7de");
+        set.define_theme(
+            "night",
+            &[
+                ("--background".to_owned(), "#101418".to_owned()),
+                ("--foreground".to_owned(), "#e6e6e6".to_owned()),
+                ("--accent".to_owned(), "#60a5fa".to_owned()),
+                ("--border".to_owned(), "#3d444d".to_owned()),
+            ],
+        );
+
+        let path = theme_path("round-trip");
+        set.save_theme_file("night", &path).expect("a saved theme");
+        let saved = std::fs::read_to_string(&path).expect("the theme file");
+        assert!(saved.contains("\"night\""), "{saved}");
+
+        let mut loaded = TokenSet::new();
+        for role in ["--background", "--foreground", "--accent", "--border"] {
+            loaded.define(TokenKind::Colour, role, "#000000");
+        }
+        let line = loaded.load_theme_file(&path).expect("a loaded theme");
+        assert!(line.contains("4 override(s)"), "{line}");
+        let theme = loaded.themes.get("night").expect("the loaded theme");
+        assert_eq!(theme.values["--background"], "#101418");
+        assert_eq!(theme.values["--foreground"], "#E6E6E6");
+        assert_eq!(theme.values["--accent"], "#60A5FA");
+        assert_eq!(theme.values["--border"], "#3D444D");
+        std::fs::remove_file(&path).expect("cleanup");
+    }
+
+    #[test]
+    fn a_theme_with_no_widget_colour_role_is_refused_rather_than_written_as_a_default() {
+        let mut set = TokenSet::new();
+        set.define(TokenKind::Font, "--font", "Inter 13px");
+        set.define_theme(
+            "fonts-only",
+            &[("--font".to_owned(), "Inter 13px".to_owned())],
+        );
+        let path = theme_path("fonts-only");
+        let error = set
+            .save_theme_file("fonts-only", &path)
+            .expect_err("a refusal");
+        assert!(error.contains("has no --background"), "{error}");
+        assert!(!path.exists(), "nothing was written");
+    }
+
+    #[test]
+    fn a_missing_theme_file_is_an_error_not_an_empty_theme() {
+        let mut set = TokenSet::new();
+        set.define(TokenKind::Colour, "--background", "#ffffff");
+        let error = set
+            .load_theme_file(theme_path("absent"))
+            .expect_err("a refusal");
+        assert!(error.contains("could not be loaded"), "{error}");
+        assert!(!set.themes.contains_key("absent"));
     }
 }

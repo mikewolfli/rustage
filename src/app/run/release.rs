@@ -9,7 +9,9 @@ use std::path::Path;
 use crate::app::release::update_journal::{Journal, Record};
 use crate::app::release::{
     Artifact, Channel, Component, Freeze, Maintenance, Migration, Repository, Sbom, Signature,
-    Update, lockfile,
+    Update, install, journey, lockfile,
+    maintenance::{self as maint},
+    provenance, sign,
 };
 use crate::contracts::revision::FormatVersion;
 
@@ -221,6 +223,189 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                 None => Err(format!(
                     "sbom-lock needs <Cargo.lock>:<output>, got {argument:?}"
                 )),
+            },
+            "stage" => match argument.split_once(':') {
+                Some((binary, output)) => {
+                    let language = crate::app::locale::vocabulary::language_dir();
+                    match crate::app::release::stage::stage(
+                        Path::new(binary),
+                        &language,
+                        Path::new(output),
+                        &freeze,
+                    ) {
+                        Ok(staged) => Ok(staged
+                            .files
+                            .iter()
+                            .map(|file| {
+                                format!(
+                                    "staged {} ({} byte(s)) {}",
+                                    file.path, file.bytes, file.digest
+                                )
+                            })
+                            .collect()),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                None => Err("stage needs <binary>:<output-directory>".to_owned()),
+            },
+            "deploy-check" | "deploy" => match argument.split_once(':') {
+                Some((stage_directory, root)) => {
+                    let plan = match install::plan(Path::new(stage_directory), Path::new(root)) {
+                        Ok(plan) => plan,
+                        Err(reason) => return super::report(reason),
+                    };
+                    if verb == "deploy-check" {
+                        Ok(plan.render())
+                    } else {
+                        install::install(&plan)
+                    }
+                }
+                None => Err(format!("{verb} needs <stage-directory>:<install-root>")),
+            },
+            "undeploy" => install::uninstall(Path::new(argument)),
+            "boundaries" => Ok(install::boundaries()
+                .iter()
+                .map(|line| (*line).to_owned())
+                .collect()),
+            "policy" => {
+                let mut lines: Vec<String> = maint::branches()
+                    .iter()
+                    .map(|line| (*line).to_owned())
+                    .collect();
+                lines.push(maint::review_cadence().to_owned());
+                for severity in maint::Severity::ALL {
+                    lines.push(format!(
+                        "{}: {}",
+                        severity.name(),
+                        if severity.blocks_release() {
+                            "blocks the release"
+                        } else {
+                            "does not block the release"
+                        }
+                    ));
+                }
+                Ok(lines)
+            }
+            "severity" => match maint::Severity::parse(argument) {
+                Some(severity) => Ok(vec![format!(
+                    "{}: {}",
+                    severity.name(),
+                    if severity.blocks_release() {
+                        "blocks the release"
+                    } else {
+                        "does not block the release"
+                    }
+                )]),
+                None => Err(format!(
+                    "{argument:?} is not a severity; use blocker, critical, major or minor"
+                )),
+            },
+            "drill" => match maint::drill(Path::new(argument)) {
+                Ok(drill) => Ok(drill.render()),
+                Err(failures) => Err(failures.join("; ")),
+            },
+            "upgrade" => match argument.split_once(':') {
+                Some((previous, next)) => match (upgrade_facts(previous), upgrade_facts(next)) {
+                    (Some(previous), Some(next)) => {
+                        let suites = maint::triggers(&previous, &next);
+                        if suites.is_empty() {
+                            Ok(vec![
+                                "no fact changed; no regression is triggered".to_owned(),
+                            ])
+                        } else {
+                            Ok(suites.iter().map(|suite| format!("run {suite}")).collect())
+                        }
+                    }
+                    _ => Err(
+                        "upgrade needs <widget>,<toolchain>,<version>:<widget>,<toolchain>,<version>"
+                            .to_owned(),
+                    ),
+                },
+                None => Err(
+                    "upgrade needs <widget>,<toolchain>,<version>:<widget>,<toolchain>,<version>"
+                        .to_owned(),
+                ),
+            },
+            "rc" => match argument.split_once(':') {
+                Some((binary, workdir)) => {
+                    let language = crate::app::locale::vocabulary::language_dir();
+                    match journey::journey(
+                        Path::new(binary),
+                        &language,
+                        Path::new(workdir),
+                        &freeze,
+                    ) {
+                        Ok(steps) => Ok(steps.iter().flat_map(|step| step.render()).collect()),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                None => Err("rc needs <binary>:<work-directory>".to_owned()),
+            },
+            "sign" => match argument.split_once(':') {
+                Some((artifact, identity)) => match sign::sign(Path::new(artifact), identity) {
+                    Ok(signed) => {
+                        let mut lines = vec![format!(
+                            "signed {artifact} with {} as {identity} ({} byte(s)) {}",
+                            signed.tool, signed.bytes, signed.digest
+                        )];
+                        if let Some(sidecar) = signed.sidecar {
+                            lines.push(format!("detached signature {}", sidecar.display()));
+                        }
+                        lines.push(
+                            "declare the artifact again with this digest if the signature changed \
+                             the file"
+                                .to_owned(),
+                        );
+                        Ok(lines)
+                    }
+                    Err(reason) => Err(reason),
+                },
+                None => Err("sign needs <artifact>:<identity> (use - for an ad-hoc macOS signature)"
+                    .to_owned()),
+            },
+            "notarize" => match argument.split_once(':') {
+                Some((artifact, profile)) => {
+                    sign::notarize(Path::new(artifact), profile).map(|line| vec![line])
+                }
+                None => Err("notarize needs <artifact>:<keychain-profile>".to_owned()),
+            },
+            "provenance" => match argument.split_once(':') {
+                Some((lockfile_path, report)) => {
+                    let Some(artifact) = artifact.as_ref() else {
+                        return super::report("declare an artifact before writing provenance".to_owned());
+                    };
+                    match provenance::Provenance::assemble(
+                        artifact,
+                        &freeze,
+                        Path::new(lockfile_path),
+                    ) {
+                        Ok(record) => {
+                            if let Err(error) = std::fs::write(report, record.json()) {
+                                return super::report(format!(
+                                    "cannot write {report}: {error}"
+                                ));
+                            }
+                            let mut lines = record.render();
+                            lines.push(format!("wrote provenance to {report}"));
+                            Ok(lines)
+                        }
+                        Err(reason) => Err(reason),
+                    }
+                }
+                None => Err("provenance needs <Cargo.lock>:<report>".to_owned()),
+            },
+            "verify-provenance" => match argument.split_once(':') {
+                Some((report, artifact_path)) => {
+                    let text = match std::fs::read_to_string(report) {
+                        Ok(text) => text,
+                        Err(error) => return super::report(format!("cannot read {report}: {error}")),
+                    };
+                    match provenance::Provenance::parse(&text) {
+                        Ok(record) => record.verify(Path::new(artifact_path)),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                None => Err("verify-provenance needs <report>:<artifact>".to_owned()),
             },
             "verify-file" => {
                 let bytes = match std::fs::read(argument) {
@@ -487,4 +672,17 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
         }
     }
     true
+}
+
+/// Reads `<widget>,<toolchain>,<version>` for the upgrade trigger table.
+fn upgrade_facts(text: &str) -> Option<crate::app::release::maintenance::Upgrade> {
+    let parts: Vec<&str> = text.split(',').collect();
+    let [widget_revision, toolchain, package_version] = parts.as_slice() else {
+        return None;
+    };
+    Some(crate::app::release::maintenance::Upgrade {
+        widget_revision: (*widget_revision).to_owned(),
+        toolchain: (*toolchain).to_owned(),
+        package_version: (*package_version).to_owned(),
+    })
 }

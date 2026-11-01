@@ -16,6 +16,7 @@
 //! drifting parallel path this project rejects.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::identity::{NodeId, PageId};
 
@@ -41,7 +42,7 @@ impl NodeKind {
 
 /// A property's name, as named by the property schema.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct PropertyName(String);
+pub struct PropertyName(Arc<str>);
 
 impl PropertyName {
     /// Builds a name, or `None` when it is blank.
@@ -50,7 +51,7 @@ impl PropertyName {
         if trimmed.is_empty() {
             return None;
         }
-        Some(Self(trimmed.to_owned()))
+        Some(Self(Arc::from(trimmed)))
     }
 
     /// The name as written.

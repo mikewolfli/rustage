@@ -1,0 +1,545 @@
+{
+  "language": "en",
+  "translations": {
+    "cmd.build.run.category": {
+      "message": "Build"
+    },
+    "cmd.build.run.description": {
+      "message": "build the project for its target, one at a time"
+    },
+    "cmd.build.run.title": {
+      "message": "Run"
+    },
+    "cmd.edit.redo.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.redo.description": {
+      "message": "put back the newest change that was taken back"
+    },
+    "cmd.edit.redo.title": {
+      "message": "Redo"
+    },
+    "cmd.edit.undo.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.undo.description": {
+      "message": "take back the newest change, in its own domain"
+    },
+    "cmd.edit.undo.title": {
+      "message": "Undo"
+    },
+    "cmd.file.close.category": {
+      "message": "File"
+    },
+    "cmd.file.close.description": {
+      "message": "close the current document, deciding what to do with unsaved changes"
+    },
+    "cmd.file.close.param.decision.help": {
+      "message": "what to do with unsaved changes"
+    },
+    "cmd.file.close.title": {
+      "message": "Close"
+    },
+    "cmd.file.save-all.category": {
+      "message": "File"
+    },
+    "cmd.file.save-all.description": {
+      "message": "write every document with unsaved changes"
+    },
+    "cmd.file.save-all.title": {
+      "message": "Save All"
+    },
+    "cmd.file.save-as.category": {
+      "message": "File"
+    },
+    "cmd.file.save-as.description": {
+      "message": "write the document to another file"
+    },
+    "cmd.file.save-as.title": {
+      "message": "Save As"
+    },
+    "cmd.file.save.category": {
+      "message": "File"
+    },
+    "cmd.file.save.description": {
+      "message": "write the current document back to disk"
+    },
+    "cmd.file.save.title": {
+      "message": "Save"
+    },
+    "cmd.keys.show.category": {
+      "message": "View"
+    },
+    "cmd.keys.show.description": {
+      "message": "show the keyboard shortcuts"
+    },
+    "cmd.keys.show.title": {
+      "message": "Keyboard Shortcuts"
+    },
+    "cmd.panel.close.category": {
+      "message": "View"
+    },
+    "cmd.panel.close.description": {
+      "message": "hide the panel with the keyboard"
+    },
+    "cmd.panel.close.title": {
+      "message": "Close Panel"
+    },
+    "cmd.tree.activate.category": {
+      "message": "View"
+    },
+    "cmd.tree.activate.description": {
+      "message": "open the selected tree item"
+    },
+    "cmd.tree.activate.title": {
+      "message": "Activate"
+    },
+    "cmd.view.palette.category": {
+      "message": "View"
+    },
+    "cmd.view.palette.description": {
+      "message": "find a command from the keyboard"
+    },
+    "cmd.view.palette.title": {
+      "message": "Command Palette"
+    },
+    "cmd.view.welcome.category": {
+      "message": "View"
+    },
+    "cmd.view.welcome.description": {
+      "message": "show the welcome page"
+    },
+    "cmd.view.welcome.title": {
+      "message": "Welcome"
+    },
+    "diag.command.bad-argument": {
+      "message": "{id}: {name} is not valid: {reason}"
+    },
+    "diag.command.disabled": {
+      "message": "{id} is not available: {reason}"
+    },
+    "diag.command.missing": {
+      "message": "{id} needs a {name} argument"
+    },
+    "diag.command.no-such-command": {
+      "message": "there is no command {id}"
+    },
+    "diag.command.not-an-id": {
+      "message": "{id} is not a command id"
+    },
+    "diag.command.unauthorized": {
+      "message": "{id} has the {effect} effect, which is not authorized"
+    },
+    "diag.command.unknown": {
+      "message": "there is no command {id}"
+    },
+    "menu.build.item.build.run": {
+      "message": "Run"
+    },
+    "menu.build.title": {
+      "message": "Build"
+    },
+    "menu.edit.item.edit.copy": {
+      "message": "Copy"
+    },
+    "menu.edit.item.edit.cut": {
+      "message": "Cut"
+    },
+    "menu.edit.item.edit.paste": {
+      "message": "Paste"
+    },
+    "menu.edit.item.edit.redo": {
+      "message": "Redo"
+    },
+    "menu.edit.item.edit.undo": {
+      "message": "Undo"
+    },
+    "menu.edit.title": {
+      "message": "Edit"
+    },
+    "menu.file.item.file.close": {
+      "message": "Close"
+    },
+    "menu.file.item.file.new-project": {
+      "message": "New Project"
+    },
+    "menu.file.item.file.open-project": {
+      "message": "Open Project"
+    },
+    "menu.file.item.file.save": {
+      "message": "Save"
+    },
+    "menu.file.item.file.save-all": {
+      "message": "Save All"
+    },
+    "menu.file.item.file.save-as": {
+      "message": "Save As"
+    },
+    "menu.file.title": {
+      "message": "File"
+    },
+    "menu.view.item.keys.show": {
+      "message": "Keyboard Shortcuts"
+    },
+    "menu.view.item.panel.close": {
+      "message": "Close Panel"
+    },
+    "menu.view.item.tree.activate": {
+      "message": "Activate Tree Item"
+    },
+    "menu.view.item.view.palette": {
+      "message": "Command Palette"
+    },
+    "menu.view.item.view.welcome": {
+      "message": "Welcome"
+    },
+    "menu.view.submenu.panels.item.panel.inspector": {
+      "message": "Inspector"
+    },
+    "menu.view.submenu.panels.item.panel.outline": {
+      "message": "Outline"
+    },
+    "menu.view.submenu.panels.title": {
+      "message": "Panels"
+    },
+    "menu.view.title": {
+      "message": "View"
+    },
+    "shell.error.prefix": {
+      "message": "rustage: {message}"
+    },
+    "shell.status.icon-strip": {
+      "message": "The icon strip is: run `rustage --render-icons <directory>` to render it."
+    },
+    "shell.status.not-implemented": {
+      "message": "The desktop designer is not implemented yet."
+    },
+    "shell.status.probes": {
+      "message": "The dependency contract probes are: run `rustage --probe-apis <directory>`."
+    },
+    "shell.version": {
+      "message": "rustage {version}"
+    },
+    "ui.button.add": {
+      "message": "Add"
+    },
+    "ui.button.back": {
+      "message": "Back"
+    },
+    "ui.button.bind": {
+      "message": "Bind"
+    },
+    "ui.button.clear": {
+      "message": "Clear"
+    },
+    "ui.button.close": {
+      "message": "Close"
+    },
+    "ui.button.fire": {
+      "message": "Fire"
+    },
+    "ui.button.forward": {
+      "message": "Fwd"
+    },
+    "ui.button.open": {
+      "message": "Open"
+    },
+    "ui.button.reset": {
+      "message": "Reset"
+    },
+    "ui.button.run": {
+      "message": "Run"
+    },
+    "ui.button.start": {
+      "message": "Start"
+    },
+    "ui.button.step": {
+      "message": "Step"
+    },
+    "ui.button.stop": {
+      "message": "Stop"
+    },
+    "ui.button.theme": {
+      "message": "Theme"
+    },
+    "ui.button.unbind": {
+      "message": "Unbind"
+    },
+    "ui.button.values": {
+      "message": "Values"
+    },
+    "ui.context.clear": {
+      "message": "Clear field"
+    },
+    "ui.context.inspect": {
+      "message": "Inspect values"
+    },
+    "ui.context.reset": {
+      "message": "Reset property"
+    },
+    "ui.context.select-parent": {
+      "message": "Select parent"
+    },
+    "ui.context.toggle-hide": {
+      "message": "Hide or show"
+    },
+    "ui.context.toggle-lock": {
+      "message": "Lock or unlock"
+    },
+    "ui.context.raise": {
+      "message": "Bring forward"
+    },
+    "ui.data.dataset": {
+      "message": "dataset"
+    },
+    "ui.data.diagnostic": {
+      "message": "diagnostic"
+    },
+    "ui.error.contracts": {
+      "message": "contracts: {reason}"
+    },
+    "ui.error.contracts-differ": {
+      "message": "contracts differ: {reason}"
+    },
+    "ui.error.inspect-refused": {
+      "message": "inspect refused: {reason}"
+    },
+    "ui.error.not-added": {
+      "message": "not added: {reason}"
+    },
+    "ui.error.not-applied": {
+      "message": "not applied: {reason}"
+    },
+    "ui.error.not-bound": {
+      "message": "not bound: {reason}"
+    },
+    "ui.error.not-closed": {
+      "message": "not closed: {reason}"
+    },
+    "ui.error.not-fired": {
+      "message": "not fired: {reason}"
+    },
+    "ui.error.not-moved": {
+      "message": "not moved: {reason}"
+    },
+    "ui.error.not-opened": {
+      "message": "not opened: {reason}"
+    },
+    "ui.error.not-unbound": {
+      "message": "not unbound: {reason}"
+    },
+    "ui.error.schema-unavailable": {
+      "message": "schema unavailable: {reason}"
+    },
+    "ui.error.theme-refused": {
+      "message": "theme refused: {reason}"
+    },
+    "ui.inspector.accepted": {
+      "message": "accepted"
+    },
+    "ui.inspector.default": {
+      "message": "default"
+    },
+    "ui.inspector.inspect": {
+      "message": "inspect"
+    },
+    "ui.inspector.kind": {
+      "message": "kind"
+    },
+    "ui.inspector.node": {
+      "message": "node"
+    },
+    "ui.inspector.selection": {
+      "message": "selection"
+    },
+    "ui.inspector.theme": {
+      "message": "theme"
+    },
+    "ui.menu.editor": {
+      "message": "Editor"
+    },
+    "ui.menu.layout": {
+      "message": "Layout"
+    },
+    "ui.menu.next-group": {
+      "message": "Next group"
+    },
+    "ui.menu.quit": {
+      "message": "Quit"
+    },
+    "ui.menu.reset-layout": {
+      "message": "Reset layout"
+    },
+    "ui.menu.save-layout": {
+      "message": "Save layout"
+    },
+    "ui.menu.split-right": {
+      "message": "Split right"
+    },
+    "ui.note.data": {
+      "message": "data v{version} · effects {effects} · runtime: none"
+    },
+    "ui.note.events": {
+      "message": "{status} | rev {revision} | handlers: {handlers} | {wiring} | {last}"
+    },
+    "ui.note.inspector": {
+      "message": "design v{version} · effects {effects} · read-only"
+    },
+    "ui.note.pages": {
+      "message": "{count} page(s) · current {current} · revision {revision}"
+    },
+    "ui.panel.data": {
+      "message": "Data & State"
+    },
+    "ui.panel.debug": {
+      "message": "Debug"
+    },
+    "ui.panel.events": {
+      "message": "Events"
+    },
+    "ui.panel.inspector": {
+      "message": "Inspector"
+    },
+    "ui.panel.messages": {
+      "message": "Messages"
+    },
+    "ui.panel.outline": {
+      "message": "Outline"
+    },
+    "ui.panel.pages": {
+      "message": "Pages"
+    },
+    "ui.panel.problems": {
+      "message": "Problems"
+    },
+    "ui.placeholder.handler-name": {
+      "message": "handler name"
+    },
+    "ui.placeholder.mixed": {
+      "message": "mixed — typing applies to every selected node"
+    },
+    "ui.placeholder.page-name": {
+      "message": "page name"
+    },
+    "ui.placeholder.theme-name": {
+      "message": "theme name (dark)"
+    },
+    "ui.status.bound": {
+      "message": "bound {event} -> {handler} on node {node} (revision {revision})"
+    },
+    "ui.status.closing": {
+      "message": "closing"
+    },
+    "ui.status.command-palette": {
+      "message": "command palette"
+    },
+    "ui.status.data-applied": {
+      "message": "{field} = {value} (data v{version})"
+    },
+    "ui.status.editor-split": {
+      "message": "editor split"
+    },
+    "ui.status.focus-group": {
+      "message": "focus group {group}"
+    },
+    "ui.status.hidden": {
+      "message": "hidden {id}"
+    },
+    "ui.status.inspected": {
+      "message": "inspected node; design v{version}, effects {effects}"
+    },
+    "ui.status.inspector-cleared": {
+      "message": "field cleared; the valid {name} is {value}"
+    },
+    "ui.status.layout-not-saved": {
+      "message": "layout not saved: {reason}"
+    },
+    "ui.status.layout-reset": {
+      "message": "layout reset"
+    },
+    "ui.status.layout-saved": {
+      "message": "saved layout to {path}"
+    },
+    "ui.status.navigation-declared": {
+      "message": "declared navigation {from} -> {to} (revision {revision})"
+    },
+    "ui.status.no-document": {
+      "message": "no document"
+    },
+    "ui.status.no-layout-path": {
+      "message": "no --layout path was given"
+    },
+    "ui.status.no-panel": {
+      "message": "no panel {id}"
+    },
+    "ui.status.no-problems": {
+      "message": "no problems"
+    },
+    "ui.status.now-on": {
+      "message": "now on {page}"
+    },
+    "ui.status.page-declared": {
+      "message": "declared page {name} (revision {revision})"
+    },
+    "ui.status.palette-closed": {
+      "message": "command palette closed"
+    },
+    "ui.status.palette-could-not-focus": {
+      "message": "the command palette could not take the keyboard"
+    },
+    "ui.status.ready": {
+      "message": "ready"
+    },
+    "ui.status.reset-nodes": {
+      "message": "reset {count} node(s) to the structural title"
+    },
+    "ui.status.shown": {
+      "message": "shown {id}"
+    },
+    "ui.status.theme-applied": {
+      "message": "{message}"
+    },
+    "ui.status.unbound": {
+      "message": "unbound {event} on node {node} (revision {revision})"
+    },
+    "ui.status.unknown-action": {
+      "message": "unknown action {action}"
+    },
+    "ui.status.no-parent": {
+      "message": "node {node} has no parent"
+    },
+    "ui.status.locked": {
+      "message": "{name} locked"
+    },
+    "ui.status.unlocked": {
+      "message": "{name} unlocked"
+    },
+    "ui.status.hidden-node": {
+      "message": "{name} hidden"
+    },
+    "ui.status.shown-node": {
+      "message": "{name} shown"
+    },
+    "ui.status.raised": {
+      "message": "{name} raised"
+    },
+    "ui.status.already-top": {
+      "message": "{name} is already on top"
+    },
+    "ui.toolbar.commands": {
+      "message": "Commands"
+    },
+    "ui.toolbar.next-group": {
+      "message": "Next group"
+    },
+    "ui.toolbar.reset-layout": {
+      "message": "Reset layout"
+    },
+    "ui.toolbar.save-layout": {
+      "message": "Save layout"
+    },
+    "ui.toolbar.split": {
+      "message": "Split"
+    }
+  }
+}

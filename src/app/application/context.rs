@@ -33,14 +33,47 @@ pub enum ContextKind {
     Canvas,
     /// A tree node.
     TreeNode,
+    /// The project root.
+    ProjectRoot,
+    /// A file or folder in the project tree.
+    File,
+    /// One property row in the Inspector.
+    PropertyRow,
+    /// One style rule.
+    StyleRule,
+    /// A component definition or instance.
+    Component,
+    /// One asset.
+    Asset,
+    /// An editor or a document tab.
+    EditorTab,
+    /// A diagnostic, test result or log line.
+    Diagnostic,
+    /// A breakpoint or a watch expression.
+    Breakpoint,
+    /// One version change or conflict.
+    VersionChange,
+    /// A background task or a preview.
+    TaskPreview,
 }
 
 impl ContextKind {
     /// Every kind, for a report.
-    pub const ALL: [ContextKind; 3] = [
+    pub const ALL: [ContextKind; 14] = [
         ContextKind::Item,
         ContextKind::Canvas,
         ContextKind::TreeNode,
+        ContextKind::ProjectRoot,
+        ContextKind::File,
+        ContextKind::PropertyRow,
+        ContextKind::StyleRule,
+        ContextKind::Component,
+        ContextKind::Asset,
+        ContextKind::EditorTab,
+        ContextKind::Diagnostic,
+        ContextKind::Breakpoint,
+        ContextKind::VersionChange,
+        ContextKind::TaskPreview,
     ];
 
     /// The kind's name.
@@ -49,18 +82,198 @@ impl ContextKind {
             Self::Item => "item",
             Self::Canvas => "canvas",
             Self::TreeNode => "tree-node",
+            Self::ProjectRoot => "project-root",
+            Self::File => "file",
+            Self::PropertyRow => "property-row",
+            Self::StyleRule => "style-rule",
+            Self::Component => "component",
+            Self::Asset => "asset",
+            Self::EditorTab => "editor-tab",
+            Self::Diagnostic => "diagnostic",
+            Self::Breakpoint => "breakpoint",
+            Self::VersionChange => "version-change",
+            Self::TaskPreview => "task-preview",
         }
     }
 
     /// Reads a kind's name, or `None` when it is not one.
     pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "item" => Some(Self::Item),
-            "canvas" => Some(Self::Canvas),
-            "tree-node" => Some(Self::TreeNode),
-            _ => None,
+        Self::ALL.into_iter().find(|kind| kind.name() == text)
+    }
+
+    /// The operations roadmap §3.3 requires for this kind, as stable action ids.
+    pub fn required_actions(&self) -> &'static [&'static str] {
+        match self {
+            Self::ProjectRoot => &[
+                "context.project.properties",
+                "context.project.targets",
+                "context.project.build",
+                "context.project.run",
+                "context.project.validate",
+                "context.project.terminal",
+                "context.project.migrate-preview",
+                "context.project.close",
+            ],
+            Self::File => &[
+                "context.file.open",
+                "context.file.split",
+                "context.file.add",
+                "context.file.rename",
+                "context.file.move",
+                "context.file.copy-path",
+                "context.file.reveal",
+                "context.file.exclude",
+                "context.file.delete",
+                "context.file.compare",
+            ],
+            Self::TreeNode => &[
+                "context.node.select-parent",
+                "context.node.select-child",
+                "context.node.copy",
+                "context.node.paste",
+                "context.node.reorder",
+                "context.node.lock",
+                "context.node.hide",
+                "context.node.layout",
+                "context.node.extract-component",
+                "context.node.events",
+                "context.node.source",
+            ],
+            Self::Canvas => &[
+                "context.canvas.insert",
+                "context.canvas.paste",
+                "context.canvas.zoom",
+                "context.canvas.viewport",
+                "context.canvas.grid",
+                "context.canvas.guides",
+                "context.canvas.inspect",
+            ],
+            Self::PropertyRow => &[
+                "context.property.reset",
+                "context.property.copy-value",
+                "context.property.bind",
+                "context.property.locate-source",
+                "context.property.applicable-targets",
+            ],
+            Self::StyleRule => &[
+                "context.style.new-rule",
+                "context.style.choose-state",
+                "context.style.reference-token",
+                "context.style.locate-source",
+                "context.style.disable-candidate",
+                "context.style.delete-preview",
+            ],
+            Self::Component => &[
+                "context.component.edit-definition",
+                "context.component.find-references",
+                "context.component.switch-variant",
+                "context.component.compare-overrides",
+                "context.component.reset",
+                "context.component.detach",
+                "context.component.update",
+            ],
+            Self::Asset => &[
+                "context.asset.preview",
+                "context.asset.replace",
+                "context.asset.find-references",
+                "context.asset.copy-path",
+                "context.asset.target-check",
+                "context.asset.export",
+                "context.asset.delete",
+            ],
+            Self::EditorTab => &[
+                "context.editor.edit",
+                "context.editor.navigate",
+                "context.editor.code-action",
+                "context.editor.fold",
+                "context.editor.compare",
+                "context.editor.split",
+                "context.editor.close-group",
+            ],
+            Self::Diagnostic => &[
+                "context.diagnostic.locate",
+                "context.diagnostic.copy",
+                "context.diagnostic.expand",
+                "context.diagnostic.rerun",
+                "context.diagnostic.export",
+                "context.diagnostic.view-source-version",
+            ],
+            Self::Breakpoint => &[
+                "context.breakpoint.condition",
+                "context.breakpoint.toggle",
+                "context.breakpoint.delete",
+                "context.breakpoint.expand",
+                "context.breakpoint.watch",
+                "context.breakpoint.copy-value",
+                "context.breakpoint.evaluate",
+            ],
+            Self::VersionChange => &[
+                "context.version.diff",
+                "context.version.stage",
+                "context.version.undo-confirm",
+                "context.version.three-way",
+                "context.version.choose",
+                "context.version.revalidate",
+            ],
+            Self::TaskPreview => &[
+                "context.task.view",
+                "context.task.cancel",
+                "context.task.retry",
+                "context.task.stop",
+                "context.task.resume",
+            ],
+            Self::Item => &["context.item.open", "context.item.remove"],
         }
     }
+}
+
+/// The 13 context types roadmap §3.3 requires and the operations each must offer.
+pub fn required() -> [(ContextKind, &'static [&'static str]); 13] {
+    [
+        (
+            ContextKind::ProjectRoot,
+            ContextKind::ProjectRoot.required_actions(),
+        ),
+        (ContextKind::File, ContextKind::File.required_actions()),
+        (
+            ContextKind::TreeNode,
+            ContextKind::TreeNode.required_actions(),
+        ),
+        (ContextKind::Canvas, ContextKind::Canvas.required_actions()),
+        (
+            ContextKind::PropertyRow,
+            ContextKind::PropertyRow.required_actions(),
+        ),
+        (
+            ContextKind::StyleRule,
+            ContextKind::StyleRule.required_actions(),
+        ),
+        (
+            ContextKind::Component,
+            ContextKind::Component.required_actions(),
+        ),
+        (ContextKind::Asset, ContextKind::Asset.required_actions()),
+        (
+            ContextKind::EditorTab,
+            ContextKind::EditorTab.required_actions(),
+        ),
+        (
+            ContextKind::Diagnostic,
+            ContextKind::Diagnostic.required_actions(),
+        ),
+        (
+            ContextKind::Breakpoint,
+            ContextKind::Breakpoint.required_actions(),
+        ),
+        (
+            ContextKind::VersionChange,
+            ContextKind::VersionChange.required_actions(),
+        ),
+        (
+            ContextKind::TaskPreview,
+            ContextKind::TaskPreview.required_actions(),
+        ),
+    ]
 }
 
 /// The parameters passed to a context handler: the scope of the thing that was clicked.
@@ -401,6 +614,26 @@ mod tests {
             }
         );
         assert!(invocation.render().contains("disabled"));
+    }
+
+    #[test]
+    fn the_required_contexts_cover_the_roadmaps_thirteen_and_offer_actions() {
+        let required = super::required();
+        assert_eq!(required.len(), 13);
+        let mut kinds: Vec<super::ContextKind> = required.iter().map(|(kind, _)| *kind).collect();
+        kinds.sort_by_key(|kind| kind.name());
+        kinds.dedup();
+        assert_eq!(kinds.len(), 13, "each context is listed once");
+        for (kind, actions) in required {
+            assert!(!actions.is_empty(), "{} offers no action", kind.name());
+            for action in actions {
+                assert!(
+                    action.starts_with("context."),
+                    "{action} is not a context action id"
+                );
+            }
+            assert_eq!(super::ContextKind::parse(kind.name()), Some(kind));
+        }
     }
 
     #[test]

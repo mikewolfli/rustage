@@ -14,7 +14,8 @@ pub struct AiOptions {
     /// `tool:<name>`, `credential:<reference>`, `context:<path>:<text>`, `ignore:<pattern>`,
     /// `authorize`, `context-show`, `change:<path>:<before>:<after>`, `candidate:<id>`,
     /// `verify:<digest>:<state>`, `review:<text>`, `accept:<i[,j]>`, `base:<path>:<text>`,
-    /// `apply`, `rollback`, `show`.
+    /// `apply`, `rollback`, `show`; `root:<path>` makes `candidate` check symbolic links against a
+    /// real project root before the set is accepted.
     pub ops: Vec<String>,
 }
 

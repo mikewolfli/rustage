@@ -77,7 +77,8 @@ impl AppToolbarOptions {
 #[derive(Debug, PartialEq, Eq)]
 pub struct AppContextOptions {
     /// The operations: `kind:<item|canvas|tree-node>`, `item:<kind>:<action>`,
-    /// `enable:<action>:<yes|no>`, `param:<key>:<value>`, `click:<kind>`, `invoke:<action>`, `show`.
+    /// `enable:<action>:<yes|no>`, `param:<key>:<value>`, `click:<kind>`, `invoke:<action>`, `show`;
+    /// `required` lists the 13 context types roadmap §3.3 requires and their action ids.
     pub ops: Vec<String>,
 }
 
@@ -92,7 +93,9 @@ impl AppContextOptions {
 #[derive(Debug, PartialEq, Eq)]
 pub struct AppDialogOptions {
     /// The operations: `main:<id>`, `dialog:<id>:<owner>:<kind>:<modality>`, `default:<id>:<action>`,
-    /// `cancel:<id>:<action>`, `field:<name>:<value>`, `open:<id>`, `close:<id>`, `accept:<id>`, `show`.
+    /// `cancel:<id>:<action>`, `field:<name>:<value>`, `open:<id>`, `close:<id>`, `accept:<id>`, `show`;
+    /// the wizard shell: `wizards`, `wizard:<required wizard id>`, `step:<id>:<title>`, `change:<text>`,
+    /// `review:<failure impact>`, `next`, `back`, `finish`, `abandon`, `wizard-show`.
     pub ops: Vec<String>,
 }
 

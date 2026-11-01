@@ -39,6 +39,11 @@ fn main() {
         std::process::exit(cli::ExitCode::Reported.code());
     }
     app::locale::catalog::install(selection);
+    // The window consumes the library's global i18n manager; loading the same JSON pack the CLI
+    // reads is what keeps both surfaces on one catalogue (blue21 L-4).
+    if let Err(reason) = app::locale::catalog::install_global() {
+        host::log::emit(host::log::Level::Warn, "main", &reason);
+    }
 
     let command = match cli::parse(arguments) {
         Ok(command) => command,

@@ -11,7 +11,7 @@ use crate::app::release::{
     Artifact, Channel, Component, Freeze, Maintenance, Migration, Repository, Sbom, Signature,
     Update, install, journey, lockfile,
     maintenance::{self as maint},
-    provenance, sign,
+    package, provenance, sign,
 };
 use crate::contracts::revision::FormatVersion;
 
@@ -368,6 +368,32 @@ pub(super) fn release(options: &crate::cli::ReleaseOptions) -> bool {
                     sign::notarize(Path::new(artifact), profile).map(|line| vec![line])
                 }
                 None => Err("notarize needs <artifact>:<keychain-profile>".to_owned()),
+            },
+            "bundle" => match argument.splitn(3, ':').collect::<Vec<_>>().as_slice() {
+                [format, stage, output] => match package::Format::parse(format) {
+                    Some(format) => {
+                        let version = if freeze.package_version.is_empty() {
+                            "0.0.0"
+                        } else {
+                            &freeze.package_version
+                        };
+                        match package::package(format, Path::new(stage), Path::new(output), version)
+                        {
+                            Ok(built) => Ok(vec![format!(
+                                "{} package {} ({} byte(s)) {}",
+                                built.format.name(),
+                                built.path.display(),
+                                built.bytes,
+                                built.digest
+                            )]),
+                            Err(reason) => Err(reason),
+                        }
+                    }
+                    None => Err(format!(
+                        "{format:?} is not a package format; use dmg, deb or msi"
+                    )),
+                },
+                _ => Err("bundle needs <dmg|deb|msi>:<stage>:<output>".to_owned()),
             },
             "provenance" => match argument.split_once(':') {
                 Some((lockfile_path, report)) => {

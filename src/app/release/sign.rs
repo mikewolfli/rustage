@@ -178,7 +178,7 @@ pub fn notarize(_artifact: &Path, _profile: &str) -> Result<String, String> {
 }
 
 /// Runs one tool, refusing a non-zero exit with its stderr.
-fn run(
+pub(super) fn run(
     permit: &crate::host::permission::ExecutionPermit,
     program: &str,
     args: &[&str],

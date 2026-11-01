@@ -21,7 +21,7 @@ pub struct ReleaseOptions {
     /// `upgrade:<old facts>:<new facts>` (facts are `<widget>,<toolchain>,<version>`),
     /// `rc:<binary>:<clean-work-directory>`, `provenance:<Cargo.lock>:<report>`,
     /// `verify-provenance:<report>:<artifact>`, `sign:<artifact>:<identity>`,
-    /// `notarize:<artifact>:<keychain-profile>`."
+    /// `notarize:<artifact>:<keychain-profile>`, `bundle:<dmg|deb|msi>:<stage>:<output>`."
     ///
     /// `journal:<file>` makes every later transition write its record to `<file>`;
     /// `journal-recover:<file>` marks a recorded `Installing` state as `Interrupted` and answers the

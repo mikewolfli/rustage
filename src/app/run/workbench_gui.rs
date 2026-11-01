@@ -38,7 +38,7 @@ use rust_widgets::widget::PropertyGrid;
 use rust_widgets::widget::capability::CapabilityValue;
 use rust_widgets::widget::runtime::{clear_focus, focus_widget, focused_widget, with_widget_mut};
 use rust_widgets::widget::special_widgets::code_editor::CodeEditor;
-use rust_widgets::widget::{GroupBox, Menu, ToolBar};
+use rust_widgets::widget::{GroupBox, ListBox, Menu, TabWidget, ToolBar};
 
 use crate::app::canvas::scene::Rect as SceneRect;
 use crate::app::commands::command::{Context, Registry, built_in};
@@ -209,6 +209,13 @@ struct Gui {
     /// The object tree, the canvas scene and the one selection both views read (T09.02–T09.04).
     scene: CanvasState,
     outline_list: u64,
+    /// The Messages panel's log lines, newest last, and the list that shows them.
+    messages: Vec<String>,
+    messages_list: u64,
+    /// The row the Messages context menu was opened on.
+    diagnostic_row: Option<usize>,
+    /// The Messages panel's right-click menu.
+    diagnostic_menu: u64,
     canvas_panel: u64,
     canvas_surface: u64,
     /// The canvas pointer facts, in design space: whether a press is down, where it began and
@@ -263,6 +270,8 @@ struct Gui {
     context_menu: u64,
     /// The scene node's right-click menu.
     scene_menu: u64,
+    /// The editor tab's right-click menu.
+    editor_menu: u64,
 }
 
 /// One visible node as the canvas paints it: rectangle, label, and hidden/locked/selected flags.
@@ -1237,6 +1246,68 @@ fn canvas_point(canvas_panel: u64, x: i32, y: i32) -> Option<(i32, i32)> {
     })
 }
 
+/// Rebuilds the Messages list from the log lines, keeping the current row when it still exists.
+fn sync_messages(gui: &mut Gui) {
+    let list = gui.messages_list;
+    if list == 0 {
+        return;
+    }
+    let rows = gui.messages.clone();
+    let selected = rust_widgets::list_box_current_index(list);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
+        rust_widgets::list_box_clear_items(list);
+        for row in &rows {
+            let _ = rust_widgets::list_box_add_item(list, row);
+        }
+        let last = rows.len().saturating_sub(1);
+        let _ = rust_widgets::list_box_set_current_index(list, selected.unwrap_or(last).min(last));
+    });
+}
+
+/// Appends one line to the Messages log, keeping the newest 200.
+fn push_message(gui: &mut Gui, line: impl Into<String>) {
+    gui.messages.push(line.into());
+    const LIMIT: usize = 200;
+    if gui.messages.len() > LIMIT {
+        let excess = gui.messages.len() - LIMIT;
+        gui.messages.drain(..excess);
+    }
+    sync_messages(gui);
+}
+
+/// Applies one Messages context-menu action.
+fn diagnostic_context_action(gui: &mut Gui, action: &str, label: &str) {
+    use crate::host::clipboard::{ClipboardHost, NativeClipboard};
+    let text = match action {
+        "copy" => gui
+            .diagnostic_row
+            .and_then(|index| gui.messages.get(index))
+            .cloned(),
+        "copy-all" => Some(gui.messages.join("\n")),
+        "clear" => {
+            gui.messages.clear();
+            gui.diagnostic_row = None;
+            sync_messages(gui);
+            gui.message = label.to_owned();
+            update_status(gui);
+            return;
+        }
+        _ => None,
+    };
+    let Some(text) = text else {
+        gui.message = tr("ui.status.no-document");
+        update_status(gui);
+        return;
+    };
+    match NativeClipboard::new().write_text(&text) {
+        crate::host::clipboard::ClipboardWrite::Written => gui.message = label.to_owned(),
+        crate::host::clipboard::ClipboardWrite::Refused { reason } => {
+            warn_failure("the diagnostics could not be copied", reason);
+        }
+    }
+    update_status(gui);
+}
+
 /// Rebuilds the Outline list from the structural tree, keeping the selected row current.
 ///
 /// The list is rebuilt on the next main-loop turn: an emit from `list_box_clear_items` or
@@ -1467,6 +1538,82 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
         }
         _ => {}
     }
+}
+
+/// Applies one editor-tab context-menu action to the active tab.
+fn editor_context_action(gui: &mut Gui, action: &str, label: &str) {
+    let group = gui.groups.focus();
+    let active = gui.groups.tabs(group).and_then(|tabs| {
+        let current = tabs.active()?;
+        tabs.tabs().iter().position(|tab| tab == current)
+    });
+    match action {
+        "close" | "close-others" | "close-right" => {
+            let Some(index) = active else {
+                gui.message = tr("ui.status.no-document");
+                update_status(gui);
+                return;
+            };
+            let Some(tabs) = gui.groups.tabs_mut(group) else {
+                return;
+            };
+            let result = match action {
+                "close" => tabs.close_view(index).map(|_| 1),
+                "close-others" => tabs.close_others(index),
+                _ => tabs.close_to_the_right(index),
+            };
+            match result {
+                Ok(count) => gui.message = format!("{label} ({count})"),
+                Err(reason) => warn_failure("an editor tab could not be closed", reason),
+            }
+            gui.sync_editors();
+        }
+        "split" => {
+            let document = gui
+                .groups
+                .tabs(group)
+                .and_then(|tabs| tabs.active().map(|tab| tab.document().to_owned()));
+            gui.groups.split(Axis::LeftRight);
+            if let Some(document) = document {
+                gui.groups.another_view(document);
+            }
+            gui.message = label.to_owned();
+            gui.sync_editors();
+        }
+        "next-group" => {
+            gui.groups.focus_next();
+            gui.message = label.to_owned();
+            gui.sync_editors();
+        }
+        _ => {}
+    }
+    update_status(gui);
+}
+
+/// The row a pointer is over in a list, using the control's own hit test.
+fn list_row_at(id: u64, x: i32, y: i32) -> Option<usize> {
+    with_widget_mut(id, |widget| {
+        (widget as &mut dyn Any)
+            .downcast_mut::<ListBox>()
+            .and_then(|list| list.item_index_at(Point::new(x, y)))
+    })
+    .flatten()
+}
+
+/// The tab a pointer is over in a tab strip, using the control's own hit test.
+fn tab_at(id: u64, x: i32, y: i32) -> Option<usize> {
+    with_widget_mut(id, |widget| {
+        (widget as &mut dyn Any)
+            .downcast_mut::<TabWidget>()
+            .and_then(|tabs| tabs.tab_index_at(Point::new(x, y)))
+    })
+    .flatten()
+}
+
+/// Reads an `x,y` signal payload.
+fn point_of(payload: &str) -> Option<(i32, i32)> {
+    let (x, y) = payload.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
 /// Selects one node from a tree row, a canvas button or a canvas click.
@@ -1786,6 +1933,7 @@ fn run_command(gui: &mut Gui, command: &str) {
         "app::run::workbench-menu",
         &format!("menu command {command}: {}", gui.message),
     );
+    push_message(gui, format!("{command}: {}", gui.message));
 }
 
 /// Opens the onboarding document in the focused editor group.
@@ -2185,6 +2333,10 @@ pub(super) fn workbench_gui(
         property_error: 0,
         scene,
         outline_list: 0,
+        messages: Vec::new(),
+        messages_list: 0,
+        diagnostic_row: None,
+        diagnostic_menu: 0,
         canvas_panel: 0,
         canvas_surface: 0,
         drag_active: false,
@@ -2224,6 +2376,7 @@ pub(super) fn workbench_gui(
         toolbar_items: Vec::new(),
         context_menu: 0,
         scene_menu: 0,
+        editor_menu: 0,
     }));
 
     // The interface catalogue is runtime data under `language/`; load it into the library's manager
@@ -2513,6 +2666,67 @@ pub(super) fn workbench_gui(
     }
     if let Ok(mut gui) = gui.lock() {
         gui.scene_menu = scene_menu.raw_id();
+    }
+
+    // The editor-tab context menu (blue21 §3.3). The tab strip is the library's `TabWidget`, which
+    // publishes `context_menu_requested` and `tab_index_at`; the menu therefore acts on the tab under
+    // the pointer, not on whichever tab happened to be active.
+    let editor_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+    let mut editor_actions: BTreeMap<String, String> = BTreeMap::new();
+    for (key, action) in [
+        ("ui.context.editor.close", "close"),
+        ("ui.context.editor.close-others", "close-others"),
+        ("ui.context.editor.close-right", "close-right"),
+        ("ui.context.editor.split", "split"),
+        ("ui.context.editor.next-group", "next-group"),
+    ] {
+        let label = tr(key);
+        handle.new_menu_item(&editor_menu, &label, None);
+        editor_actions.insert(label, action.to_owned());
+    }
+    {
+        let gui = Arc::clone(&gui);
+        let actions = editor_actions.clone();
+        editor_menu.on_triggered(move |label| {
+            if let Ok(mut gui) = gui.lock() {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                editor_context_action(&mut gui, &action, &label);
+            }
+        });
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.editor_menu = editor_menu.raw_id();
+    }
+
+    // The Messages (diagnostics/log) context menu. It is row-scoped: the ListBox reports the row
+    // under the pointer, and Copy works on that row rather than on whichever row was last selected.
+    let diagnostic_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+    let mut diagnostic_actions: BTreeMap<String, String> = BTreeMap::new();
+    for (key, action) in [
+        ("ui.context.diagnostic.copy", "copy"),
+        ("ui.context.diagnostic.copy-all", "copy-all"),
+        ("ui.context.diagnostic.clear", "clear"),
+    ] {
+        let label = tr(key);
+        handle.new_menu_item(&diagnostic_menu, &label, None);
+        diagnostic_actions.insert(label, action.to_owned());
+    }
+    {
+        let gui = Arc::clone(&gui);
+        let actions = diagnostic_actions.clone();
+        diagnostic_menu.on_triggered(move |label| {
+            if let Ok(mut gui) = gui.lock() {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                diagnostic_context_action(&mut gui, &action, &label);
+            }
+        });
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.diagnostic_menu = diagnostic_menu.raw_id();
     }
 
     // Docked panels. The model owns which panels exist and whether they are shown; the responsive
@@ -2901,7 +3115,41 @@ pub(super) fn workbench_gui(
             entry.push(panel.raw_id());
             entry.push(list_id);
             entry.extend(extra_widgets);
+            if id == "messages" {
+                gui.messages_list = list_id;
+                gui.messages = vec![tr("ui.status.ready")];
+            }
         }
+    }
+
+    // The Messages log's context menu: Copy the row under the pointer, copy every line, or clear.
+    let messages_list = match gui.lock() {
+        Ok(gui) => gui.messages_list,
+        Err(_) => 0,
+    };
+    if messages_list != 0 {
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(messages_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            let Some(index) = list_row_at(messages_list, x, y) else {
+                return;
+            };
+            if let Ok(mut gui) = menu_gui.lock() {
+                gui.diagnostic_row = Some(index);
+                let _ = rust_widgets::list_box_set_current_index(messages_list, index);
+                if gui.diagnostic_menu != 0
+                    && !MenuHandle::from_raw(gui.diagnostic_menu).open_at(
+                        x,
+                        y,
+                        Rect::new(0, 0, WIDTH, HEIGHT),
+                    )
+                {
+                    warn_failure("the diagnostics context menu could not open", payload);
+                }
+            }
+        });
     }
 
     // The Inspector's editor: the property grid commits a cell through `cell_changed`, and the
@@ -3031,9 +3279,9 @@ pub(super) fn workbench_gui(
         if let Ok(mut gui) = gui.lock() {
             sync_outline(&mut gui);
         }
-        let gui = Arc::clone(&gui);
+        let list_gui = Arc::clone(&gui);
         subscribe_index(list_id, "item_selected", move |index| {
-            if let Ok(mut gui) = gui.lock()
+            if let Ok(mut gui) = list_gui.lock()
                 && let Some(node) = gui.scene.row_nodes().get(index as usize).copied()
             {
                 // Rebuilding the list sets the current row to the selection; that programmatic
@@ -3048,6 +3296,34 @@ pub(super) fn workbench_gui(
                     &format!("outline item_selected {index} -> node {}", node.get()),
                 );
                 select_node(&mut gui, node, "tree");
+            }
+        });
+        // The same menu the canvas opens, now row-specific: the ListBox publishes both the request
+        // and the row under the pointer, so a right-click on another row selects that row first.
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(list_id, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            let Some(index) = list_row_at(list_id, x, y) else {
+                return;
+            };
+            if let Ok(mut gui) = menu_gui.lock() {
+                let Some(node) = gui.scene.row_nodes().get(index).copied() else {
+                    return;
+                };
+                if gui.scene.primary() != Some(node) {
+                    select_node(&mut gui, node, "context");
+                }
+                if gui.scene_menu != 0
+                    && !MenuHandle::from_raw(gui.scene_menu).open_at(
+                        x,
+                        y,
+                        Rect::new(0, 0, WIDTH, HEIGHT),
+                    )
+                {
+                    warn_failure("the outline context menu could not open", payload);
+                }
             }
         });
     }
@@ -3601,6 +3877,38 @@ pub(super) fn workbench_gui(
             });
         }
         watch_focus(tab_strip.raw_id(), "editor tabs");
+        {
+            let gui = Arc::clone(&gui);
+            let strip = tab_strip.raw_id();
+            subscribe_string(strip, "context_menu_requested", move |payload| {
+                let Some((x, y)) = point_of(payload) else {
+                    return;
+                };
+                let Some(index) = tab_at(strip, x, y) else {
+                    return;
+                };
+                if let Ok(mut gui) = gui.lock() {
+                    let Some(id) = gui.groups.group_ids().get(group).copied() else {
+                        return;
+                    };
+                    if let Some(Err(reason)) =
+                        gui.groups.tabs_mut(id).map(|tabs| tabs.activate(index))
+                    {
+                        warn_failure("a tab could not be activated before its menu", reason);
+                    }
+                    gui.sync_editors();
+                    if gui.editor_menu != 0
+                        && !MenuHandle::from_raw(gui.editor_menu).open_at(
+                            x,
+                            y,
+                            Rect::new(0, 0, WIDTH, HEIGHT),
+                        )
+                    {
+                        warn_failure("the editor context menu could not open", payload);
+                    }
+                }
+            });
+        }
         let mut all = vec![tab_strip.raw_id()];
         if let Ok(mut gui) = gui.lock() {
             gui.placements.push((

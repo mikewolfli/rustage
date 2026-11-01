@@ -94,7 +94,7 @@ pub const TEMPLATE_KEYS: [&str; 7] = [
 /// The workbench window's own labels, keyed by what they name.
 ///
 /// The keys of the workbench window's labels.
-pub const WINDOW_KEYS: [&str; 107] = [
+pub const WINDOW_KEYS: [&str; 115] = [
     "ui.panel.pages",
     "ui.panel.outline",
     "ui.panel.events",
@@ -151,6 +151,14 @@ pub const WINDOW_KEYS: [&str; 107] = [
     "ui.context.toggle-hide",
     "ui.context.toggle-lock",
     "ui.context.raise",
+    "ui.context.editor.close",
+    "ui.context.editor.close-others",
+    "ui.context.editor.close-right",
+    "ui.context.editor.split",
+    "ui.context.editor.next-group",
+    "ui.context.diagnostic.copy",
+    "ui.context.diagnostic.copy-all",
+    "ui.context.diagnostic.clear",
     "ui.status.ready",
     "ui.status.no-document",
     "ui.status.no-problems",

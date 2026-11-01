@@ -13,6 +13,7 @@ pub mod journey;
 pub mod lockfile;
 pub mod maintenance;
 mod manifest;
+pub mod package;
 pub mod provenance;
 pub mod sign;
 pub mod stage;

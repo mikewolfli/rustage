@@ -289,6 +289,30 @@
     "ui.context.raise": {
       "message": "上移一层"
     },
+    "ui.context.editor.close": {
+      "message": "关闭标签页"
+    },
+    "ui.context.editor.close-others": {
+      "message": "关闭其他标签页"
+    },
+    "ui.context.editor.close-right": {
+      "message": "关闭右侧标签页"
+    },
+    "ui.context.editor.split": {
+      "message": "拆分编辑器"
+    },
+    "ui.context.editor.next-group": {
+      "message": "下一个编辑器组"
+    },
+    "ui.context.diagnostic.copy": {
+      "message": "复制消息"
+    },
+    "ui.context.diagnostic.copy-all": {
+      "message": "复制全部消息"
+    },
+    "ui.context.diagnostic.clear": {
+      "message": "清空消息"
+    },
     "ui.data.dataset": {
       "message": "数据集"
     },

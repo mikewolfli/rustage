@@ -289,6 +289,30 @@
     "ui.context.raise": {
       "message": "Bring forward"
     },
+    "ui.context.editor.close": {
+      "message": "Close tab"
+    },
+    "ui.context.editor.close-others": {
+      "message": "Close other tabs"
+    },
+    "ui.context.editor.close-right": {
+      "message": "Close tabs to the right"
+    },
+    "ui.context.editor.split": {
+      "message": "Split editor"
+    },
+    "ui.context.editor.next-group": {
+      "message": "Next editor group"
+    },
+    "ui.context.diagnostic.copy": {
+      "message": "Copy message"
+    },
+    "ui.context.diagnostic.copy-all": {
+      "message": "Copy all messages"
+    },
+    "ui.context.diagnostic.clear": {
+      "message": "Clear messages"
+    },
     "ui.data.dataset": {
       "message": "dataset"
     },

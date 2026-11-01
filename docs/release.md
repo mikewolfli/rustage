@@ -104,6 +104,24 @@ the caller to declare `artifact:` again with those values. Linux writes a detach
 the artifact bytes unchanged. `notarize` submits with `notarytool --wait` and staples the ticket; the
 host neither stores nor asks for the Apple credentials.
 
+## 4c. Desktop packages (T25.02)
+
+```sh
+rustage --release freeze:<rev>:<gen> package:<version> \
+                   stage:./target/release/rustage:dist/stage \
+                   bundle:dmg:dist/stage:dist/rustage.dmg \
+                   bundle:deb:dist/stage:dist/rustage.deb
+```
+
+- `dmg` uses `hdiutil create -srcfolder`, so the image holds exactly the staged tree; it is a macOS
+  command and refuses elsewhere.
+- `deb` is built without `dpkg-deb`: `debian-binary`, `control.tar.gz` and `data.tar.gz` are written
+  and packed with `ar qc` in that order (the test asserts the order `dpkg` requires). The payload
+  installs under `/opt/rustage`.
+- `msi` is refused with WiX named as the missing tool; it must be built on a Windows machine with
+  the WiX toolset, and the host will not write a file no installer accepts.
+- The command prints the package's size and SHA-256, which can be declared as an `artifact:`.
+
 ## 5. Updates and rollback
 
 ```sh
@@ -168,9 +186,9 @@ rustage --release upgrade:<widget>,<toolchain>,<version>:<widget>,<toolchain>,<v
 
 - **No signing or notarisation command.** `artifact ... signed` records a status; producing the
   signature is the platform tooling's job.
-- **No installer packaging.** No `.dmg`, `.msi` or `.deb` builder is in this repository. `--release
-  stage` produces the validated input an installer takes, and `deploy` copies it without
-  overwriting; registering the result with an operating-system uninstaller is still manual.
+- **No installer packaging for Windows.** `dmg` and `deb` are built; an `.msi` needs WiX, which is
+  not installed here, so `bundle:msi` refuses and names it. No `.dmg`/`.deb`/`.msi` signing or
+  notarisation is automated beyond the `sign`/`notarize` commands.
 - **Signing needs the platform tool and a real identity.** `sign` works with an ad-hoc macOS
   identity for testing; a distributable release needs a Developer ID, a Windows certificate and a
   GPG key respectively. Notarisation needs Apple credentials in a `notarytool` profile.

@@ -41,7 +41,11 @@
 //! **What this module deliberately does not own.** It has no TLS implementation: this build has no
 //! TLS client at all, so [`TlsPolicy`] is configuration that a future transport (T16.x, T20.x, T23.x)
 //! will consume, and what is verified here is that the configuration cannot be weakened and cannot
-//! be resolved from material that is missing. It does not decide where a project stores its policy
+//! be resolved from material that is missing. Because a configuration that no transport carries is
+//! not a capability, [`connect`] refuses to send plaintext where the configuration asked for more:
+//! a non-loopback address, an added trust anchor or a client certificate is a refusal naming this
+//! build's missing TLS client, not a quiet downgrade (principle #22). Loopback readiness probes still
+//! use a plain TCP connection, and their permit says so through [`ResolvedTls::is_carried`]. It does not decide where a project stores its policy
 //! (T02.01 owns the project's public configuration) and it does not implement an HTTP client, a
 //! retry policy or a proxy dialer.
 
@@ -525,6 +529,16 @@ impl ResolvedTls {
         self.client_certificate.is_some()
     }
 
+    /// Whether this build's transport actually performs the TLS this configuration describes.
+    ///
+    /// `false` is the honest answer for every configuration in this build: there is no TLS client,
+    /// so [`connect`] only opens a plain connection where that answer cannot mislead a caller (a
+    /// loopback address and no configured anchor or certificate). A caller that reads this value can
+    /// tell "the policy was resolved" from "the policy is carried on the wire".
+    pub const fn is_carried(&self) -> bool {
+        false
+    }
+
     /// One line for a report. Never the certificate.
     pub fn render(&self) -> String {
         format!(
@@ -993,6 +1007,15 @@ impl NetworkPermit {
         self.credential.as_ref()
     }
 
+    /// What this build's transport does with the connection, in one line.
+    pub fn transport(&self) -> &'static str {
+        if self.tls.is_carried() {
+            "the configured TLS policy"
+        } else {
+            "plain TCP; this build has no TLS client"
+        }
+    }
+
     /// The permit in one line, and it is what a log line carries.
     ///
     /// The credential appears through [`Secret`]'s own `Debug`, which prints its length and nothing
@@ -1123,8 +1146,11 @@ impl NetworkGateway {
 /// Opens a connection to the service a permit is for.
 ///
 /// The only way to reach a declared service, and the reason the permit type exists: a caller cannot
-/// open a socket without one. Plain TCP for now — this build has no TLS client (see the module docs)
-/// — and it says so with the address it used.
+/// open a socket without one. This build has no TLS client, so a plain connection is opened only
+/// when it cannot contradict the permit: every resolved address is loopback **and** the policy
+/// configured no added anchor and no client certificate. Anything else is refused before a socket is
+/// opened, naming the missing TLS client rather than sending traffic the configuration did not ask
+/// for.
 pub fn connect(permit: &NetworkPermit, timeout: Duration) -> Result<TcpStream, ConnectFailure> {
     let addresses = (permit.host(), permit.port())
         .to_socket_addrs()
@@ -1132,7 +1158,40 @@ pub fn connect(permit: &NetworkPermit, timeout: Duration) -> Result<TcpStream, C
             host: permit.host().to_owned(),
             port: permit.port(),
             reason: error.to_string(),
-        })?;
+        })?
+        .collect::<Vec<_>>();
+    if !permit.tls.is_carried() {
+        if permit.tls.presents_client_certificate() {
+            return Err(ConnectFailure {
+                host: permit.host().to_owned(),
+                port: permit.port(),
+                reason:
+                    "this build has no TLS client, so the configured client certificate cannot \
+                         be presented; the connection was not opened"
+                        .to_owned(),
+            });
+        }
+        if !matches!(permit.tls.roots(), CertificateSource::System) {
+            return Err(ConnectFailure {
+                host: permit.host().to_owned(),
+                port: permit.port(),
+                reason:
+                    "this build has no TLS client, so the added trust anchor cannot be applied; \
+                         the connection was not opened"
+                        .to_owned(),
+            });
+        }
+        if let Some(remote) = addresses.iter().find(|address| !address.ip().is_loopback()) {
+            return Err(ConnectFailure {
+                host: permit.host().to_owned(),
+                port: permit.port(),
+                reason: format!(
+                    "this build has no TLS client; refusing to send plain traffic to {}",
+                    remote.ip()
+                ),
+            });
+        }
+    }
     let mut last = None;
     for address in addresses {
         match TcpStream::connect_timeout(&address, timeout) {
@@ -1843,6 +1902,69 @@ mod tests {
         assert!(!text.contains("hunter2"), "{text}");
         assert!(text.contains("[redacted]"));
         assert!(text.contains("proxy.invalid"), "only the secret is removed");
+    }
+
+    #[test]
+    fn a_remote_service_is_refused_because_this_build_has_no_tls_client() {
+        // The configuration asks for verification; the transport cannot provide it. Sending plain
+        // traffic anyway would be the quiet downgrade principle #22 forbids, so the refusal happens
+        // before a socket is opened and names the missing capability.
+        let permit = NetworkPermit {
+            service: "remote".to_owned(),
+            host: "192.0.2.1".to_owned(),
+            port: 443,
+            tls: ResolvedTls {
+                roots: CertificateSource::System,
+                client_certificate: None,
+            },
+            credential: None,
+            via: Capability::RequestNetworkService,
+            policy_source: "a test",
+        };
+
+        let failure = connect(&permit, Duration::from_millis(300)).expect_err("refused");
+
+        assert!(
+            failure.message().contains("no TLS client"),
+            "{}",
+            failure.message()
+        );
+        assert!(
+            failure.message().contains("192.0.2.1"),
+            "{}",
+            failure.message()
+        );
+        assert_eq!(
+            permit.transport(),
+            "plain TCP; this build has no TLS client"
+        );
+        assert!(!permit.tls().is_carried());
+    }
+
+    #[test]
+    fn a_configured_certificate_is_not_silently_dropped_even_on_loopback() {
+        // A client certificate is material the caller configured. A plain loopback connection would
+        // carry none of it, so answering "connected" would claim a presentation that never happened.
+        let permit = NetworkPermit {
+            service: "loopback".to_owned(),
+            host: "127.0.0.1".to_owned(),
+            port: 9,
+            tls: ResolvedTls {
+                roots: CertificateSource::System,
+                client_certificate: Some(Secret::new("certificate material")),
+            },
+            credential: None,
+            via: Capability::RequestNetworkService,
+            policy_source: "a test",
+        };
+
+        let failure = connect(&permit, Duration::from_millis(100)).expect_err("refused");
+
+        assert!(
+            failure.message().contains("client certificate"),
+            "{}",
+            failure.message()
+        );
     }
 
     #[test]

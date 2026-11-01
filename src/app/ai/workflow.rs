@@ -737,25 +737,45 @@ impl ToolCall {
     ///
     /// The JSON-RPC `id` belongs to the transport (it pairs the answer with the request), so this
     /// seam does not invent one; a transport that needs one adds it around this body.
-    pub fn mcp_json(&self) -> String {
-        let mut params = crate::project::record::json::JsonObject::new();
-        params.insert(
-            "name",
-            crate::project::record::json::Json::string(self.name.clone()),
-        );
-        // The arguments are already JSON by contract; embedding them as text keeps this writer
-        // free of a second parser and lets the transport decide whether to validate them.
-        params.insert(
-            "arguments",
-            crate::project::record::json::Json::string(self.arguments.clone()),
-        );
+    ///
+    /// MCP defines `arguments` as a map, so the call's text has to be a JSON object. Text that is not
+    /// one is refused rather than embedded as a string that no server would read as arguments.
+    pub fn mcp_json(&self) -> Result<String, String> {
+        let params = self.mcp_params()?;
         let mut root = crate::project::record::json::JsonObject::new();
         root.insert(
             "method",
             crate::project::record::json::Json::string("tools/call"),
         );
         root.insert("params", crate::project::record::json::Json::Object(params));
-        crate::project::record::json::Json::Object(root).render_compact()
+        Ok(crate::project::record::json::Json::Object(root).render_compact())
+    }
+
+    /// The `params` member of the MCP request.
+    ///
+    /// Shared by the preview body and the stdio transport, so the bytes a person reviews and the
+    /// bytes a server receives cannot disagree (principle #59).
+    pub(super) fn mcp_params(&self) -> Result<crate::project::record::json::JsonObject, String> {
+        use crate::project::record::json::{self, Json, JsonObject};
+        let arguments = json::parse(&self.arguments).map_err(|error| {
+            format!(
+                "the arguments of {} are not JSON: {} (line {}, column {})",
+                self.name,
+                error.kind().message(),
+                error.line(),
+                error.column()
+            )
+        })?;
+        if !matches!(arguments, Json::Object(_)) {
+            return Err(format!(
+                "the arguments of {} are not a JSON object, which MCP requires",
+                self.name
+            ));
+        }
+        let mut params = JsonObject::new();
+        params.insert("name", Json::string(self.name.clone()));
+        params.insert("arguments", arguments);
+        Ok(params)
     }
 }
 
@@ -1134,8 +1154,15 @@ mod tests {
             .preview_tool("read_file", "path=a.rs,token=abc")
             .expect("the tool is allowlisted");
         assert!(call.preview().contains("[redacted]"), "{}", call.preview());
-        assert!(call.mcp_json().contains("\"method\":\"tools/call\""));
-        assert!(call.mcp_json().contains("read_file"));
+        // MCP requires a JSON object for `arguments`; the non-JSON text above is still a valid
+        // preview and authorization key, but it is not a sendable request body.
+        assert!(call.mcp_json().is_err());
+        let structured = session
+            .preview_tool("read_file", "{\"path\":\"a.rs\",\"token\":\"abc\"}")
+            .expect("the tool is allowlisted");
+        let body = structured.mcp_json().expect("a JSON object is sendable");
+        assert!(body.contains("\"method\":\"tools/call\""), "{body}");
+        assert!(body.contains("read_file"), "{body}");
 
         let mut policy = ToolPolicy::default();
         assert!(!policy.decide(&call).allowed());

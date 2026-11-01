@@ -6,8 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::app::ai::{
-    Candidate, Change, ChangeSet, Context, ContextFile, Handoff, InvocationOutcome, Role, Session,
-    ToolCall, ToolPolicy, UsageRecord, Verification, Workspace,
+    Candidate, Change, ChangeSet, Context, ContextFile, Handoff, InvocationOutcome, Journal,
+    McpServer, Role, Session, SessionRecord, ToolCall, ToolPolicy, UsageRecord, Verification,
+    Workspace,
 };
 
 /// Runs the optional AI operations, printing each answer as it is read.
@@ -32,8 +33,14 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
     let mut tool_arguments = String::new();
     let mut tool_preview: Option<ToolCall> = None;
     let mut tool_policy = ToolPolicy::default();
+    // The stdio transport (T23.11). The program is named first, arguments follow, and only
+    // `mcp-start` opens the process — naming it is not starting it.
+    let mut mcp_program: Option<String> = None;
+    let mut mcp_arguments: Vec<String> = Vec::new();
+    let mut mcp_server: Option<McpServer> = None;
     let mut shared: Vec<String> = Vec::new();
     let mut handoff: Option<Handoff> = None;
+    let mut journal: Option<Journal> = None;
     let mut changes = Vec::new();
     let mut base_revision = 1;
     let mut candidate: Option<Candidate> = None;
@@ -122,8 +129,87 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                 None => Err("preview a tool call first".to_owned()),
             },
             "tool-mcp" => match tool_preview.as_ref() {
-                Some(call) => Ok(vec![call.mcp_json()]),
+                Some(call) => match call.mcp_json() {
+                    Ok(body) => Ok(vec![body]),
+                    Err(reason) => Err(reason),
+                },
                 None => Err("preview a tool call first".to_owned()),
+            },
+            "mcp-server" => {
+                mcp_program = Some(argument.to_owned());
+                mcp_arguments.clear();
+                Ok(vec![format!("mcp server {argument}")])
+            }
+            "mcp-arg" => {
+                mcp_arguments.push(argument.to_owned());
+                Ok(vec![format!("mcp argument {argument}")])
+            }
+            "mcp-start" => {
+                let Some(program) = mcp_program.clone() else {
+                    return super::report("name the server with mcp-server first".to_owned());
+                };
+                let permit = match crate::host::permission::PermissionService::new().permit(
+                    crate::contracts::permission::EffectClass::Command,
+                    crate::host::permission::Scope::Session,
+                    crate::contracts::permission::Principal::Human,
+                ) {
+                    Ok(permit) => permit,
+                    Err(refusal) => return super::report(refusal.message()),
+                };
+                let spec = crate::host::subprocess::ProcessSpec::new("mcp-server", program)
+                    .args(mcp_arguments.iter().cloned());
+                match McpServer::start(spec, crate::app::ai::DEFAULT_REQUEST_TIMEOUT, &permit) {
+                    Ok(mut server) => match server.initialize() {
+                        Ok(result) => {
+                            let lines = vec![
+                                format!("mcp started {} (pid {})", server.label(), server.pid()),
+                                format!("initialize: {}", result.render_compact()),
+                            ];
+                            mcp_server = Some(server);
+                            Ok(lines)
+                        }
+                        Err(failure) => {
+                            let stderr = server.stderr();
+                            let mut message = failure.message();
+                            if !stderr.is_empty() {
+                                message.push_str(&format!("; stderr: {}", stderr.trim()));
+                            }
+                            server.shutdown(std::time::Duration::from_millis(500));
+                            Err(message)
+                        }
+                    },
+                    Err(failure) => Err(failure.message()),
+                }
+            }
+            "mcp-tools" => match mcp_server.as_mut() {
+                Some(server) => match server.list_tools() {
+                    Ok(result) => Ok(vec![format!("tools: {}", result.render_compact())]),
+                    Err(failure) => Err(failure.message()),
+                },
+                None => Err("start an MCP server with mcp-start first".to_owned()),
+            },
+            "mcp-call" => match (mcp_server.as_mut(), tool_preview.as_ref()) {
+                (Some(server), Some(call)) => {
+                    let decision = tool_policy.decide(call);
+                    match server.call_tool(call, &decision) {
+                        Ok(result) => Ok(vec![format!("result: {}", result.render_compact())]),
+                        Err(failure) => Err(failure.message()),
+                    }
+                }
+                (None, _) => Err("start an MCP server with mcp-start first".to_owned()),
+                (_, None) => Err("preview a tool call first".to_owned()),
+            },
+            "mcp-stop" => match mcp_server.take() {
+                Some(mut server) => {
+                    let termination = server.shutdown(std::time::Duration::from_secs(3));
+                    let stderr = server.stderr();
+                    let mut lines = vec![format!("mcp stopped: {}", termination.message())];
+                    if !stderr.trim().is_empty() {
+                        lines.push(format!("stderr: {}", stderr.trim()));
+                    }
+                    Ok(lines)
+                }
+                None => Err("no MCP server is running".to_owned()),
             },
             "tool-clear" => {
                 tool_policy.clear();
@@ -180,6 +266,73 @@ pub(super) fn ai(options: &crate::cli::AiOptions) -> bool {
                     .collect()),
                 None => Err("create a handoff before listing its material".to_owned()),
             },
+            // The durable half of a two-agent session: the journal records the configuration, the
+            // candidates and the handoffs, and its save refuses a copy that another process has
+            // already advanced (T23.12). Loading restores the last candidate and handoff so a
+            // reviewer can continue in a new process.
+            "session-save" => {
+                if argument.is_empty() {
+                    return super::report("session-save needs a path".to_owned());
+                }
+                if journal.is_none() {
+                    journal = Some(Journal::new(SessionRecord::of(&session)));
+                }
+                let entry = journal.as_mut().expect("the journal was just created");
+                entry.set_session(SessionRecord::of(&session));
+                if let Some(candidate) = candidate.as_ref()
+                    && let Err(reason) = entry.add_candidate(candidate.clone())
+                {
+                    return super::report(reason);
+                }
+                if let Some(record) = handoff.as_ref()
+                    && !entry.handoffs().contains(record)
+                {
+                    entry.add_handoff(record.clone());
+                }
+                match entry.save(std::path::Path::new(argument)) {
+                    Ok(seq) => Ok(vec![format!(
+                        "journal {argument} saved at sequence {seq} (format {}): {} candidate(s), {} handoff(s), {} usage record(s)",
+                        crate::app::ai::JOURNAL_VERSION,
+                        entry.candidates().len(),
+                        entry.handoffs().len(),
+                        entry.session().usage.len()
+                    )]),
+                    Err(reason) => Err(reason),
+                }
+            }
+            "session-load" => {
+                if argument.is_empty() {
+                    return super::report("session-load needs a path".to_owned());
+                }
+                match Journal::load(std::path::Path::new(argument)) {
+                    Ok(loaded) => {
+                        session = loaded.session().restore();
+                        candidate = loaded.candidates().last().cloned();
+                        handoff = loaded.handoffs().last().cloned();
+                        let lines = vec![
+                            format!(
+                                "journal {argument} at sequence {}: {} candidate(s), {} handoff(s), {} usage record(s)",
+                                loaded.seq(),
+                                loaded.candidates().len(),
+                                loaded.handoffs().len(),
+                                loaded.session().usage.len()
+                            ),
+                            format!(
+                                "restored role {}, model {:?}, budget {}",
+                                match session.role {
+                                    Role::Coder => "coder",
+                                    Role::Reviewer => "reviewer",
+                                },
+                                session.model,
+                                session.budget
+                            ),
+                        ];
+                        journal = Some(loaded);
+                        Ok(lines)
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
             "credential" => {
                 session.credential = argument.to_owned();
                 Ok(vec![format!("credential {argument}")])

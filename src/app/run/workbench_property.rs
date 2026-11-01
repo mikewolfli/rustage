@@ -133,6 +133,21 @@ impl PropertyState {
         &self.nodes
     }
 
+    /// Empties the Inspector because nothing is selected.
+    ///
+    /// This is not "the schema is unavailable for a node": there is no node. [`Self::apply`]
+    /// refuses with that reason, and the panel shows a "no selection" row instead of one node's
+    /// facts left over from a deleted node.
+    pub(super) fn clear(&mut self) {
+        self.nodes.clear();
+        self.contracts.clear();
+        self.contract_note = None;
+        self.incompatible = None;
+        self.control = None;
+        self.editor = Editor::new(Schema::new());
+        self.unavailable = Some("no node is selected; there is nothing to edit".to_owned());
+    }
+
     /// Points the Inspector at another single node, seeding its value from the tree's name.
     ///
     /// A node the Inspector has already edited keeps its accepted value, so switching the
@@ -993,5 +1008,18 @@ mod tests {
         assert!(note.contains("button.text"), "{note}");
         assert!(note.contains("label.text"), "{note}");
         assert_eq!(state.apply("both").expect("both controls accept text"), 1);
+    }
+
+    #[test]
+    fn clearing_the_selection_empties_the_editor_and_refuses_edits() {
+        let mut state = PropertyState::for_control("window", "title", "Demo");
+        state.clear();
+
+        assert_eq!(state.count(), 0);
+        assert!(state.nodes().is_empty());
+        let refusal = state
+            .apply("anything")
+            .expect_err("there is nothing to edit");
+        assert!(refusal.contains("no node is selected"), "{refusal}");
     }
 }

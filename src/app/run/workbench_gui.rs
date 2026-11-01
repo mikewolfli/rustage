@@ -11,10 +11,11 @@
 //!
 //! # What this first slice does, and does not
 //!
-//! * **Does:** open a real 1280x800 window; show the built-in panels plus `events` and `data`;
-//!   toggle a panel from the toolbar or the menu; save the current panels/groups to a layout file
-//!   and load it on the next start; split the editor into two groups; switch the active tab;
-//!   update the status bar; leave a bounded session on `--exit-after-ms`.
+//! * **Does:** open a real 1280x800 window; show the built-in panels plus `pages`, `events`,
+//!   `widgets` and `data`; insert a control from the contract-backed widget library; toggle a panel
+//!   from the toolbar or the menu; save the current panels/groups to a layout file and load it on the
+//!   next start; split the editor into two groups; switch the active tab; update the status bar; leave
+//!   a bounded session on `--exit-after-ms`.
 //! * **Does not:** drag-dock panels, float them, restore scroll positions per tab, or paint a
 //!   full code editor (the editor area shows the active document's text lines in a list). Those
 //!   are the next slices of the same layer, not a claim made here.
@@ -36,11 +37,16 @@ use rust_widgets::core::{Point, Rect};
 use rust_widgets::layout::{BoxLayout, Layout as _, LayoutConstraints, Orientation, SizePolicy};
 use rust_widgets::widget::PropertyGrid;
 use rust_widgets::widget::capability::CapabilityValue;
-use rust_widgets::widget::runtime::{clear_focus, focus_widget, focused_widget, with_widget_mut};
+use rust_widgets::widget::dialog::input_dialog::InputDialog;
+use rust_widgets::widget::runtime::{
+    self, clear_focus, focus_widget, focused_widget, with_widget_mut,
+};
 use rust_widgets::widget::special_widgets::code_editor::CodeEditor;
 use rust_widgets::widget::{GroupBox, ListBox, Menu, TabWidget, ToolBar};
 
 use crate::app::canvas::scene::Rect as SceneRect;
+use crate::app::canvas::widget_catalog::{Catalog, WidgetDescriptor};
+use crate::app::canvas::widget_favorites::Favorites;
 use crate::app::commands::command::{Context, Registry, built_in};
 use crate::app::commands::palette::Recents;
 use crate::app::shell::groups::{Axis, Groups};
@@ -60,7 +66,7 @@ use super::workbench_layout::{Area, WorkbenchLayout};
 use super::workbench_pages::PagesState;
 use super::workbench_palette::Palette;
 use super::workbench_property::PropertyState;
-use super::workbench_scene::{CanvasLayout, CanvasState, CanvasTransform, span};
+use super::workbench_scene::{CanvasLayout, CanvasState, CanvasTransform, ClipboardSubtree, span};
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 800;
@@ -71,13 +77,70 @@ const CONTENT_Y: i32 = 70;
 const STATUS_Y: i32 = 768;
 const STATUS_HEIGHT: u32 = 28;
 
-/// The panels this window adds to the built-in four.
-const EXTRA_PANELS: [(&str, &str, Dock); 4] = [
+/// The panels this window adds to the built-in set.
+const EXTRA_PANELS: [(&str, &str, Dock); 5] = [
+    ("widgets", "Widgets", Dock::Left),
     ("pages", "Pages", Dock::Left),
     ("events", "Events", Dock::Left),
     ("data", "Data & State", Dock::Right),
     ("debug", "Debug", Dock::Right),
 ];
+
+/// One widget-library row's label: the library's designer category and the control name, with a
+/// `*` when the person marked the control.
+///
+/// The category is a token the contract publishes (`basic`, `advanced`, ...); it is data about the
+/// control, not an interface sentence, so it is not translated here.
+fn widget_row(catalog: &Catalog, descriptor: &WidgetDescriptor) -> String {
+    let marker = if catalog.is_favorite(&descriptor.id) {
+        "* "
+    } else {
+        ""
+    };
+    format!("{marker}[{}] {}", descriptor.category, descriptor.name)
+}
+
+/// The rows for `query`, as `(contract id, label)` pairs.
+///
+/// An empty query lists every control grouped by the library's designer category; a query goes
+/// through the catalog's own fuzzy search, so the window does not keep a second filter. In both
+/// cases the id is what the activation path looks up: a row is a place, not the descriptor itself.
+fn widget_rows(catalog: &Catalog, query: &str) -> Vec<(String, String)> {
+    let query = query.trim();
+    if query.is_empty() {
+        let mut rows = Vec::new();
+        for category in catalog.categories() {
+            for descriptor in catalog.in_category(category) {
+                rows.push((descriptor.id.clone(), widget_row(catalog, descriptor)));
+            }
+        }
+        rows
+    } else {
+        catalog
+            .search(query)
+            .into_iter()
+            .map(|descriptor| (descriptor.id.clone(), widget_row(catalog, descriptor)))
+            .collect()
+    }
+}
+
+/// The property the Inspector edits for one control.
+///
+/// `text` and `title` come first because they are the two properties the scene's own contracts use.
+/// Otherwise the control's first published property. `None` means the Inspector would have nothing
+/// to edit, and the palette refuses that row rather than inventing a property name.
+fn inspector_property(descriptor: &WidgetDescriptor) -> Option<String> {
+    ["text", "title"]
+        .iter()
+        .find_map(|name| {
+            descriptor
+                .properties
+                .iter()
+                .find(|property| property.name == *name)
+        })
+        .or_else(|| descriptor.properties.first())
+        .map(|property| property.name.clone())
+}
 
 /// The Inspector's property grid, the Clear/Reset/Values buttons, the theme field and button,
 /// then the error line and note.
@@ -118,6 +181,24 @@ struct Translatable {
     kind: LabelKind,
 }
 
+/// What the rename dialog answered.
+enum RenameAnswer {
+    /// The field's text, as the dialog reported it.
+    Accepted(String),
+    /// Escape or the cancel path.
+    Cancelled,
+}
+
+/// One answer from the rename dialog, waiting for the main loop to apply it.
+///
+/// The dialog's signals run inside the widget runtime's event dispatch, so they must not lock the
+/// `Gui` (the smoke path already holds it while dispatching). They write this slot instead, and the
+/// poller applies the answer outside every widget borrow.
+struct RenameRequest {
+    node: NodeId,
+    answer: RenameAnswer,
+}
+
 /// A translated label, through the library's global manager (loaded by `main` from the same JSON
 /// packs the CLI reads).
 fn tr(key: &str) -> String {
@@ -132,6 +213,7 @@ fn tr_args(key: &str, arguments: &[(&str, &str)]) -> String {
 /// The catalog key for a panel id.
 fn panel_key(id: &str) -> &'static str {
     match id {
+        "widgets" => "ui.panel.widgets",
         "pages" => "ui.panel.pages",
         "outline" => "ui.panel.outline",
         "events" => "ui.panel.events",
@@ -209,6 +291,20 @@ struct Gui {
     /// The object tree, the canvas scene and the one selection both views read (T09.02–T09.04).
     scene: CanvasState,
     outline_list: u64,
+    /// The in-app scene clipboard (not the OS clipboard; T05.06 owns that payload).
+    scene_clipboard: Option<ClipboardSubtree>,
+    /// The widget library: the captured contract, the persisted favorites, the ids of the rows
+    /// currently shown, the search query those rows came from, the row a context menu is open on,
+    /// the menu itself, and the two controls that show them.
+    widget_catalog: Option<Catalog>,
+    widget_favorites: Favorites,
+    widget_favorites_path: Option<PathBuf>,
+    widget_visible: Vec<String>,
+    widget_query: String,
+    widget_row: Option<usize>,
+    widget_menu: u64,
+    widgets_search: u64,
+    widgets_list: u64,
     /// The Messages panel's log lines, newest last, and the list that shows them.
     messages: Vec<String>,
     messages_list: u64,
@@ -261,6 +357,13 @@ struct Gui {
     outline_rows: Vec<String>,
     outline_index: BTreeMap<NodeId, usize>,
     outline_content_revision: u64,
+    /// Set while the Outline's current row is being written from the model.
+    ///
+    /// `list_box_set_current_index` emits `item_selected` synchronously. That emission is the model
+    /// following itself, not a person clicking: without the guard, a queued rebuild can re-select a
+    /// node the selection already dropped (deleting the selected node used to end with another node
+    /// selected, from a rebuild scheduled before the delete).
+    outline_syncing: Arc<AtomicBool>,
     /// Labels re-read after a translation hot reload.
     translatable: Vec<Translatable>,
     /// The toolbar and the catalog keys of its items, so a reload can rebuild its labels.
@@ -272,6 +375,9 @@ struct Gui {
     scene_menu: u64,
     /// The editor tab's right-click menu.
     editor_menu: u64,
+    /// The mounted rename dialog (0 when none) and the slot its signals write.
+    rename_dialog: u64,
+    rename_slot: Arc<Mutex<Option<RenameRequest>>>,
 }
 
 /// One visible node as the canvas paints it: rectangle, label, and hidden/locked/selected flags.
@@ -805,6 +911,28 @@ fn update_status(gui: &Gui) {
 
 /// Repaints the Inspector rows from the one property model and the selected node.
 fn refresh_inspector(gui: &mut Gui) {
+    if gui.property.count() == 0 {
+        // Nothing is selected: one explicit row rather than the last node's rows. The editable row
+        // is gone, so the grid has no cell to commit and `apply` refuses through the same model.
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-property",
+            "inspector rows: no selection",
+        );
+        let rows: Vec<GridRow> = vec![(
+            tr("ui.inspector.node"),
+            tr("ui.placeholder.no-selection"),
+            false,
+        )];
+        set_property_rows(gui.property_grid, &rows, None);
+        if gui.property_error != 0 {
+            rust_widgets::set_widget_text(gui.property_error, &tr("ui.placeholder.no-selection"));
+        }
+        if gui.inspect_note != 0 {
+            rust_widgets::set_widget_text(gui.inspect_note, "");
+        }
+        return;
+    }
     let kind = gui
         .scene
         .kind(gui.property.node())
@@ -1337,6 +1465,8 @@ fn sync_outline(gui: &mut Gui) {
         .primary()
         .and_then(|node| gui.outline_index.get(&node).copied());
     let rows = rows_changed.then(|| gui.outline_rows.clone());
+    let syncing = Arc::clone(&gui.outline_syncing);
+    let last = rows.as_ref().map_or(0, Vec::len).saturating_sub(1);
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
         if let Some(rows) = rows {
             rust_widgets::list_box_clear_items(list);
@@ -1344,9 +1474,23 @@ fn sync_outline(gui: &mut Gui) {
                 let _ = rust_widgets::list_box_add_item(list, row);
             }
         }
-        if let Some(index) = selected {
-            let _ = rust_widgets::list_box_set_current_index(list, index);
+        syncing.store(true, Ordering::SeqCst);
+        match selected {
+            Some(index) => {
+                let _ = rust_widgets::list_box_set_current_index(list, index.min(last));
+            }
+            None => {
+                // No selection: clear the list's current row rather than pointing it at the last
+                // row, which would make an unselected outline look selected.
+                let _ = with_widget_mut(list, |widget| {
+                    if let Some(box_) = (widget as &mut dyn Any).downcast_mut::<ListBox>() {
+                        box_.clear_selection();
+                    }
+                    true
+                });
+            }
         }
+        syncing.store(false, Ordering::SeqCst);
     });
 }
 
@@ -1485,11 +1629,15 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
 /// a pointer gesture cannot disagree. A hidden node leaves the selection (the canvas no longer
 /// draws it); a locked node stays selected but is refused by the design gestures it would block.
 fn scene_context_action(gui: &mut Gui, action: &str) {
-    let Some(node) = gui.scene.primary() else {
+    // Paste is the one scene action that does not need a node: its target is the nearest container
+    // at or above the selection, and with no selection that is the first root container.
+    let node = gui.scene.primary();
+    if node.is_none() && action != "paste-node" {
         gui.message = tr("ui.status.unknown-action");
         update_status(gui);
         return;
-    };
+    }
+    let node = node.unwrap_or_else(|| NodeId::from_raw(0));
     let name = gui.scene.name(node).unwrap_or("?").to_owned();
     match action {
         "select-parent" => match gui.scene.parent(node) {
@@ -1498,6 +1646,148 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
                 let node_text = node.get().to_string();
                 gui.message = tr_args("ui.status.no-parent", &[("node", &node_text)]);
                 update_status(gui);
+            }
+        },
+        "select-child" => match gui.scene.first_child(node) {
+            Some(child) => select_node(gui, child, "context"),
+            None => {
+                gui.message = tr_args("ui.status.no-child", &[("name", &name)]);
+                update_status(gui);
+            }
+        },
+        "rename" => open_rename(gui),
+        "move-out" => match gui.scene.move_out_of_container(node) {
+            Ok(parent) => {
+                let parent_name = gui.scene.name(parent).unwrap_or("?").to_owned();
+                sync_outline(gui);
+                sync_canvas(gui);
+                gui.message = tr_args(
+                    "ui.status.moved-out",
+                    &[("name", &name), ("parent", &parent_name)],
+                );
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("moved {name} out of {parent_name}"),
+                );
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.error.not-moved-out", &[("reason", &reason)]);
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-scene",
+                    &format!("node {} was not moved out: {reason}", node.get()),
+                );
+            }
+        },
+        "move-into" => match gui.scene.move_into_previous_container(node) {
+            Ok(target) => {
+                let target_name = gui.scene.name(target).unwrap_or("?").to_owned();
+                sync_outline(gui);
+                sync_canvas(gui);
+                gui.message = tr_args(
+                    "ui.status.moved-into",
+                    &[("name", &name), ("parent", &target_name)],
+                );
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("moved {name} into {target_name}"),
+                );
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.error.not-moved-into", &[("reason", &reason)]);
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-scene",
+                    &format!(
+                        "node {} was not moved into a container: {reason}",
+                        node.get()
+                    ),
+                );
+            }
+        },
+        "copy-node" => match gui.scene.copy_subtree(node) {
+            Ok(subtree) => {
+                let count = subtree.len();
+                gui.scene_clipboard = Some(subtree);
+                gui.message = tr_args(
+                    "ui.status.node-copied",
+                    &[("name", &name), ("count", &count.to_string())],
+                );
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("copied {name} ({count} node(s)) to the scene clipboard"),
+                );
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.error.copy-refused", &[("reason", &reason)]);
+                update_status(gui);
+            }
+        },
+        "paste-node" => {
+            let Some(subtree) = gui.scene_clipboard.clone() else {
+                gui.message = tr("ui.error.nothing-to-paste");
+                update_status(gui);
+                return;
+            };
+            let count = subtree.len();
+            match gui.scene.paste_clipboard(&subtree) {
+                Ok(root) => {
+                    select_node(gui, root, "paste");
+                    gui.message = tr_args(
+                        "ui.status.node-pasted",
+                        &[
+                            ("count", &count.to_string()),
+                            ("node", &root.get().to_string()),
+                        ],
+                    );
+                    update_status(gui);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench-scene",
+                        &format!("pasted {count} node(s) as node {}", root.get()),
+                    );
+                }
+                Err(reason) => {
+                    gui.message = tr_args("ui.error.paste-refused", &[("reason", &reason)]);
+                    update_status(gui);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "app::run::workbench-scene",
+                        &format!("paste was refused: {reason}"),
+                    );
+                }
+            }
+        }
+        "wrap-container" => match gui.scene.wrap_in_container(node) {
+            Ok(container) => {
+                select_node(gui, container, "context");
+                gui.message = tr_args(
+                    "ui.status.wrapped",
+                    &[("name", &name), ("node", &container.get().to_string())],
+                );
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("wrapped {name} in container {}", container.get()),
+                );
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.error.not-wrapped", &[("reason", &reason)]);
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-scene",
+                    &format!("node {} was not wrapped: {reason}", node.get()),
+                );
             }
         },
         "toggle-lock" => {
@@ -1536,8 +1826,233 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
             sync_outline(gui);
             update_status(gui);
         }
+        "raise-one" => {
+            if gui.scene.raise_one(node) {
+                gui.message = tr_args("ui.status.moved-up", &[("name", &name)]);
+            } else {
+                gui.message = tr_args("ui.status.already-top", &[("name", &name)]);
+            }
+            sync_canvas(gui);
+            update_status(gui);
+        }
+        "lower-one" => {
+            if gui.scene.lower_one(node) {
+                gui.message = tr_args("ui.status.moved-down", &[("name", &name)]);
+            } else {
+                gui.message = tr_args("ui.status.already-bottom", &[("name", &name)]);
+            }
+            sync_canvas(gui);
+            update_status(gui);
+        }
+        "send-to-back" => {
+            if gui.scene.send_to_back(node) {
+                gui.message = tr_args("ui.status.sent-to-back", &[("name", &name)]);
+            } else {
+                gui.message = tr_args("ui.status.already-bottom", &[("name", &name)]);
+            }
+            sync_canvas(gui);
+            update_status(gui);
+        }
+        "duplicate" => match gui.scene.duplicate(node) {
+            Ok(copy) => {
+                select_node(gui, copy, "context");
+                gui.message = tr_args(
+                    "ui.status.duplicated",
+                    &[("name", &name), ("node", &copy.get().to_string())],
+                );
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("duplicated {name} as node {}", copy.get()),
+                );
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.error.not-duplicated", &[("reason", &reason)]);
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-scene",
+                    &format!("node {} was not duplicated: {reason}", node.get()),
+                );
+            }
+        },
+        "delete" => match gui.scene.delete(node) {
+            Ok(report) => {
+                // The deleted node is no longer selected, so the Inspector must stop showing its
+                // contract; without this it would keep editing a node the tree no longer holds.
+                gui.property.clear();
+                retarget_panels(gui);
+                refresh_inspector(gui);
+                sync_canvas(gui);
+                sync_outline(gui);
+                gui.message = tr_args("ui.status.deleted", &[("name", &name), ("report", &report)]);
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench-scene",
+                    &format!("deleted {name}: {report}"),
+                );
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.error.not-deleted", &[("reason", &reason)]);
+                update_status(gui);
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-scene",
+                    &format!("node {} was not deleted: {reason}", node.get()),
+                );
+            }
+        },
         _ => {}
     }
+}
+
+/// Opens the library's input dialog to rename the selected node.
+///
+/// The dialog is mounted on the modal stack and its signals write [`Gui::rename_slot`]; they never
+/// lock the `Gui`, because they run inside the runtime's event dispatch (the smoke path dispatches
+/// the accept key while already holding the lock). The poller applies the answer afterwards.
+fn open_rename(gui: &mut Gui) {
+    let Some(node) = gui.scene.primary() else {
+        gui.message = tr("ui.placeholder.no-selection");
+        update_status(gui);
+        return;
+    };
+    if gui.rename_dialog != 0 {
+        let old = gui.rename_dialog;
+        runtime::exit_modal(old);
+        runtime::unregister(old);
+        gui.rename_dialog = 0;
+    }
+    let current = gui.scene.name(node).unwrap_or("").to_owned();
+    let mut dialog = InputDialog::new(Rect::new(
+        (WIDTH as i32 - 360) / 2,
+        (HEIGHT as i32 - 160) / 2,
+        360,
+        160,
+    ));
+    dialog.set_title(tr("ui.dialog.rename-title"));
+    dialog.set_label_text(tr("ui.dialog.rename-label"));
+    dialog.set_text_value(current.clone());
+
+    let typed = Arc::new(Mutex::new(current.clone()));
+    {
+        let typed = Arc::clone(&typed);
+        dialog.text_value_changed.connect(move |text| {
+            if let Ok(mut slot) = typed.lock() {
+                *slot = (*text).clone();
+            }
+        });
+    }
+    let slot = Arc::clone(&gui.rename_slot);
+    {
+        let slot = Arc::clone(&slot);
+        let typed = Arc::clone(&typed);
+        dialog.accepted.connect(move || {
+            let text = typed.lock().map(|text| text.clone()).unwrap_or_default();
+            if let Ok(mut pending) = slot.lock() {
+                *pending = Some(RenameRequest {
+                    node,
+                    answer: RenameAnswer::Accepted(text),
+                });
+            }
+        });
+    }
+    dialog.rejected.connect(move || {
+        if let Ok(mut pending) = slot.lock() {
+            *pending = Some(RenameRequest {
+                node,
+                answer: RenameAnswer::Cancelled,
+            });
+        }
+    });
+
+    let Some(id) = runtime::register(Box::new(dialog)) else {
+        gui.message = tr_args(
+            "ui.error.rename-refused",
+            &[("reason", "the rename dialog could not be mounted")],
+        );
+        update_status(gui);
+        return;
+    };
+    runtime::set_host_window(id, gui.window);
+    if !runtime::enter_modal(id) {
+        runtime::unregister(id);
+        gui.message = tr_args(
+            "ui.error.rename-refused",
+            &[("reason", "the rename dialog could not take the modal stack")],
+        );
+        update_status(gui);
+        return;
+    }
+    gui.rename_dialog = id;
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-scene",
+        &format!("rename dialog opened for node {} ({current:?})", node.get()),
+    );
+}
+
+/// Applies one rename answer on the main loop, outside any widget borrow.
+fn apply_rename_answer(gui: &mut Gui, request: RenameRequest) {
+    if gui.rename_dialog != 0 {
+        let id = gui.rename_dialog;
+        runtime::exit_modal(id);
+        runtime::unregister(id);
+        gui.rename_dialog = 0;
+    }
+    let RenameAnswer::Accepted(text) = request.answer else {
+        gui.message = tr("ui.status.rename-cancelled");
+        update_status(gui);
+        return;
+    };
+    let name = text.trim();
+    if name.is_empty() {
+        gui.message = tr_args(
+            "ui.error.rename-refused",
+            &[("reason", "the name cannot be empty")],
+        );
+        update_status(gui);
+        return;
+    }
+    match gui.scene.rename(request.node, name) {
+        Ok(()) => {
+            // The Inspector's editor still holds the old name; clearing and reselecting rebuilds it
+            // from the new structural name instead of leaving a Reset that restores the old one.
+            gui.property.clear();
+            select_node(gui, request.node, "rename");
+            gui.message = tr_args("ui.status.renamed", &[("name", name)]);
+            update_status(gui);
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-scene",
+                &format!("renamed node {} to {name:?}", request.node.get()),
+            );
+        }
+        Err(reason) => {
+            gui.message = tr_args("ui.error.rename-refused", &[("reason", &reason)]);
+            update_status(gui);
+        }
+    }
+}
+
+/// Polls the rename slot on the main loop.
+fn schedule_rename(gui: Arc<Mutex<Gui>>, slot: Arc<Mutex<Option<RenameRequest>>>) {
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(50), move || {
+        // Take the request first and release the slot's lock: the dialog's callbacks may be
+        // running with the `Gui` lock held, and locking both in opposite orders would deadlock.
+        let request = match slot.lock() {
+            Ok(mut pending) => pending.take(),
+            Err(_) => None,
+        };
+        if let Some(request) = request
+            && let Ok(mut gui) = gui.lock()
+        {
+            apply_rename_answer(&mut gui, request);
+        }
+        schedule_rename(Arc::clone(&gui), Arc::clone(&slot));
+    });
 }
 
 /// Applies one editor-tab context-menu action to the active tab.
@@ -1677,6 +2192,146 @@ fn select_node(gui: &mut Gui, node: NodeId, source: &str) {
     update_status(gui);
 }
 
+/// Inserts the widget-library row at `index` into the scene under the nearest container.
+///
+/// Activation is the list's `item_activated` (Enter or a double click), not `item_selected`: moving
+/// the highlight with the arrow keys is browsing, and browsing must not add a control per keypress.
+fn insert_widget_from_palette(gui: &mut Gui, index: usize) {
+    let Some(control) = gui.widget_visible.get(index).cloned() else {
+        return;
+    };
+    let (name, property) = {
+        let Some(catalog) = gui.widget_catalog.as_ref() else {
+            gui.message = tr_args(
+                "ui.error.widget-not-inserted",
+                &[("reason", "no catalog was captured")],
+            );
+            update_status(gui);
+            return;
+        };
+        let Some(descriptor) = catalog.get(&control) else {
+            gui.message = tr_args(
+                "ui.error.widget-not-inserted",
+                &[("reason", "the row is not in the captured catalog")],
+            );
+            update_status(gui);
+            return;
+        };
+        (descriptor.name.clone(), inspector_property(descriptor))
+    };
+    let Some(property) = property else {
+        let text = tr_args("ui.error.widget-no-property", &[("name", &name)]);
+        gui.message = text.clone();
+        push_message(gui, format!("{control}: {text}"));
+        update_status(gui);
+        return;
+    };
+    match gui.scene.insert_widget(&control, &name, &property) {
+        Ok(node) => {
+            select_node(gui, node, "widgets");
+            gui.message = tr_args(
+                "ui.status.widget-inserted",
+                &[("name", &name), ("node", &node.get().to_string())],
+            );
+            update_status(gui);
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-scene",
+                &format!(
+                    "inserted {} as node {} from the widget library",
+                    control,
+                    node.get()
+                ),
+            );
+        }
+        Err(reason) => {
+            let text = tr_args("ui.error.widget-not-inserted", &[("reason", &reason)]);
+            gui.message = text.clone();
+            push_message(gui, format!("{control}: {text}"));
+            update_status(gui);
+            crate::host::log::emit(
+                crate::host::log::Level::Warn,
+                "app::run::workbench-scene",
+                &format!("widget {control} was not inserted: {reason}"),
+            );
+        }
+    }
+}
+
+/// Rebuilds the widget list for `query` through the catalog's own search.
+///
+/// The rows are written on the next main-loop turn: `list_box_clear_items` emits from inside the
+/// change, and this function is called from the search field's callback while the `Gui` lock is
+/// held.
+fn filter_widgets(gui: &mut Gui, query: &str) {
+    rebuild_widget_rows(gui, query);
+}
+
+/// Recomputes the visible rows and schedules the list write for `query`.
+fn rebuild_widget_rows(gui: &mut Gui, query: &str) {
+    let Some(catalog) = gui.widget_catalog.as_ref() else {
+        return;
+    };
+    let rows = widget_rows(catalog, query);
+    gui.widget_visible = rows.iter().map(|(id, _)| id.clone()).collect();
+    gui.widget_query = query.to_owned();
+    let labels: Vec<String> = rows.into_iter().map(|(_, label)| label).collect();
+    let list = gui.widgets_list;
+    if list == 0 {
+        return;
+    }
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
+        rust_widgets::list_box_clear_items(list);
+        for label in &labels {
+            let _ = rust_widgets::list_box_add_item(list, label);
+        }
+    });
+}
+
+/// Toggles the favorite state of the widget row at `index` and returns the new state.
+///
+/// `persist` is false only for the smoke run: a smoke test must not write the person's favorites
+/// file. The catalog is the one source of the row marker; the `Favorites` value is the one source
+/// of the file, and both are updated together.
+fn toggle_widget_favorite(gui: &mut Gui, index: usize, persist: bool) -> bool {
+    let Some(id) = gui.widget_visible.get(index).cloned() else {
+        return false;
+    };
+    let Some(catalog) = gui.widget_catalog.as_mut() else {
+        return false;
+    };
+    let on = !catalog.is_favorite(&id);
+    catalog.favorite(&id, on);
+    let name = catalog
+        .get(&id)
+        .map(|descriptor| descriptor.name.clone())
+        .unwrap_or_else(|| id.clone());
+    gui.widget_favorites.set(&id, on);
+    if persist
+        && let Some(path) = gui.widget_favorites_path.clone()
+        && let Err(reason) = gui.widget_favorites.save(&path)
+    {
+        warn_failure("the widget favorites could not be saved", reason);
+    }
+    let query = gui.widget_query.clone();
+    rebuild_widget_rows(gui, &query);
+    gui.message = tr_args(
+        if on {
+            "ui.status.favorite-added"
+        } else {
+            "ui.status.favorite-removed"
+        },
+        &[("name", &name)],
+    );
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-widgets",
+        &format!("favorite {id}: {on}"),
+    );
+    on
+}
+
 /// Selects every selectable node a marquee crosses and retargets the Inspector at the first.
 fn marquee_select(gui: &mut Gui, rect: SceneRect) {
     let nodes = gui.scene.within(rect);
@@ -1760,12 +2415,14 @@ fn finish_canvas_drag(gui: &mut Gui) {
         return;
     }
     let had = gui.scene.clear_selection();
+    gui.property.clear();
     gui.message = if had == 0 {
         "no selectable node".to_owned()
     } else {
         "selection cleared".to_owned()
     };
     retarget_panels(gui);
+    refresh_inspector(gui);
     sync_canvas(gui);
     sync_outline(gui);
     update_status(gui);
@@ -2215,22 +2872,88 @@ pub(super) fn workbench_gui(
     workbench.open_document("src/main.rs");
     workbench.set_target("desktop");
 
+    // The widget library (blue21 W-4): rows come from the pinned contract. A refusal withholds the
+    // panel's service, so the palette is hidden rather than shown empty (T04.02's gate).
+    let mut widget_catalog_available = false;
+    let mut widget_catalog = match Catalog::from_host_contract("desktop") {
+        Ok(catalog) => {
+            widget_catalog_available = true;
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-widgets",
+                &format!("widget library: {} control(s)", catalog.len()),
+            );
+            Some(catalog)
+        }
+        Err(refusal) => {
+            warn_failure(
+                "the widget library could not be captured",
+                refusal.message(),
+            );
+            None
+        }
+    };
+    // The favorites are the person's, not the build's: they live in the host data directory and a
+    // missing file is "none yet". A file that cannot be read is reported and the library still
+    // opens without favorites, rather than losing the list on the next save.
+    let widget_favorites_path = crate::host::paths::HostDirectories::from_environment()
+        .ok()
+        .map(|directories| {
+            directories
+                .path(crate::host::paths::HostDirectory::Data)
+                .join("widget-favorites.json")
+        });
+    let widget_favorites = match widget_favorites_path.as_deref() {
+        Some(path) => match Favorites::load(path) {
+            Ok(favorites) => favorites,
+            Err(reason) => {
+                warn_failure("the widget favorites could not be read", reason);
+                Favorites::new()
+            }
+        },
+        None => Favorites::new(),
+    };
+    if let Some(catalog) = widget_catalog.as_mut() {
+        for id in widget_favorites.ids() {
+            catalog.favorite(id, true);
+        }
+    }
+    let (widget_rows, widget_visible) = match widget_catalog.as_ref() {
+        Some(catalog) => {
+            let rows = widget_rows(catalog, "");
+            let visible = rows.iter().map(|(id, _)| id.clone()).collect();
+            (
+                rows.into_iter().map(|(_, label)| label).collect::<Vec<_>>(),
+                visible,
+            )
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+
     // The services the built-in panels need are the ones this slice actually has: a property
     // schema and diagnostics come from models that exist. `document-tree` does not exist yet, so
     // the Outline is registered but hidden instead of being shown without a backend (I-11). A
     // panel whose service is missing stays registered but is not shown (T04.02's gate), and the
     // log names it.
-    let services: BTreeSet<String> = ["property-schema", "diagnostics"]
+    let mut services: BTreeSet<String> = ["property-schema", "diagnostics"]
         .into_iter()
         .map(str::to_owned)
         .collect();
+    if widget_catalog_available {
+        services.insert("widget-catalog".to_owned());
+    }
     let mut panels = built_in_panels();
     for (id, _title, dock) in EXTRA_PANELS {
-        if let Err(error) = panels.register(PanelSpec::new(id, tr(panel_key(id)), dock, 300)) {
+        let mut spec = PanelSpec::new(id, tr(panel_key(id)), dock, 300);
+        if id == "widgets" {
+            spec = spec.needing("widget-catalog");
+        }
+        if let Err(error) = panels.register(spec) {
             warn_failure("an extra panel could not be registered", error.message());
         }
     }
     for id in [
+        "widgets",
         "pages",
         "outline",
         "inspector",
@@ -2310,6 +3033,7 @@ pub(super) fn workbench_gui(
         }
     }
 
+    let rename_slot: Arc<Mutex<Option<RenameRequest>>> = Arc::new(Mutex::new(None));
     let gui = Arc::new(Mutex::new(Gui {
         workbench,
         panels,
@@ -2333,6 +3057,16 @@ pub(super) fn workbench_gui(
         property_error: 0,
         scene,
         outline_list: 0,
+        scene_clipboard: None,
+        widget_catalog,
+        widget_favorites,
+        widget_favorites_path,
+        widget_visible,
+        widget_query: String::new(),
+        widget_row: None,
+        widget_menu: 0,
+        widgets_search: 0,
+        widgets_list: 0,
         messages: Vec::new(),
         messages_list: 0,
         diagnostic_row: None,
@@ -2371,13 +3105,17 @@ pub(super) fn workbench_gui(
         outline_rows: Vec::new(),
         outline_index: BTreeMap::new(),
         outline_content_revision: u64::MAX,
+        outline_syncing: Arc::new(AtomicBool::new(false)),
         translatable: Vec::new(),
         toolbar: 0,
         toolbar_items: Vec::new(),
         context_menu: 0,
         scene_menu: 0,
         editor_menu: 0,
+        rename_dialog: 0,
+        rename_slot: Arc::clone(&rename_slot),
     }));
+    schedule_rename(Arc::clone(&gui), rename_slot);
 
     // The interface catalogue is runtime data under `language/`; load it into the library's manager
     // and watch the directory so an edit appears without restarting (blue21 L-4 items 3/5).
@@ -2430,8 +3168,7 @@ pub(super) fn workbench_gui(
         }
         for item in menu.items() {
             match item {
-                crate::app::commands::menu::Item::Command { title, command }
-                | crate::app::commands::menu::Item::Planned { title, command, .. } => {
+                crate::app::commands::menu::Item::Command { title, command } => {
                     add_menu_leaf(
                         &handle,
                         &handle_menu,
@@ -2442,26 +3179,27 @@ pub(super) fn workbench_gui(
                         &gui,
                     );
                 }
+                // A planned leaf is ledger material (T05.02's task column), not a menu item. The
+                // native menu has no enabled/disabled switch in this revision, so drawing it would
+                // produce an enabled entry whose click only says "no handler" — exactly the
+                // dangling enabled menu T05.08 forbids. `--app-menu` still lists it with its task.
+                crate::app::commands::menu::Item::Planned { .. } => {}
                 crate::app::commands::menu::Item::Submenu { id, items, .. } => {
                     // The window's API has no nested menu, so a submenu's leaves are flattened under
                     // its parent but keep the submenu-qualified key.
                     for child in items {
-                        match child {
-                            crate::app::commands::menu::Item::Command { title, command }
-                            | crate::app::commands::menu::Item::Planned {
-                                title, command, ..
-                            } => {
-                                add_menu_leaf(
-                                    &handle,
-                                    &handle_menu,
-                                    &format!("menu.{}.submenu.{id}.item.{command}", menu.id()),
-                                    command,
-                                    title,
-                                    &mut menu_actions,
-                                    &gui,
-                                );
-                            }
-                            _ => {}
+                        // A planned submenu leaf is not painted, for the same reason as above.
+                        if let crate::app::commands::menu::Item::Command { title, command } = child
+                        {
+                            add_menu_leaf(
+                                &handle,
+                                &handle_menu,
+                                &format!("menu.{}.submenu.{id}.item.{command}", menu.id()),
+                                command,
+                                title,
+                                &mut menu_actions,
+                                &gui,
+                            );
                         }
                     }
                 }
@@ -2489,6 +3227,7 @@ pub(super) fn workbench_gui(
                 // window-only panels are appended here so View stays one menu, not two.
                 for (key, action) in [
                     ("ui.panel.pages", "toggle:pages"),
+                    ("ui.panel.widgets", "toggle:widgets"),
                     ("ui.panel.messages", "toggle:messages"),
                     ("ui.panel.problems", "toggle:problems"),
                     ("ui.panel.events", "toggle:events"),
@@ -2644,9 +3383,21 @@ pub(super) fn workbench_gui(
     let mut scene_actions: BTreeMap<String, String> = BTreeMap::new();
     for (key, action) in [
         ("ui.context.select-parent", "select-parent"),
+        ("ui.context.select-child", "select-child"),
+        ("ui.context.rename", "rename"),
+        ("ui.context.wrap-container", "wrap-container"),
+        ("ui.context.move-out", "move-out"),
+        ("ui.context.move-into", "move-into"),
+        ("ui.context.copy-node", "copy-node"),
+        ("ui.context.paste-node", "paste-node"),
         ("ui.context.toggle-lock", "toggle-lock"),
         ("ui.context.toggle-hide", "toggle-hide"),
         ("ui.context.raise", "raise"),
+        ("ui.context.raise-one", "raise-one"),
+        ("ui.context.lower-one", "lower-one"),
+        ("ui.context.send-to-back", "send-to-back"),
+        ("ui.context.duplicate", "duplicate"),
+        ("ui.context.delete", "delete"),
     ] {
         let label = tr(key);
         handle.new_menu_item(&scene_menu, &label, None);
@@ -2666,6 +3417,33 @@ pub(super) fn workbench_gui(
     }
     if let Ok(mut gui) = gui.lock() {
         gui.scene_menu = scene_menu.raw_id();
+    }
+
+    // The widget library's context menu: one toggle, applied to the row under the pointer. The
+    // favorites are persisted by the host (not the catalog), so a restart keeps them.
+    let widget_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+    let favorite_item = handle.new_menu_item(&widget_menu, &tr("ui.context.favorite"), None);
+    {
+        let gui = Arc::clone(&gui);
+        let label = tr("ui.context.favorite");
+        widget_menu.on_triggered(move |triggered| {
+            if triggered != label {
+                return;
+            }
+            if let Ok(mut gui) = gui.lock()
+                && let Some(row) = gui.widget_row
+            {
+                toggle_widget_favorite(&mut gui, row, true);
+            }
+        });
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.widget_menu = widget_menu.raw_id();
+        gui.translatable.push(Translatable {
+            id: favorite_item.raw_id(),
+            key: "ui.context.favorite".to_owned(),
+            kind: LabelKind::Text,
+        });
     }
 
     // The editor-tab context menu (blue21 §3.3). The tab strip is the library's `TabWidget`, which
@@ -2741,24 +3519,32 @@ pub(super) fn workbench_gui(
     let mut data_controls: Option<DataControls> = None;
     let mut pages_controls: Option<PageControls> = None;
     let mut outline_list: Option<u64> = None;
+    let mut widgets_list: Option<u64> = None;
+    let mut widgets_search: Option<u64> = None;
     for (id, _title, rect, area) in [
         (
             "pages",
             "Pages",
             (0, CONTENT_Y, 260, 180),
-            Area::LeftPanel { index: 0, count: 3 },
+            Area::LeftPanel { index: 0, count: 4 },
         ),
         (
             "outline",
             "Outline",
             (0, 254, 260, 180),
-            Area::LeftPanel { index: 1, count: 3 },
+            Area::LeftPanel { index: 1, count: 4 },
         ),
         (
             "events",
             "Events",
             (0, 442, 260, 200),
-            Area::LeftPanel { index: 2, count: 3 },
+            Area::LeftPanel { index: 2, count: 4 },
+        ),
+        (
+            "widgets",
+            "Widgets",
+            (0, 650, 260, 140),
+            Area::LeftPanel { index: 3, count: 4 },
         ),
         (
             "inspector",
@@ -2806,10 +3592,18 @@ pub(super) fn workbench_gui(
         let list_id = if id == "inspector" || id == "data" {
             0
         } else {
-            let list = panel.new_list_box(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 38);
+            // The widget library puts a search field above its list, so its rows start lower.
+            let top = if id == "widgets" {
+                rect.1 + 60
+            } else {
+                rect.1 + 30
+            };
+            let height = rect.3 - if id == "widgets" { 68 } else { 38 };
+            let list = panel.new_list_box(rect.0 + 8, top, rect.2 - 16, height);
             let focus_name = match id {
                 "pages" => "pages list",
                 "outline" => "outline list",
+                "widgets" => "widget library",
                 "events" => "events list",
                 "messages" => "messages list",
                 "problems" => "problems list",
@@ -2819,11 +3613,23 @@ pub(super) fn workbench_gui(
             list.raw_id()
         };
         let mut inner = BoxLayout::new(Orientation::Vertical, 4, 8);
+        let mut extra_widgets: Vec<u64> = Vec::new();
+        if id == "widgets" {
+            // The search field is the catalog's own search, not a second filter: typing narrows the
+            // same 270-row contract list an empty query shows.
+            let field = panel.new_line_edit("", rect.0 + 8, rect.1 + 30, rect.2 - 16, 26);
+            field.set_placeholder(&tr("ui.placeholder.widget-search"));
+            watch_focus(field.raw_id(), "widget search");
+            inner.add_widget(field.raw_id(), 0);
+            inner.set_constraints(field.raw_id(), LayoutConstraints::new(26, Some(26)));
+            inner.set_size_policy(field.raw_id(), SizePolicy::Fixed);
+            extra_widgets.push(field.raw_id());
+            widgets_search = Some(field.raw_id());
+        }
         if list_id != 0 {
             inner.add_widget(list_id, 1);
             inner.set_size_policy(list_id, SizePolicy::Expanding);
         }
-        let mut extra_widgets: Vec<u64> = Vec::new();
         if id == "pages" {
             let field =
                 panel.new_line_edit("", rect.0 + 8, rect.1 + rect.3 as i32 - 96, rect.2 - 16, 26);
@@ -3095,6 +3901,7 @@ pub(super) fn workbench_gui(
         panel.set_layout(Box::new(inner));
         let items: Vec<String> = match id {
             "outline" => outline_items.clone(),
+            "widgets" => widget_rows.clone(),
             "messages" => vec![tr("ui.status.ready")],
             // The Events, Data and Pages lists are filled from their models once the controls exist;
             // the Inspector and Data panels own a property grid instead of a list.
@@ -3108,6 +3915,9 @@ pub(super) fn workbench_gui(
         }
         if id == "outline" {
             outline_list = Some(list_id);
+        }
+        if id == "widgets" {
+            widgets_list = Some(list_id);
         }
         if let Ok(mut gui) = gui.lock() {
             gui.placements.push((panel.raw_id(), area));
@@ -3281,9 +4091,14 @@ pub(super) fn workbench_gui(
         }
         let list_gui = Arc::clone(&gui);
         subscribe_index(list_id, "item_selected", move |index| {
-            if let Ok(mut gui) = list_gui.lock()
-                && let Some(node) = gui.scene.row_nodes().get(index as usize).copied()
-            {
+            if let Ok(mut gui) = list_gui.lock() {
+                // A row the model wrote itself is not a click; see `Gui::outline_syncing`.
+                if gui.outline_syncing.load(Ordering::SeqCst) {
+                    return;
+                }
+                let Some(node) = gui.scene.row_nodes().get(index as usize).copied() else {
+                    return;
+                };
                 // Rebuilding the list sets the current row to the selection; that programmatic
                 // change emits this signal too. Answering it would select, rebuild and emit
                 // forever, so a row that already is the primary selection is a no-op.
@@ -3324,6 +4139,57 @@ pub(super) fn workbench_gui(
                 {
                     warn_failure("the outline context menu could not open", payload);
                 }
+            }
+        });
+    }
+
+    // The widget library (blue21 W-4): a row is one control the pinned contract really registers.
+    // Activation inserts it into the scene; the model refuses a control with no editable property,
+    // and a refusal is shown in the status bar and the Messages panel rather than swallowed.
+    if let Some(list_id) = widgets_list {
+        if let Ok(mut gui) = gui.lock() {
+            gui.widgets_list = list_id;
+        }
+        let list_gui = Arc::clone(&gui);
+        subscribe_index(list_id, "item_activated", move |index| {
+            if let Ok(mut gui) = list_gui.lock() {
+                insert_widget_from_palette(&mut gui, index as usize);
+            }
+        });
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(list_id, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            let Some(index) = list_row_at(list_id, x, y) else {
+                return;
+            };
+            if let Ok(mut gui) = menu_gui.lock() {
+                gui.widget_row = Some(index);
+                let _ = rust_widgets::list_box_set_current_index(list_id, index);
+                if gui.widget_menu != 0
+                    && !MenuHandle::from_raw(gui.widget_menu).open_at(
+                        x,
+                        y,
+                        Rect::new(0, 0, WIDTH, HEIGHT),
+                    )
+                {
+                    warn_failure("the widget context menu could not open", payload);
+                }
+            }
+        });
+    }
+    if let Some(field_id) = widgets_search {
+        if let Ok(mut gui) = gui.lock() {
+            gui.widgets_search = field_id;
+        }
+        // The subscriber locks the same `Gui`. A caller that wants to set the field's text
+        // programmatically must do it on a later main-loop turn: `set_widget_text` emits this signal
+        // synchronously, and taking the lock again on the same thread would deadlock the loop.
+        let search_gui = Arc::clone(&gui);
+        subscribe_string(field_id, "text_changed", move |query| {
+            if let Ok(mut gui) = search_gui.lock() {
+                filter_widgets(&mut gui, query);
             }
         });
     }
@@ -4171,6 +5037,161 @@ pub(super) fn workbench_gui(
                 apply_action(&mut gui, "group:split");
                 apply_action(&mut gui, "layout:save");
                 apply_action(&mut gui, "group:next");
+                // The widget library's whole path: pick a real contract row and insert it. The
+                // scene count says whether a node appeared, so a palette that only paints rows
+                // is not reported as a working one.
+                let before = gui.scene.row_nodes().len();
+                if gui.widgets_search != 0 {
+                    // The search path is part of the smoke: a query narrows the same catalog list,
+                    // and the insert below then comes from the filtered rows. The field's text is
+                    // not set here: `set_widget_text` emits `text_changed`, whose subscriber locks
+                    // this same `Gui`, and calling it under the lock the smoke already holds would
+                    // deadlock the loop (the real typing path holds no such lock).
+                    filter_widgets(&mut gui, "button");
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: widget search \"button\" shows {} row(s)",
+                            gui.widget_visible.len()
+                        ),
+                    );
+                }
+                if !gui.widget_visible.is_empty() {
+                    // The favorites path is exercised without persisting: a smoke run must not
+                    // write the person's data file.
+                    let on = toggle_widget_favorite(&mut gui, 0, false);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: first widget row favorite = {on}, {} row(s) still listed",
+                            gui.widget_visible.len()
+                        ),
+                    );
+                }
+                if gui.widget_visible.is_empty() {
+                    warn_failure(
+                        "the widget smoke could not insert",
+                        "the library has no rows; the catalog was not captured",
+                    );
+                } else {
+                    insert_widget_from_palette(&mut gui, 0);
+                    let inserted = gui.scene.primary();
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: widget library inserted a node ({before} -> {} node(s))",
+                            gui.scene.row_nodes().len()
+                        ),
+                    );
+                    // The same selected node is sent back, wrapped, duplicated and deleted: this
+                    // exercises the layer, container and copy actions plus the Inspector reset.
+                    scene_context_action(&mut gui, "send-to-back");
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        "workbench smoke: sent the inserted node to the back",
+                    );
+                    let before_wrap = gui.scene.row_nodes().len();
+                    scene_context_action(&mut gui, "wrap-container");
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: wrapped the inserted node ({before_wrap} -> {} node(s))",
+                            gui.scene.row_nodes().len()
+                        ),
+                    );
+                    let after_insert = gui.scene.row_nodes().len();
+                    // The wrapper selected itself; select the child again and move it back out, so
+                    // the inverse action is exercised rather than moving the wrapper itself.
+                    if let Some(child) = inserted {
+                        select_node(&mut gui, child, "smoke");
+                        scene_context_action(&mut gui, "move-out");
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench",
+                            &format!(
+                                "workbench smoke: moved the inserted node out of its wrapper ({after_insert} -> {} node(s))",
+                                gui.scene.row_nodes().len()
+                            ),
+                        );
+                        // The wrapper is now the sibling above the node, so the deterministic
+                        // "move into the container above" rule can put it back.
+                        scene_context_action(&mut gui, "move-into");
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench",
+                            "workbench smoke: moved the inserted node into the container above it",
+                        );
+                    }
+                    scene_context_action(&mut gui, "duplicate");
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: duplicated the inserted node ({after_insert} -> {} node(s))",
+                            gui.scene.row_nodes().len()
+                        ),
+                    );
+                    let after_duplicate = gui.scene.row_nodes().len();
+                    scene_context_action(&mut gui, "delete");
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: deleted the duplicated node ({after_duplicate} -> {} node(s), inspector {} node(s))",
+                            gui.scene.row_nodes().len(),
+                            gui.property.count()
+                        ),
+                    );
+                    // The rename dialog's whole path, on the node that survived the copy's delete:
+                    // open it, type through the dialog's own setter, and accept with Enter. The
+                    // answer is applied by the poller after this callback unwinds.
+                    if let Some(child) = inserted {
+                        select_node(&mut gui, child, "smoke");
+                        // Copy/paste through the scene clipboard, then rename the original again
+                        // (paste selects the copy).
+                        scene_context_action(&mut gui, "copy-node");
+                        let before_paste = gui.scene.row_nodes().len();
+                        scene_context_action(&mut gui, "paste-node");
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench",
+                            &format!(
+                                "workbench smoke: copied and pasted a node ({before_paste} -> {} node(s))",
+                                gui.scene.row_nodes().len()
+                            ),
+                        );
+                        select_node(&mut gui, child, "smoke");
+                        scene_context_action(&mut gui, "rename");
+                        let dialog = gui.rename_dialog;
+                        if dialog != 0 {
+                            let _ = with_widget_mut(dialog, |widget| {
+                                if let Some(dialog) =
+                                    (widget as &mut dyn Any).downcast_mut::<InputDialog>()
+                                {
+                                    dialog.set_text_value("renamed node");
+                                }
+                                true
+                            });
+                            let _ = runtime::dispatch_event(
+                                dialog,
+                                &rust_widgets::event::Event::key_press(
+                                    rust_widgets::event::key_codes::ENTER,
+                                    0,
+                                ),
+                            );
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench",
+                                "workbench smoke: answered the rename dialog with \"renamed node\"",
+                            );
+                        }
+                    }
+                }
             }
         });
         let quit_gui = Arc::clone(&gui);

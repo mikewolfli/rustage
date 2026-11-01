@@ -419,6 +419,29 @@ pub(super) fn audit() -> bool {
         println!("{line}");
     }
 
+    // T05.08: the same inventory checked with each desktop platform's primary modifier. The default
+    // table is written with Ctrl, so this is where "the macOS build presses Cmd" is verified instead
+    // of being assumed from the table.
+    let mut platforms_clean = true;
+    for platform in crate::app::commands::shortcuts::Platform::ALL {
+        let platform_report =
+            crate::app::commands::audit::audit_platform(&registry, &menus, platform);
+        println!(
+            "platform {} ({}): {}",
+            platform.name(),
+            platform.primary_name(),
+            if platform_report.is_clean() {
+                "clean".to_owned()
+            } else {
+                format!("{} problem(s)", platform_report.problems().len())
+            }
+        );
+        for problem in platform_report.problems() {
+            println!("  {problem}");
+        }
+        platforms_clean &= platform_report.is_clean();
+    }
+
     // T04.08: every offer (toolbar or key) has both a way to see it and a way to reach it.
     let sets = ["design", "code", "debug", "welcome"]
         .into_iter()
@@ -436,7 +459,7 @@ pub(super) fn audit() -> bool {
         menus.len(),
         keymap.len()
     );
-    report.is_clean() && reach.is_clean()
+    report.is_clean() && reach.is_clean() && platforms_clean
 }
 
 /// Replays a script of document-tab operations (task T04.03).

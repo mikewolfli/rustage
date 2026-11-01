@@ -278,7 +278,37 @@
       "message": "Reset property"
     },
     "ui.context.select-parent": {
-      "message": "Select parent"
+      "message": "Select Parent"
+    },
+    "ui.context.select-child": {
+      "message": "Select First Child"
+    },
+    "ui.context.rename": {
+      "message": "Rename"
+    },
+    "ui.context.wrap-container": {
+      "message": "Wrap in Container"
+    },
+    "ui.context.move-out": {
+      "message": "Move Out of Container"
+    },
+    "ui.context.copy-node": {
+      "message": "Copy Node"
+    },
+    "ui.context.move-into": {
+      "message": "Move Into Container Above"
+    },
+    "ui.context.paste-node": {
+      "message": "Paste"
+    },
+    "ui.context.delete": {
+      "message": "Delete"
+    },
+    "ui.context.favorite": {
+      "message": "Toggle Favorite"
+    },
+    "ui.context.duplicate": {
+      "message": "Duplicate"
     },
     "ui.context.toggle-hide": {
       "message": "Hide or show"
@@ -287,7 +317,16 @@
       "message": "Lock or unlock"
     },
     "ui.context.raise": {
-      "message": "Bring forward"
+      "message": "Bring to Front"
+    },
+    "ui.context.raise-one": {
+      "message": "Bring Forward"
+    },
+    "ui.context.lower-one": {
+      "message": "Send Backward"
+    },
+    "ui.context.send-to-back": {
+      "message": "Send to Back"
     },
     "ui.context.editor.close": {
       "message": "Close tab"
@@ -340,6 +379,39 @@
     "ui.error.not-closed": {
       "message": "not closed: {reason}"
     },
+    "ui.error.not-deleted": {
+      "message": "not deleted: {reason}"
+    },
+    "ui.error.not-duplicated": {
+      "message": "not duplicated: {reason}"
+    },
+    "ui.error.not-wrapped": {
+      "message": "not wrapped: {reason}"
+    },
+    "ui.error.rename-refused": {
+      "message": "not renamed: {reason}"
+    },
+    "ui.error.copy-refused": {
+      "message": "not copied: {reason}"
+    },
+    "ui.error.paste-refused": {
+      "message": "not pasted: {reason}"
+    },
+    "ui.error.not-moved-into": {
+      "message": "not moved into a container: {reason}"
+    },
+    "ui.error.nothing-to-paste": {
+      "message": "there is no copied node to paste"
+    },
+    "ui.dialog.rename-title": {
+      "message": "Rename Node"
+    },
+    "ui.dialog.rename-label": {
+      "message": "Name"
+    },
+    "ui.error.not-moved-out": {
+      "message": "not moved out: {reason}"
+    },
     "ui.error.not-fired": {
       "message": "not fired: {reason}"
     },
@@ -357,6 +429,12 @@
     },
     "ui.error.theme-refused": {
       "message": "theme refused: {reason}"
+    },
+    "ui.error.widget-no-property": {
+      "message": "{name} publishes no property the Inspector could edit"
+    },
+    "ui.error.widget-not-inserted": {
+      "message": "not inserted: {reason}"
     },
     "ui.inspector.accepted": {
       "message": "accepted"
@@ -436,11 +514,17 @@
     "ui.panel.problems": {
       "message": "Problems"
     },
+    "ui.panel.widgets": {
+      "message": "Widgets"
+    },
     "ui.placeholder.handler-name": {
       "message": "handler name"
     },
     "ui.placeholder.mixed": {
       "message": "mixed — typing applies to every selected node"
+    },
+    "ui.placeholder.no-selection": {
+      "message": "no selection"
     },
     "ui.placeholder.page-name": {
       "message": "page name"
@@ -448,11 +532,47 @@
     "ui.placeholder.theme-name": {
       "message": "theme name (dark)"
     },
+    "ui.placeholder.widget-search": {
+      "message": "search controls"
+    },
     "ui.status.bound": {
       "message": "bound {event} -> {handler} on node {node} (revision {revision})"
     },
     "ui.status.closing": {
       "message": "closing"
+    },
+    "ui.status.deleted": {
+      "message": "deleted {name}: {report}"
+    },
+    "ui.status.favorite-added": {
+      "message": "{name} added to favorites"
+    },
+    "ui.status.favorite-removed": {
+      "message": "{name} removed from favorites"
+    },
+    "ui.status.duplicated": {
+      "message": "duplicated {name} as node {node}"
+    },
+    "ui.status.wrapped": {
+      "message": "wrapped {name} in container {node}"
+    },
+    "ui.status.moved-out": {
+      "message": "moved {name} out of {parent}"
+    },
+    "ui.status.renamed": {
+      "message": "renamed to {name}"
+    },
+    "ui.status.node-copied": {
+      "message": "copied {name} ({count} node(s))"
+    },
+    "ui.status.node-pasted": {
+      "message": "pasted {count} node(s) as {node}"
+    },
+    "ui.status.moved-into": {
+      "message": "moved {name} into {parent}"
+    },
+    "ui.status.rename-cancelled": {
+      "message": "rename cancelled"
     },
     "ui.status.command-palette": {
       "message": "command palette"
@@ -529,8 +649,14 @@
     "ui.status.unknown-action": {
       "message": "unknown action {action}"
     },
+    "ui.status.widget-inserted": {
+      "message": "inserted {name} as node {node}"
+    },
     "ui.status.no-parent": {
       "message": "node {node} has no parent"
+    },
+    "ui.status.no-child": {
+      "message": "{name} has no children"
     },
     "ui.status.locked": {
       "message": "{name} locked"
@@ -549,6 +675,18 @@
     },
     "ui.status.already-top": {
       "message": "{name} is already on top"
+    },
+    "ui.status.already-bottom": {
+      "message": "{name} is already at the back"
+    },
+    "ui.status.moved-up": {
+      "message": "{name} moved forward"
+    },
+    "ui.status.moved-down": {
+      "message": "{name} moved backward"
+    },
+    "ui.status.sent-to-back": {
+      "message": "{name} sent to back"
     },
     "ui.toolbar.commands": {
       "message": "Commands"

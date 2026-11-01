@@ -558,6 +558,72 @@ impl Scene {
         true
     }
 
+    /// Moves a node one step towards the front of the paint order.
+    ///
+    /// `false` when the node is missing or already frontmost: there is no new state, and the caller
+    /// can say so without re-reading the order.
+    pub fn raise_one(&mut self, node: NodeId) -> bool {
+        let Some(position) = self.order.iter().position(|existing| *existing == node) else {
+            return false;
+        };
+        if position + 1 >= self.order.len() {
+            return false;
+        }
+        self.order.swap(position, position + 1);
+        self.bump_generation();
+        true
+    }
+
+    /// Moves a node one step towards the back of the paint order.
+    pub fn lower_one(&mut self, node: NodeId) -> bool {
+        let Some(position) = self.order.iter().position(|existing| *existing == node) else {
+            return false;
+        };
+        if position == 0 {
+            return false;
+        }
+        self.order.swap(position, position - 1);
+        self.bump_generation();
+        true
+    }
+
+    /// Sends a node to the back of the paint order.
+    ///
+    /// Like [`Self::raise`], being already there is a success (nothing moved) rather than a refusal.
+    pub fn lower(&mut self, node: NodeId) -> bool {
+        let Some(position) = self.order.iter().position(|existing| *existing == node) else {
+            return false;
+        };
+        if position == 0 {
+            return true;
+        }
+        self.order.remove(position);
+        self.order.insert(0, node);
+        self.bump_generation();
+        true
+    }
+
+    /// Places `node` directly below `anchor` in the paint order.
+    ///
+    /// A wrapper container must be painted behind the node it wraps, or the container would become
+    /// the hit for every click inside it. `node` is moved, not duplicated; the call is refused when
+    /// either id is missing or they are the same node.
+    pub fn place_below(&mut self, node: NodeId, anchor: NodeId) -> bool {
+        if node == anchor
+            || !self.instances.contains_key(&node)
+            || !self.instances.contains_key(&anchor)
+        {
+            return false;
+        }
+        self.order.retain(|existing| *existing != node);
+        let Some(position) = self.order.iter().position(|existing| *existing == anchor) else {
+            return false;
+        };
+        self.order.insert(position, node);
+        self.bump_generation();
+        true
+    }
+
     /// The paint order, bottom first.
     pub fn order(&self) -> &[NodeId] {
         &self.order
@@ -642,6 +708,48 @@ mod tests {
 
     fn node(value: u64) -> NodeId {
         NodeId::from_raw(value)
+    }
+
+    #[test]
+    fn the_paint_order_can_move_one_step_or_to_the_back() {
+        let mut scene = Scene::new();
+        for value in 1..=3 {
+            scene.insert(node(value), Rect::new(0, 0, 10, 10));
+        }
+        assert_eq!(scene.order(), &[node(1), node(2), node(3)]);
+
+        assert!(scene.lower_one(node(3)));
+        assert_eq!(scene.order(), &[node(1), node(3), node(2)]);
+        assert!(!scene.lower_one(node(1)), "already at the back");
+
+        assert!(scene.raise_one(node(3)));
+        assert_eq!(scene.order(), &[node(1), node(2), node(3)]);
+        assert!(!scene.raise_one(node(3)), "already at the front");
+
+        assert!(scene.lower(node(3)));
+        assert_eq!(scene.order(), &[node(3), node(1), node(2)]);
+        assert!(scene.lower(node(3)), "already at the back is a success");
+        assert_eq!(scene.order(), &[node(3), node(1), node(2)]);
+
+        assert!(!scene.lower_one(node(99)), "a missing node moves nothing");
+        assert!(!scene.raise_one(node(99)));
+    }
+
+    #[test]
+    fn a_node_can_be_placed_directly_below_another_without_duplicating_it() {
+        let mut scene = Scene::new();
+        for value in 1..=3 {
+            scene.insert(node(value), Rect::new(0, 0, 10, 10));
+        }
+        // A wrapper inserted last is painted on top; moving it below the node it wraps makes the
+        // node the topmost hit inside the overlapping area.
+        assert!(scene.place_below(node(3), node(1)));
+        assert_eq!(scene.order(), &[node(3), node(1), node(2)]);
+        assert!(
+            !scene.place_below(node(1), node(1)),
+            "a node cannot sit below itself"
+        );
+        assert!(!scene.place_below(node(99), node(1)));
     }
 
     #[test]

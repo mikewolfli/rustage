@@ -280,6 +280,36 @@
     "ui.context.select-parent": {
       "message": "选择父节点"
     },
+    "ui.context.select-child": {
+      "message": "选择子节点"
+    },
+    "ui.context.rename": {
+      "message": "重命名"
+    },
+    "ui.context.wrap-container": {
+      "message": "包装为容器"
+    },
+    "ui.context.move-out": {
+      "message": "移出容器"
+    },
+    "ui.context.copy-node": {
+      "message": "复制节点"
+    },
+    "ui.context.move-into": {
+      "message": "移入上一层容器"
+    },
+    "ui.context.paste-node": {
+      "message": "粘贴"
+    },
+    "ui.context.delete": {
+      "message": "删除"
+    },
+    "ui.context.favorite": {
+      "message": "切换收藏"
+    },
+    "ui.context.duplicate": {
+      "message": "复制节点"
+    },
     "ui.context.toggle-hide": {
       "message": "隐藏或显示"
     },
@@ -287,7 +317,16 @@
       "message": "锁定或解锁"
     },
     "ui.context.raise": {
+      "message": "置顶"
+    },
+    "ui.context.raise-one": {
       "message": "上移一层"
+    },
+    "ui.context.lower-one": {
+      "message": "下移一层"
+    },
+    "ui.context.send-to-back": {
+      "message": "置底"
     },
     "ui.context.editor.close": {
       "message": "关闭标签页"
@@ -340,6 +379,39 @@
     "ui.error.not-closed": {
       "message": "未关闭：{reason}"
     },
+    "ui.error.not-deleted": {
+      "message": "未删除：{reason}"
+    },
+    "ui.error.not-duplicated": {
+      "message": "未复制：{reason}"
+    },
+    "ui.error.not-wrapped": {
+      "message": "未包装：{reason}"
+    },
+    "ui.error.rename-refused": {
+      "message": "未重命名：{reason}"
+    },
+    "ui.error.copy-refused": {
+      "message": "未复制：{reason}"
+    },
+    "ui.error.paste-refused": {
+      "message": "未粘贴：{reason}"
+    },
+    "ui.error.not-moved-into": {
+      "message": "未移入容器：{reason}"
+    },
+    "ui.error.nothing-to-paste": {
+      "message": "没有可粘贴的节点"
+    },
+    "ui.dialog.rename-title": {
+      "message": "重命名节点"
+    },
+    "ui.dialog.rename-label": {
+      "message": "名称"
+    },
+    "ui.error.not-moved-out": {
+      "message": "未移出：{reason}"
+    },
     "ui.error.not-fired": {
       "message": "未触发：{reason}"
     },
@@ -357,6 +429,12 @@
     },
     "ui.error.theme-refused": {
       "message": "主题被拒绝：{reason}"
+    },
+    "ui.error.widget-no-property": {
+      "message": "{name} 没有可编辑属性"
+    },
+    "ui.error.widget-not-inserted": {
+      "message": "未插入：{reason}"
     },
     "ui.inspector.accepted": {
       "message": "可接受值"
@@ -436,11 +514,17 @@
     "ui.panel.problems": {
       "message": "问题"
     },
+    "ui.panel.widgets": {
+      "message": "控件库"
+    },
     "ui.placeholder.handler-name": {
       "message": "处理器名称"
     },
     "ui.placeholder.mixed": {
       "message": "混合 — 输入将应用到所有选中节点"
+    },
+    "ui.placeholder.no-selection": {
+      "message": "未选择节点"
     },
     "ui.placeholder.page-name": {
       "message": "页面名称"
@@ -448,11 +532,47 @@
     "ui.placeholder.theme-name": {
       "message": "主题名称（dark）"
     },
+    "ui.placeholder.widget-search": {
+      "message": "搜索控件"
+    },
     "ui.status.bound": {
       "message": "已将 {event} 绑定到 {handler}（节点 {node}，修订 {revision}）"
     },
     "ui.status.closing": {
       "message": "正在关闭"
+    },
+    "ui.status.deleted": {
+      "message": "已删除 {name}：{report}"
+    },
+    "ui.status.favorite-added": {
+      "message": "已收藏 {name}"
+    },
+    "ui.status.favorite-removed": {
+      "message": "已取消收藏 {name}"
+    },
+    "ui.status.duplicated": {
+      "message": "已复制 {name}，节点 {node}"
+    },
+    "ui.status.wrapped": {
+      "message": "已将 {name} 包装为容器 {node}"
+    },
+    "ui.status.moved-out": {
+      "message": "已将 {name} 移出 {parent}"
+    },
+    "ui.status.renamed": {
+      "message": "已重命名为 {name}"
+    },
+    "ui.status.node-copied": {
+      "message": "已复制 {name}（{count} 个节点）"
+    },
+    "ui.status.node-pasted": {
+      "message": "已粘贴 {count} 个节点，根 {node}"
+    },
+    "ui.status.moved-into": {
+      "message": "已将 {name} 移入 {parent}"
+    },
+    "ui.status.rename-cancelled": {
+      "message": "已取消重命名"
     },
     "ui.status.command-palette": {
       "message": "命令面板"
@@ -529,8 +649,14 @@
     "ui.status.unknown-action": {
       "message": "未知操作 {action}"
     },
+    "ui.status.widget-inserted": {
+      "message": "已插入 {name}，节点 {node}"
+    },
     "ui.status.no-parent": {
       "message": "节点 {node} 没有父节点"
+    },
+    "ui.status.no-child": {
+      "message": "{name} 没有子节点"
     },
     "ui.status.locked": {
       "message": "已锁定 {name}"
@@ -549,6 +675,18 @@
     },
     "ui.status.already-top": {
       "message": "{name} 已在最上层"
+    },
+    "ui.status.already-bottom": {
+      "message": "{name} 已在最底层"
+    },
+    "ui.status.moved-up": {
+      "message": "{name} 已上移一层"
+    },
+    "ui.status.moved-down": {
+      "message": "{name} 已下移一层"
+    },
+    "ui.status.sent-to-back": {
+      "message": "{name} 已置底"
     },
     "ui.toolbar.commands": {
       "message": "命令"

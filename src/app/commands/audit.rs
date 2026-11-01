@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::app::commands::command::Registry;
 use crate::app::commands::menu::Menu;
-use crate::app::commands::shortcuts::Keymap;
+use crate::app::commands::shortcuts::{Keymap, Platform};
 
 /// Everything the audit found.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -118,6 +118,59 @@ pub fn audit(registry: &Registry, menus: &[Menu], keymap: &Keymap) -> Report {
         problems,
         unreachable,
     }
+}
+
+/// The same audit for one desktop platform's keymap (task T05.08).
+///
+/// The default table is written once with `Ctrl`; this checks the keymap that platform actually gets.
+/// The extra rule is about the primary modifier, which is the one thing a keymap may not get wrong
+/// per platform: macOS presses `Cmd`, Windows and Linux press `Ctrl`, and a binding that uses the
+/// other one is a shortcut a person on that platform cannot press.
+pub fn audit_platform(registry: &Registry, menus: &[Menu], platform: Platform) -> Report {
+    let keymap = platform.keymap();
+    let mut report = audit(registry, menus, &keymap);
+    report.problems.extend(platform_problems(&keymap, platform));
+    report
+}
+
+/// The platform-modifier findings for one keymap.
+fn platform_problems(keymap: &Keymap, platform: Platform) -> Vec<String> {
+    let primary = platform.primary_modifier();
+    let mut problems = Vec::new();
+    for binding in keymap.bindings() {
+        for key in binding.chord().keys() {
+            let modifiers = key.modifiers();
+            if platform != Platform::MacOs && modifiers.uses_meta() {
+                problems.push(format!(
+                    "key {} binds {} on {}: Cmd is not this platform's primary modifier ({} is)",
+                    binding.chord(),
+                    binding.command(),
+                    platform.name(),
+                    platform.primary_name()
+                ));
+            }
+            if platform == Platform::MacOs && modifiers.uses_ctrl() {
+                problems.push(format!(
+                    "key {} binds {} on {}: Ctrl is not this platform's primary modifier ({} is)",
+                    binding.chord(),
+                    binding.command(),
+                    platform.name(),
+                    platform.primary_name()
+                ));
+            }
+            if modifiers.has_command_modifier() && !modifiers.contains(primary) {
+                problems.push(format!(
+                    "key {} binds {} on {}: a command chord without {} is unreachable by the \
+                     platform's primary modifier",
+                    binding.chord(),
+                    binding.command(),
+                    platform.name(),
+                    platform.primary_name()
+                ));
+            }
+        }
+    }
+    problems
 }
 
 /// How a person can reach one command.
@@ -281,7 +334,7 @@ mod tests {
     use super::*;
     use crate::app::commands::command::{CommandId, built_in as registry};
     use crate::app::commands::menu::{Item, Menu};
-    use crate::app::commands::shortcuts::{Binding, Chord, Keymap, Scope};
+    use crate::app::commands::shortcuts::{Binding, Chord, Keymap, Platform, Scope};
 
     fn menus() -> Vec<Menu> {
         crate::app::commands::menu::built_in()
@@ -453,6 +506,59 @@ mod tests {
                 .any(|problem| problem.contains("file.save-as") && problem.contains("no key")),
             "{:?}",
             report.problems()
+        );
+    }
+
+    #[test]
+    fn every_platform_keymap_uses_its_own_primary_modifier_and_stays_clean() {
+        for platform in Platform::ALL {
+            let keymap = platform.keymap();
+            assert_eq!(
+                keymap.len(),
+                crate::app::commands::shortcuts::built_in().len(),
+                "{} keeps every binding",
+                platform.name()
+            );
+            assert!(
+                platform_problems(&keymap, platform).is_empty(),
+                "{}: {:?}",
+                platform.name(),
+                platform_problems(&keymap, platform)
+            );
+            let report = audit_platform(&registry(), &menus(), platform);
+            assert!(
+                report.is_clean(),
+                "{}: {:?}",
+                platform.name(),
+                report.problems()
+            );
+        }
+    }
+
+    #[test]
+    fn a_ctrl_binding_on_macos_is_a_platform_problem() {
+        // The default table is written with Ctrl; on macOS the keymap must be Cmd, so feeding the
+        // table unchanged is exactly the mistake the platform check exists to catch.
+        let problems = platform_problems(
+            &crate::app::commands::shortcuts::built_in(),
+            Platform::MacOs,
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("Ctrl is not this platform")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_cmd_binding_on_windows_is_a_platform_problem() {
+        let problems = platform_problems(&Platform::MacOs.keymap(), Platform::Windows);
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("Cmd is not this platform")),
+            "{problems:?}"
         );
     }
 

@@ -11,3 +11,4 @@ pub mod selection;
 pub mod structure;
 pub mod viewport;
 pub mod widget_catalog;
+pub mod widget_favorites;

@@ -57,6 +57,14 @@ impl Modifiers {
         }
     }
 
+    /// `Cmd` (the macOS command key).
+    pub const fn meta() -> Self {
+        Self {
+            meta: true,
+            ..Self::NONE
+        }
+    }
+
     /// With `Shift` added.
     pub const fn and_shift(self) -> Self {
         Self {
@@ -88,6 +96,40 @@ impl Modifiers {
             parts.push("Cmd");
         }
         parts.join("+")
+    }
+
+    /// Whether `Ctrl` is held.
+    pub const fn uses_ctrl(self) -> bool {
+        self.ctrl
+    }
+
+    /// Whether `Cmd` (`Meta`) is held.
+    pub const fn uses_meta(self) -> bool {
+        self.meta
+    }
+
+    /// Whether every modifier in `other` is held here.
+    pub const fn contains(self, other: Self) -> bool {
+        (!other.ctrl || self.ctrl)
+            && (!other.alt || self.alt)
+            && (!other.shift || self.shift)
+            && (!other.meta || self.meta)
+    }
+
+    /// The same modifiers with the platform's primary modifier made primary.
+    ///
+    /// On macOS that means `Ctrl` becomes `Cmd`; on Windows and Linux the keymap already uses `Ctrl`
+    /// and is returned unchanged. This is a rewrite of the *configuration*, not a runtime decision:
+    /// the platform keymaps are compared by the audit instead of being guessed at from `target_os`.
+    const fn with_primary(self, platform: Platform) -> Self {
+        match platform {
+            Platform::MacOs => Self {
+                ctrl: false,
+                meta: self.ctrl || self.meta,
+                ..self
+            },
+            Platform::Windows | Platform::Linux => self,
+        }
     }
 
     /// Parses a `+`-separated modifier list, refusing an unknown one.
@@ -203,6 +245,14 @@ impl Key {
     /// The key itself.
     pub const fn code(&self) -> KeyCode {
         self.code
+    }
+
+    /// The same key with different modifiers.
+    pub const fn with_modifiers(self, modifiers: Modifiers) -> Self {
+        Self {
+            modifiers,
+            code: self.code,
+        }
     }
 
     /// Whether this key is one a text field would want: a single character with no command modifier.
@@ -727,6 +777,25 @@ impl Keymap {
         &self.bindings
     }
 
+    /// The same bindings with each key rewritten.
+    ///
+    /// Only the platform keymap uses this. It refuses nothing itself: a rewrite that merged two chords
+    /// would hit [`Self::add`]'s conflict check, and the `expect` states why that cannot happen for the
+    /// table this module ships (no two default chords differ only by the primary modifier).
+    fn map_keys(&self, mut map: impl FnMut(Key) -> Key) -> Self {
+        let mut out = Self::new();
+        for binding in &self.bindings {
+            let chord = Chord(binding.chord.0.iter().map(|key| map(*key)).collect());
+            out.add(Binding::new(
+                chord,
+                binding.command.clone(),
+                binding.scope.clone(),
+            ))
+            .expect("the defaults do not differ only by their primary modifier");
+        }
+        out
+    }
+
     /// The bindings by command, for "what key runs this".
     pub fn keys_for(&self, command: &str) -> Vec<String> {
         self.bindings
@@ -771,6 +840,68 @@ pub fn built_in() -> Keymap {
             .expect("the defaults do not conflict");
     }
     keymap
+}
+
+/// The desktop platforms this host ships on (task T05.08).
+///
+/// A shortcut is not one string: the key a person presses for "the primary modifier" is `Cmd` on
+/// macOS and `Ctrl` on Windows and Linux. The default table is written with `Ctrl` because that is
+/// the common spelling; [`Platform::keymap`] rewrites it per platform, and
+/// [`crate::app::commands::audit::audit_platform`] checks every platform's result rather than trusting
+/// the rewrite.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Platform {
+    /// macOS, where the primary modifier is `Cmd`.
+    MacOs,
+    /// Windows.
+    Windows,
+    /// Linux.
+    Linux,
+}
+
+impl Platform {
+    /// Every desktop platform this host ships on.
+    pub const ALL: [Self; 3] = [Self::MacOs, Self::Windows, Self::Linux];
+
+    /// The platform's name, as a command line spells it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::MacOs => "macos",
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+        }
+    }
+
+    /// The platform a name asks for, when it is one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|platform| platform.name() == name)
+    }
+
+    /// The modifiers a person holds for the platform's primary modifier.
+    pub const fn primary_modifier(self) -> Modifiers {
+        match self {
+            Self::MacOs => Modifiers::meta(),
+            Self::Windows | Self::Linux => Modifiers::ctrl(),
+        }
+    }
+
+    /// The primary modifier as a keymap writes it.
+    pub const fn primary_name(self) -> &'static str {
+        match self {
+            Self::MacOs => "Cmd",
+            Self::Windows | Self::Linux => "Ctrl",
+        }
+    }
+
+    /// The default keymap written for this platform.
+    ///
+    /// The commands and scopes are the same on every platform; only the primary modifier differs.
+    pub fn keymap(self) -> Keymap {
+        built_in().map_keys(|key| key.with_modifiers(key.modifiers().with_primary(self)))
+    }
 }
 
 #[cfg(test)]

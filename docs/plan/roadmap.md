@@ -5,9 +5,9 @@
 > 上游取证：rust_widgets 3.1.0 本地检出逐项核对（§1.6.1）；外部参照：业界成熟桌面 IDE 仅作工作流借鉴，
 > 参照单位是已验证的开发工作流与职责划分，不是菜单或界面（§1.6.3）。
 > 本文是完整产品功能总账、交互设计约束、任务依赖和发布验收计划，不只是白皮书章节的任务拆分。
-> 宿主工程已建立并固定上游修订（Cargo.toml 固定 3.1.0 `d44ca0e9`），`src/app` 已铺开多域骨架。
+> 宿主工程已建立并固定上游修订（Cargo.toml 固定 3.2.1 `be69fa2b`），`src/app` 已铺开多域骨架。
 > 骨架铺开不改变任务记法：完成状态仍以 §37.2 证据回写为准，未验收任务不得标记完成。
-> 宿主固定修订从 3.0.0 升级到 3.1.0 并复验，已完成于 2026-10-29（T00.01，决策 U1 流程，§1.6.4）。
+> 宿主固定修订从 3.0.0 升级到 3.1.0（2026-10-29）、再到 3.2.1（2026-11-01）并复验（T00.01，决策 U1 流程，§1.6.4）。
 
 ## 1. 产品目标、范围与规划方法
 
@@ -136,7 +136,7 @@ v0.3 编制时的上游取证停在 2.8.x；本地检出已演进到 rust_widget
 
 | 事实 | 内容与出处 |
 |---|---|
-| 控件口径 | `WidgetKind` 228 个变体；注册表 268 个规范名（含别名）；库内另有 188/187 旧口径（生成器探针与渲染金表，时点更早）。引用计数必须注明口径与时点（`src/widget/kind.rs`、`capability/registration.rs`、根 `control.md`） |
+| 控件口径 | `WidgetKind` 230 个变体（3.2.1 实测，上游 changelog 同口径，`check_widget_kind_count.sh` PASS）；注册表 268 个规范名（含别名）、270 个注册调用（`capability/registration.rs`，2026-11-01 复核）；库内 188/187 为更早时点旧口径。引用计数必须注明口径与时点（`src/widget/kind.rs`、`capability/registration.rs`、根 `control.md`） |
 | 渲染路径 | 现役画面路径是 CPU 软件光栅（`SoftwarePaintBackend`）；`wgpu` 后端为保留管线（模块自述 "Reserved: no production caller"）。性能门槛与宣称不得以 GPU 加速为前提 |
 | 互斥 profile | desktop/tablet/mobile/embedded/mini 五档互斥，`desktop` 默认启用 `designer`、图表、打印/PDF、彩色 emoji；图表/打印/PDF 仅 desktop；`mini` 为 no_std（约 28 核心控件）。容量预算三档：Device 4096 控件/4096 纹理/2 MiB 字形缓存/256 事件队列，Surface 512/2048/1 MiB/128，Minimal 64/1024/256 KiB/64 |
 | 设计器契约 | `designer` feature（= `serde_json` + `declarative-view`）提供 JSON 工程 → 确定性 Rust 生成：一次工程固定产出双产物 `src/generated/ui_default.rs`（desktop/tablet/mobile 共用 Node+ViewEngine 模板）与 `ui_stripped.rs`（mini/embedded 命令式模板）；产物首行 `GENERATED_MARKER`；`GenerationReport`/`GenerationGap` 五类原因（unsupported/capacity-overflow/cross-profile/unresolvable-event/incompatible-wire）不静默丢弃；`--check` 退出码 0/1/2；模式 1/模式 2 行为一致性与 manifest 往返各有库侧门禁 |
@@ -163,9 +163,14 @@ v0.3 编制时的上游取证停在 2.8.x；本地检出已演进到 rust_widget
 生成区/手写区文件级保护（库层无此机制，宿主 T15.01/T06.06）、页面路由与状态机（库无全局状态机，宿主 F13）、
 会话恢复宿主实现（F04/T04.05）、构建/运行/调试/VCS/AI/扩展全链（上游 blue26 §3 明确留给宿主的清单）。
 
-**上游待补（跟踪上游 blue26 B26.01–B26.12），宿主不代替实现：** 带版本能力快照、可校验属性 schema、
-命令参数 schema、稳定 NodeId/source-map（B26.04）、可编辑布局描述与真实布局诊断、profile 精确可用性探测、
-增量更新失败观测等。宿主任务表在相应任务标注依赖，不自行维护猜测表。
+**上游已落地（3.2.1 实测，2026-11-02 复核；逐项证据见 [feedback-20261101.md](../rw-feedback/feedback-20261101.md) T1 表）：**
+带版本能力快照（B26.01，manifest 协议 v5）、可校验属性 schema（B26.02，`Constraint::Range`/`RangeSpec`）、
+命令参数 schema（B26.03）、可编辑布局描述与布局 schema/诊断（B26.05，`json/layout_schema.rs`）、
+profile 精确可用性探测（B26.06，四级 `VerificationLevel`）、增量更新失败观测（`ApplyReport`）。
+
+**上游半落地，宿主跟踪缺口不代替实现：** 稳定 NodeId/source-map（B26.04 仅运行时 `TreeIndex` 落地；
+生成物逐节点锚点仍缺 = RW-42）、布局 schema 未接生成器（RW-47）。宿主任务表在相应任务标注依赖，
+不自行维护猜测表。
 
 #### 1.6.3 外部参照：借鉴单位是工作流，不是菜单
 
@@ -185,9 +190,13 @@ v0.3 编制时的上游取证停在 2.8.x；本地检出已演进到 rust_widget
 
 #### 1.6.4 版本升级要求
 
-P-DEP 当前固定 3.1.0（`d44ca0e9`），T00.01 已按决策 U1 重跑五 profile 构建、manifest 往返
-与生成器门禁，并更新 P-DEP 与支持矩阵（证据见 [`log-20261029-11.md`](../log/archived/log-20261029-11.md)），
-§1.6.1 因此转为可引用基线。上游后续小版本升级沿用同一流程；不因本地检出更新而自动宣称宿主已升级。
+P-DEP 当前固定 3.2.1（`be69fa2b`）。T00.01 已按决策 U1 完成两轮升级复验：3.0.0→3.1.0（2026-10-29，
+证据见 [`log-20261029-11.md`](../log/archived/log-20261029-11.md)）；3.1.0→3.2.0→3.2.1（2026-11-01，
+证据见 [`log-20261101-2.md`](../log/log-20261101-2.md)，macOS aarch64 上 `cargo test --bin` 多域通过）。
+probe 契约另于 2026-11-02 在 Linux x86_64 复验通过（19/19，见 feedback-20261101.md 决策记录）。
+macOS 的 GUI 有界会话与 Windows xwin 交叉构建在 3.2.1 尚未复跑，支持矩阵已按“不拿旧修订证据冒充新修订”
+原则同步重估（[`support-matrix.json`](support-matrix.json)）。上游后续小版本升级沿用同一流程；
+不因本地检出更新而自动宣称宿主已升级。
 
 ## 2. 完整工作台信息架构
 
@@ -1078,7 +1087,7 @@ M0 不创建 AI 会话也能完成全部人工核心旅程；双 agent 可使用
 | CSS 无生成、复杂脚本 shaping 未实现 | T11.03/T24.04 | 生成期内联与文本能力边界如实标注；shaping 缺口列上游待办，不伪装成已支持 |
 | wgpu 为保留管线，现役 CPU 软件光栅 | §35.2 | 性能门槛按软件光栅实测制定；GPU 加速宣称待上游管线落地后重估 |
 | webview 为模型层控件，页面内容不渲染 | F26/F27 | 内嵌浏览器能力按“内容不渲染”边界呈现，不承诺真实页面；需真实引擎时另立项 |
-| 控件计数口径随版本演进（188/228/268） | T09.01/T00.01 | 清单从注册表重导出并注明口径与时点，不硬编码计数 |
+| 控件计数口径随版本演进（188/228/230/268；口径与时点见 §1.6.1） | T09.01/T00.01 | 清单从注册表重导出并注明口径与时点，不硬编码计数 |
 | 控件缺属性/事件/解绑契约 | T09.01/T13.03 | 补契约或显式重建，重复更新验证无订阅累积 |
 | 布局/状态/过渡目标能力不足 | F10/F11/F13 | 禁用并解释，必要功能走上游补齐决策，不自造语义 |
 | 组件/双向绑定引入循环 | F12/F13 | 事务前拓扑/类型校验，拒绝不完整候选 |

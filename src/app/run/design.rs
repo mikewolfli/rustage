@@ -87,6 +87,88 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
                 },
                 Err(reason) => Err(reason),
             },
+            // H-26: the library's own offscreen census. It renders every registered control
+            // twice (light/dark) and reports the theme-blind ones, which is the warning a
+            // toolbox thumbnail must surface rather than paint a plausible tile over.
+            "census" => {
+                let _guard = rust_widgets::theme::theme_test_guard();
+                rust_widgets::widget::census::install_preset_appearances();
+                let rows = rust_widgets::widget::census::census_all_controls();
+                let mut lines = vec![format!(
+                    "{:<28} {:>8} {:>14} {:>14} {:>7} {:>8}",
+                    "name", "ink(l)", "dominant(l)", "dominant(d)", "P3", "detail"
+                )];
+                lines.extend(rows.iter().map(rust_widgets::widget::census::format_row));
+                let invisible = rows
+                    .iter()
+                    .filter(|row| !row.light.paints_anything())
+                    .count();
+                let blind: Vec<&str> = rows
+                    .iter()
+                    .filter(|row| !row.differs_between_appearances())
+                    .map(|row| row.name)
+                    .collect();
+                lines.push(format!(
+                    "checked={} invisible={} theme_blind={}",
+                    rows.len(),
+                    invisible,
+                    blind.len()
+                ));
+                if !blind.is_empty() {
+                    lines.push(format!("theme_blind_controls: {}", blind.join(", ")));
+                }
+                Ok(lines)
+            }
+            // H-27: write one SVG snapshot per contract control. The renderer is the library's
+            // real backend serialiser, so a written file is a picture the app can reproduce.
+            "svg" => {
+                if argument.is_empty() {
+                    return report("svg needs an output directory".to_owned());
+                }
+                if let Err(error) = std::fs::create_dir_all(argument) {
+                    return report(format!("cannot create {argument}: {error}"));
+                }
+                let factory = crate::app::contract::factory();
+                let mut written = 0usize;
+                let mut unrenderable = Vec::new();
+                for descriptor in catalog.descriptors() {
+                    let rect = rust_widgets::core::Rect::new(0, 0, 240, 80);
+                    let Some(widget) = factory.create(&descriptor.id, rect, &descriptor.id) else {
+                        unrenderable.push(descriptor.id.clone());
+                        continue;
+                    };
+                    let Some(id) = rust_widgets::widget::runtime::register(widget) else {
+                        unrenderable.push(descriptor.id.clone());
+                        continue;
+                    };
+                    let mut backend = rust_widgets::render::SvgPaintBackend::new(
+                        rust_widgets::core::Size::new(rect.width, rect.height),
+                    );
+                    let painted = rust_widgets::widget::runtime::paint_widget_into(
+                        id,
+                        rust_widgets::core::Size::new(rect.width, rect.height),
+                        rust_widgets::core::Color::WHITE,
+                        &mut backend,
+                    );
+                    rust_widgets::widget::runtime::unregister(id);
+                    if !painted {
+                        unrenderable.push(descriptor.id.clone());
+                        continue;
+                    }
+                    let svg = backend.finish();
+                    let name = svg_file_name(&descriptor.id);
+                    let path = std::path::Path::new(argument).join(&name);
+                    if let Err(error) = std::fs::write(&path, svg) {
+                        return report(format!("cannot write {}: {error}", path.display()));
+                    }
+                    written += 1;
+                }
+                let mut lines = vec![format!("svg: {written} file(s) in {argument}")];
+                if !unrenderable.is_empty() {
+                    lines.push(format!("svg: not constructed: {}", unrenderable.join(", ")));
+                }
+                Ok(lines)
+            }
             "profile" | "show" => Ok(Vec::new()),
             "limit" => match argument.split_once(':') {
                 Some((id, note)) => {
@@ -176,6 +258,23 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
         );
     }
     true
+}
+
+/// A contract name as a file stem: anything that is not a letter, a digit, `-` or `_`
+/// becomes `-`, so `host/design/canvas` cannot escape the output directory.
+fn svg_file_name(id: &str) -> String {
+    let mut name: String = id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    name.push_str(".svg");
+    name
 }
 
 /// The profile a catalog is captured for.
@@ -1303,7 +1402,17 @@ pub(super) fn parse_pair(argument: &str) -> Result<(usize, usize), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::contract_profile;
+    use super::{contract_profile, svg_file_name};
+
+    #[test]
+    fn an_svg_file_name_cannot_escape_the_output_directory() {
+        assert_eq!(svg_file_name("button"), "button.svg");
+        assert_eq!(
+            svg_file_name("host/design/canvas"),
+            "host-design-canvas.svg"
+        );
+        assert_eq!(svg_file_name(".."), "--.svg");
+    }
 
     #[test]
     fn the_catalog_profile_defaults_to_the_library_build_and_can_be_named() {

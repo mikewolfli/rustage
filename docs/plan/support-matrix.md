@@ -5,11 +5,12 @@
 > 逐行对照该文件校验，改一处而漏另一处会失败。
 > 依据：[项目原则](principle.md) #2/#11/#12/#24/#25、[完整路线图](roadmap.md) T00.03。
 > 需要真机/真设备的项汇总（含已验证标记）：[`docs/platform/verification.md`](../platform/verification.md)。
-> 状态：**矩阵已随 T00.01 升级重估到 3.2.1（`be69fa2b`，2026-11-02）：macOS 在 3.2.1 上有 `cargo test --bin`
-> 多域通过证据（[log-20261101-2.md](../log/log-20261101-2.md)），Linux 在 2026-11-02 有 `cargo test probe::`
-> 19/19 通过证据（feedback-20261101.md 决策记录），两宿主均为 `build-verified`；macOS 的 GUI 有界会话与
-> Windows xwin 交叉构建未在 3.2.1 复跑，相应格子按“不拿旧修订证据冒充新修订”降为 `unverified` 并保留
-> 3.1.0 历史证据引用（[log-20261029-11.md](../log/archived/log-20261029-11.md)）。
+> 状态：**矩阵已随 T00.01 升级重估到 4.0.0（`1a30785`，2026-11-03）：macOS 在 4.0.0 上有
+> `cargo test --bin`/`probe::` 19/19、四个 sized profile 的 `--lib` 构建与 GUI 有界会话证据
+> （[log-20261103-1.md](../log/log-20261103-1.md)），宿主恢复 `certified`、五格 `build-verified`；
+> Windows 在 4.0.0 被上游 RW-101（`WA_INACTIVE` 类型不匹配）阻断，Linux 4.0.0 未复跑，两行维持/
+> 降为 `unverified`。3.1.0/3.2.1 的历史证据保留引用但不冒充新修订证据
+> （[log-20261029-11.md](../log/archived/log-20261029-11.md)、[log-20261101-2.md](../log/log-20261101-2.md)）。
 > 2.8.11 的 embedded E0599 已由 2.8.12 修复并在 3.1.0 复验，见
 > [feedback-20261020.md](../rw-feedback/feedback-20261020.md) §0.6。**
 
@@ -52,9 +53,9 @@
 
 | 宿主 | triple | 设计器宿主 | 理由 |
 |---|---|---|---|
-| macos | aarch64-apple-darwin | build-verified | 3.2.1（be69fa2b）上 cargo test --bin rustage 多域测试在 macOS aarch64 构建并通过（rust_widgets 以 desktop 依赖 features 构建），见 docs/log/log-20261101-2.md；3.1.0（d44ca0e9）的 --workbench-gui 真实 1280x800 窗口会话证据保留于 docs/log/archived/log-20261029-11.md，但 3.2.1 未复跑 GUI 有界会话，故由 certified 降为 build-verified |
-| windows | x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据） | unverified | 3.1.0（d44ca0e9）曾在 macOS 宿主用 rust-lld + xwin 交叉构建 --bin rustage（69 MB PE32+），见 docs/log/archived/log-20261029-11.md；3.2.1（be69fa2b）未复跑交叉构建，按“不拿旧修订证据冒充新修订”降为 unverified |
-| linux | x86_64-unknown-linux-gnu | build-verified | 2026-11-02 在 Linux x86_64 上 cargo test probe:: 通过（probe 契约 19/19，五域探针全 Verified；rust_widgets 以 3.2.1 desktop 依赖 features 完整构建），见 docs/rw-feedback/feedback-20261101.md 决策记录；产品 GUI 运行需 linux-native（GTK）特性，未运行，故为 build-verified |
+| macos | aarch64-apple-darwin | certified | 4.0.0（1a30785）上 macOS aarch64 的 cargo check/test 多域通过，并以 cargo run -- --workbench-gui --exit-after-ms 4000 建立真实 1280x800 窗口会话（docs/log/log-20261103-1.md），故恢复 certified |
+| windows | x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据） | unverified | 4.0.0（1a30785）在 macOS 宿主以 cargo-xwin 交叉构建失败于上游 src/platform/windows/types.rs:540 的 WA_INACTIVE 类型不匹配（RW-101，docs/rw-feedback/feedback-20261101.md 第六轮）；3.1.0 的 xwin 证据不作为 4.0.0 证据 |
+| linux | x86_64-unknown-linux-gnu | unverified | 4.0.0（1a30785）未在 Linux 复跑；3.2.1 上 cargo test probe:: 19/19 的证据见 docs/rw-feedback/feedback-20261101.md 决策记录，按矩阵规则 2/4 不作为 4.0.0 证据；产品 GUI 运行需 linux-native（GTK），本轮未运行 |
 
 设计器宿主始终是桌面（原则 #2）；上表的"设计器宿主"指**设计器自身**能否在该 OS 上构建与运行，
 与输出目标无关。
@@ -64,40 +65,37 @@
 | profile | feature | 模式 1 | 模式 2 |
 |---|---|---|---|
 | desktop | desktop | unverified | build-verified |
-| tablet | tablet | unverified | unverified |
-| mobile | mobile | unverified | unverified |
-| mini | mini | unsupported | unverified |
-| embedded | embedded | unsupported | unverified |
+| tablet | tablet | unverified | build-verified |
+| mobile | mobile | unverified | build-verified |
+| mini | mini | unsupported | build-verified |
+| embedded | embedded | unsupported | build-verified |
 
 - 模式 1（JSON + CSS 运行时加载）仅适用于 desktop/tablet/mobile；mini 与 embedded 必须使用
   模式 2（原则 #11）。这一格是**架构排除**，只会被明确决策改变，不会因为出现证据而变成可用。
-- 模式 2 在 3.2.1 上有 desktop 产物证据（macOS cargo test --bin、Linux cargo test probe::）；
-  tablet/mobile/mini/embedded 在 3.1.0 上曾有 macOS 与 Windows 交叉构建证据，3.2.1 未复跑，
-  相应格子按矩阵原则降为 `unverified`。构建通过**不**证明产物能运行；没有把任何一格写成 `certified`。
+- 模式 2 在 4.0.0 上有 desktop 产物证据（macOS cargo check/test 与 GUI 有界会话）与 macOS 四个
+  sized profile 的专属 `--lib` 构建证据（docs/log/log-20261103-1.md）；Windows 因上游 RW-101
+  无法建立证据，Linux 4.0.0 未复跑。构建通过**不**证明产物能运行；没有把任何一格写成 `certified`。
 
 ## 矩阵（宿主 × profile，模式 2 产物）
 
 | 宿主 \ profile | desktop | tablet | mobile | mini | embedded |
 |---|---|---|---|---|---|
-| macos | build-verified | unverified | unverified | unverified | unverified |
+| macos | build-verified | build-verified | build-verified | build-verified | build-verified |
 | windows | unverified | unverified | unverified | unverified | unverified |
-| linux | build-verified | unverified | unverified | unverified | unverified |
+| linux | unverified | unverified | unverified | unverified | unverified |
 
-矩阵的证据范围（3.2.1 的新证据见 [log-20261101-2.md](../log/log-20261101-2.md) 与
-[feedback-20261101.md](../rw-feedback/feedback-20261101.md) 决策记录；3.1.0 的历史证据见
-[log-20261029-11.md](../log/archived/log-20261029-11.md)；2.8.12 的记录见
-[log-20261020-4.md](../log/log-20261020-4.md)）：
+矩阵的证据范围（4.0.0 的新证据见 [log-20261103-1.md](../log/log-20261103-1.md)；3.2.1 的证据见
+[log-20261101-2.md](../log/log-20261101-2.md) 与 [feedback-20261101.md](../rw-feedback/feedback-20261101.md)
+决策记录；3.1.0 的历史证据见 [log-20261029-11.md](../log/archived/log-20261029-11.md)）：
 
-- `macos` 设计器宿主与 `macos × desktop`（3.2.1）：`cargo test --bin rustage` 在 macOS aarch64 上构建并通过多域测试
-  （rust_widgets 以 desktop 依赖 features 构建）；GUI 有界会话与 profile 专属 `--lib` 构建未在 3.2.1 复跑。
-- `linux` 设计器宿主与 `linux × desktop`（3.2.1）：`cargo test probe::` 于 2026-11-02 在 Linux x86_64 通过
-  （probe 契约 19/19，五域探针全 Verified）；产品 GUI 运行需 `linux-native`（GTK），未运行。
-- `macos × tablet/mobile/mini/embedded`（3.1.0 历史证据）：`cargo build --manifest-path <rust-widgets>/Cargo.toml
-  --no-default-features --features <profile> --lib` 曾在 macOS aarch64、rustc 1.98.1 上真实通过；
-  3.2.1 未复跑，格子降为 `unverified`。
-- `windows × desktop/tablet/mobile/mini/embedded`（3.1.0 历史证据）：曾以 rust-lld + xwin 交叉构建通过，
-  `--bin rustage` 产出 69 MB PE32+；3.2.1 未复跑，格子降为 `unverified`。
-- `linux × tablet/mobile/mini/embedded`：3.1.0 与 3.2.1 均未复跑；2.8.11/2.8.12 的旧证据不作为新修订证据。
+- `macos` 设计器宿主与 `macos × desktop`（4.0.0）：`cargo check/test` 在 macOS aarch64 上通过，
+  `--workbench-gui --exit-after-ms 4000` 建立真实 1280x800 窗口会话。
+- `macos × tablet/mobile/mini/embedded`（4.0.0）：`cargo build --manifest-path <rust-widgets>/Cargo.toml
+  --no-default-features --features <profile> --lib` 四个组合均真实通过。
+- `windows × desktop/tablet/mobile/mini/embedded`（4.0.0）：`cargo xwin build --bin rustage
+  --target x86_64-pc-windows-msvc` 失败于上游 `WA_INACTIVE` 类型不匹配（RW-101），五格无证据。
+- `linux × desktop/tablet/mobile/mini/embedded`：4.0.0 未在 Linux 复跑；3.2.1 的 probe 证据
+  不作为新修订证据（规则 2/4）。
 
 ## 规则
 

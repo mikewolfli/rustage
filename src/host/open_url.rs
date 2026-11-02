@@ -3,51 +3,40 @@
 
 //! Opening a URL or a file with the operating system's own handler. Contract **HOST**.
 //!
-//! T01.02 asks for "URL 打开". The designer needs it for two things: a documentation or help link,
-//! and "reveal this file" style handoffs to the user's desktop. The dependency offers no such API,
-//! so the host owns the handoff and the gap is recorded upstream
-//! (`docs/rw-feedback/feedback-20261013.md`, T01.02 section).
+//! The designer needs this for a documentation or help link and for "reveal this file" handoffs.
+//! The *platform* half is the library's: [`rust_widgets::platform::Platform::open_external`] owns
+//! the `open` / `xdg-open` / `cmd` mapping and the argument-shape refusal, and a backend that has
+//! no handler reports that through its capability flags (blue22 H-15, principle #59). This module
+//! adds only the host policy the designer needs on top:
 //!
-//! **Two judgements this module makes explicitly**, because both are places where a plausible
-//! implementation is a wrong one:
-//!
-//! * **"Started" and "finished" are different answers.** The OS handler is a program; a program
-//!   that was spawned has not necessarily opened anything. So the outcome keeps
-//!   [`OpenOutcome::HandedOver`] (the handler exited 0), [`OpenOutcome::HandlerFailed`] (it ran and
-//!   failed, with its own exit code and stderr) and [`OpenOutcome::HandlerNotStarted`] (it could not
-//!   be started at all) apart, instead of collapsing them into "opened" (principle #45).
-//! * **A target that would be read as an option is refused, not escaped.** `open` and `xdg-open`
-//!   parse their own arguments, so a target beginning with `-` is an option to them, not a URL —
-//!   `xdg-open -- <path>` is itself rejected with "unexpected option" (verified on the pinned
-//!   revision's host). Refusing an option-shaped target with a named reason keeps the caller's
-//!   mistake in front of them instead of handing a flag to the desktop (principle #29).
-//!
-//! **One transient refusal, handled rather than reported.** `ETXTBSY` ("text file busy") is what the
-//! kernel answers when the file being executed is still open for writing by any process — which, in a
-//! host with several threads, happens for milliseconds when one thread forks while another writes.
-//! [`ProgramOpener::spawn`] retries it a bounded number of times instead of telling the user a program
-//! that is right there is not installed; the evidence is in the log for 2026-10-14.
-//!
-//! **Ownership.** This module starts a process and reaps it; it does not own a process tree, log a
-//! child's output to a panel, or kill anything. That is T01.04's contract, which depends on the
-//! task ownership of T01.03. A handler that outlives [`ProgramOpener::timeout`] is left running and
-//! reported as still running — the host does not kill an application the user asked to open.
+//! * **A target the designer must never launch is refused.** `javascript:`, `data:` and private
+//!   application schemes are not URLs a designer has business opening; a URL without a scheme and
+//!   a missing path are refused for the same reason (principle #29).
+//! * **"Handed off" and "finished" are different answers.** The library returns once the target
+//!   has been handed to the host handler, not when that handler exits. [`OpenOutcome::HandedOff`]
+//!   says exactly that, while a controlled handler the tests start still reports its own exit code
+//!   through [`OpenOutcome::HandedOver`] (principle #45).
 
 use std::fmt;
+#[cfg(test)]
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(test)]
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
-/// How long the default opener waits for the OS handler to finish before giving up on it.
+/// How long a controlled test handler may take before the test opener reports it still running.
+#[cfg(test)]
 pub const DEFAULT_HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How many times a start is retried when the kernel says the file is still open for writing.
+#[cfg(test)]
 const EXECUTABLE_BUSY_ATTEMPTS: usize = 50;
 
-/// How long to wait between those retries. Fifty attempts of 10ms bound the wait at half a second,
-/// which is far longer than the fork window that causes it and short enough not to hide a real
-/// refusal for long.
+/// How long to wait between those retries.
+#[cfg(test)]
 const EXECUTABLE_BUSY_RETRY: Duration = Duration::from_millis(10);
 
 /// What the caller wants the OS to open.
@@ -82,6 +71,8 @@ pub enum OpenRefusal {
     UnsupportedScheme { scheme: String },
     /// A path that does not exist, so there is nothing to reveal.
     MissingPath { path: PathBuf },
+    /// The platform handler refused a target the host's own checks accepted.
+    HandlerRefused { target: String },
     /// This operating system has no handler this host knows how to start.
     UnsupportedPlatform { os: String },
 }
@@ -111,6 +102,9 @@ impl OpenRefusal {
                     path.display()
                 )
             }
+            Self::HandlerRefused { target } => {
+                format!("the platform handler refused {target}")
+            }
             Self::UnsupportedPlatform { os } => {
                 format!("no system URL handler is known for `{os}`")
             }
@@ -135,6 +129,15 @@ pub enum OpenOutcome {
         program: String,
         /// Its exit code.
         exit: i32,
+    },
+    /// The target was handed to the platform's handler, which owns its own lifetime.
+    ///
+    /// This is the upstream `open_external` answer: the request left the process, but the handler
+    /// has not necessarily opened anything yet. It is deliberately distinct from
+    /// [`Self::HandedOver`], which is the exit code a handler the tests start reports.
+    HandedOff {
+        /// The target handed over.
+        target: String,
     },
     /// The handler ran and failed. Its own exit code and output are kept, because "the browser
     /// exited 4 and said why" is the diagnostic a caller needs.
@@ -171,7 +174,7 @@ pub enum OpenOutcome {
 impl OpenOutcome {
     /// Whether the handler completed successfully.
     pub fn is_handed_over(&self) -> bool {
-        matches!(self, Self::HandedOver { .. })
+        matches!(self, Self::HandedOver { .. } | Self::HandedOff { .. })
     }
 
     /// Whether the OS actually started something. [`Self::HandlerNotStarted`] is the only answer
@@ -185,6 +188,9 @@ impl OpenOutcome {
         match self {
             Self::HandedOver { program, exit } => {
                 format!("{program} opened the target and exited with {exit}")
+            }
+            Self::HandedOff { target } => {
+                format!("the platform accepted {target}; its handler owns the rest")
             }
             Self::HandlerFailed {
                 program,
@@ -264,35 +270,65 @@ pub fn accept(target: &OpenTarget) -> Result<String, OpenRefusal> {
     Ok(argument)
 }
 
-/// The handler program and fixed arguments a platform uses, if this host knows one.
+/// The platform's own handler, as the library reports it.
 ///
-/// `cfg!` is used rather than `#[cfg]` so the mapping is a value a test can read on any host: the
-/// Windows and macOS entries are then checked by the same test that checks the running platform's,
-/// instead of the non-matching arms being invisible on the machine that runs the tests.
-pub fn program_for(os: &str) -> Option<(String, Vec<String>)> {
-    match os {
-        "macos" => Some(("open".to_owned(), Vec::new())),
-        "linux" | "freebsd" | "netbsd" | "openbsd" | "dragonfly" | "solaris" | "illumos" => {
-            Some(("xdg-open".to_owned(), Vec::new()))
+/// The mapping (`open` on macOS, `xdg-open` on Linux, `cmd /C start` on Windows) and the
+/// argument-shape refusal live in the library's platform backend. This type adds the host's own
+/// target policy ([`accept`]) and reports the handoff honestly (blue22 H-15).
+pub struct PlatformOpener;
+
+impl PlatformOpener {
+    /// The opener for the machine this host is running on.
+    ///
+    /// Returns `Err` when the backend reports no external-opening capability, rather than guessing
+    /// a handler program nobody tested.
+    pub fn for_this_platform() -> Result<Self, OpenRefusal> {
+        if rust_widgets::platform::platform_facts()
+            .capabilities()
+            .open_external
+        {
+            Ok(Self)
+        } else {
+            Err(OpenRefusal::UnsupportedPlatform {
+                os: std::env::consts::OS.to_owned(),
+            })
         }
-        // `cmd /C start "" <target>`: the empty title is required, because `start` treats the first
-        // quoted argument as the window title — a target with spaces would otherwise be consumed as
-        // one. The target is passed as its own argv entry, so the shell never parses it.
-        "windows" => Some((
-            "cmd".to_owned(),
-            vec!["/C".to_owned(), "start".to_owned(), String::new()],
-        )),
-        _ => None,
     }
 }
 
-/// A URL opener that starts a program and reports what that program did.
+impl UrlOpener for PlatformOpener {
+    fn open(&self, target: &OpenTarget) -> Result<OpenOutcome, OpenRefusal> {
+        let argument = accept(target)?;
+        match rust_widgets::platform::platform_facts().open_external(&argument) {
+            Ok(()) => Ok(OpenOutcome::HandedOff { target: argument }),
+            Err(rust_widgets::platform::OpenError::Unsupported) => {
+                Err(OpenRefusal::UnsupportedPlatform {
+                    os: std::env::consts::OS.to_owned(),
+                })
+            }
+            Err(rust_widgets::platform::OpenError::NoHandler) => {
+                Ok(OpenOutcome::HandlerNotStarted {
+                    program: "the platform handler".to_owned(),
+                    reason: "no default handler is installed for this target".to_owned(),
+                })
+            }
+            Err(rust_widgets::platform::OpenError::InvalidTarget) => {
+                Err(OpenRefusal::HandlerRefused { target: argument })
+            }
+        }
+    }
+}
+
+/// A test-only opener around an explicit program, so a handler can be started and its exit code
+/// observed without asking the platform to open anything.
+#[cfg(test)]
 pub struct ProgramOpener {
     program: String,
     prefix_arguments: Vec<String>,
     timeout: Duration,
 }
 
+#[cfg(test)]
 impl ProgramOpener {
     /// An opener around an explicit program, which tests use to run a handler they control.
     pub fn with_program(
@@ -305,21 +341,6 @@ impl ProgramOpener {
             prefix_arguments,
             timeout,
         }
-    }
-
-    /// The opener for the machine this host is running on.
-    ///
-    /// Returns `Err` rather than guessing when the platform has no known handler: a host that got a
-    /// default program here would start the wrong thing on a platform nobody tested.
-    pub fn for_this_platform() -> Result<Self, OpenRefusal> {
-        let os = std::env::consts::OS;
-        let (program, prefix_arguments) = program_for(os)
-            .ok_or_else(|| OpenRefusal::UnsupportedPlatform { os: os.to_owned() })?;
-        Ok(Self::with_program(
-            program,
-            prefix_arguments,
-            DEFAULT_HANDOVER_TIMEOUT,
-        ))
     }
 
     /// The program this opener starts.
@@ -357,82 +378,9 @@ impl ProgramOpener {
             }
         }
     }
-
-    /// Whether the handler program can be found on `PATH`.
-    ///
-    /// Used by the readiness report, which must say "the handler is not installed" before anyone
-    /// blames the URL. This is *not* a claim that a launch would succeed — the report keeps those
-    /// apart (principle #45).
-    pub fn is_on_path(&self) -> bool {
-        let Some(path) = std::env::var_os("PATH") else {
-            return false;
-        };
-        let names = candidate_names(
-            &self.program,
-            cfg!(windows),
-            std::env::var("PATHEXT").ok().as_deref(),
-        );
-        std::env::split_paths(&path).any(|directory| {
-            names.iter().any(|name| {
-                let candidate = directory.join(name);
-                candidate.is_file() && is_executable(&candidate)
-            })
-        })
-    }
 }
 
-/// The names a program may have in a directory on `PATH`, in the order to try them.
-///
-/// On Windows a program is stored with an extension and the shell finds `cmd` through `PATHEXT`,
-/// which is why the bare name is not enough there. Searching only for the bare name made this
-/// report `` `cmd` is absent on PATH `` on a machine that has `C:\windows\system32\cmd.exe` — a
-/// **false gap**, and one that only ever appears on the platform the check exists for (measured
-/// under Wine, `docs/log/log-20261015-2.md` §3).
-///
-/// `windows` and `pathext` are parameters rather than `cfg!`/`env::var` reads inside, so the rule is
-/// testable on the machine that runs the tests: a `cfg!(windows)` branch could only ever be observed
-/// on Windows, which is exactly the platform this project has no machine for.
-fn candidate_names(program: &str, windows: bool, pathext: Option<&str>) -> Vec<String> {
-    let mut names = vec![program.to_owned()];
-    if !windows {
-        return names;
-    }
-    let extensions = pathext.unwrap_or(DEFAULT_PATHEXT);
-    for extension in extensions.split(';') {
-        let extension = extension.trim();
-        if !extension.is_empty() {
-            names.push(format!("{program}{extension}"));
-        }
-    }
-    names
-}
-
-/// What Windows searches when `PATHEXT` is not set.
-///
-/// The list the platform documents, in its own order: a program that exists as both a `.com` and an
-/// `.exe` is found through the `.com`, and a host that searched in a different order than the shell
-/// would report a different program than the one that would really run.
-const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
-
-/// Whether a path is executable on this host.
-///
-/// On Unix that is the owner/group/other execute bit; elsewhere the file's presence is all the
-/// platform lets this host ask for without opening it, so a `.exe` on `PATH` counts.
-fn is_executable(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        true
-    }
-}
-
+#[cfg(test)]
 impl UrlOpener for ProgramOpener {
     fn open(&self, target: &OpenTarget) -> Result<OpenOutcome, OpenRefusal> {
         let argument = accept(target)?;
@@ -507,8 +455,8 @@ impl UrlOpener for ProgramOpener {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALLOWED_SCHEMES, DEFAULT_PATHEXT, OpenOutcome, OpenRefusal, OpenTarget, ProgramOpener,
-        UrlOpener, candidate_names, program_for,
+        ALLOWED_SCHEMES, OpenOutcome, OpenRefusal, OpenTarget, PlatformOpener, ProgramOpener,
+        UrlOpener,
     };
     use std::path::PathBuf;
     use std::time::Duration;
@@ -707,68 +655,10 @@ mod tests {
     }
 
     #[test]
-    fn every_platform_the_host_claims_names_its_handler() {
-        assert_eq!(
-            program_for("macos").map(|(program, _)| program).as_deref(),
-            Some("open")
-        );
-        assert_eq!(
-            program_for("linux").map(|(program, _)| program).as_deref(),
-            Some("xdg-open")
-        );
-        assert_eq!(
-            program_for("windows")
-                .map(|(program, _)| program)
-                .as_deref(),
-            Some("cmd")
-        );
-        // An unknown platform gets no guess, which is what keeps a wrong program off an untested
-        // system.
-        assert!(program_for("plan9").is_none());
-        assert!(matches!(
-            ProgramOpener::for_this_platform(),
-            Ok(_) | Err(OpenRefusal::UnsupportedPlatform { .. })
-        ));
-    }
-
-    /// A program on Windows is found through `PATHEXT`, and the report has to know that.
-    ///
-    /// Found by running the Windows binary under Wine: `C:\windows\system32\cmd.exe` was there and
-    /// on `PATH`, and the check still reported `` `cmd` is absent on PATH `` because it looked for the
-    /// bare name — a false gap, on the only platform that check exists for. This test states the rule
-    /// where it can be read on any host, since a `cfg!(windows)` branch inside the lookup could only
-    /// be observed on Windows.
-    #[test]
-    fn the_windows_lookup_uses_pathext_and_the_unix_one_does_not() {
-        assert_eq!(
-            candidate_names("cmd", true, Some(".COM;.EXE")),
-            vec!["cmd".to_owned(), "cmd.COM".to_owned(), "cmd.EXE".to_owned(),]
-        );
-        // No `PATHEXT` in the environment: the platform's own default order, which is what a shell
-        // would search. Getting the order wrong would name a different program than the one that runs.
-        assert_eq!(
-            candidate_names("cmd", true, None),
-            vec![
-                "cmd".to_owned(),
-                "cmd.COM".to_owned(),
-                "cmd.EXE".to_owned(),
-                "cmd.BAT".to_owned(),
-                "cmd.CMD".to_owned(),
-            ]
-        );
-        assert!(
-            DEFAULT_PATHEXT.split(';').count() == 4,
-            "the default list is the platform's four extensions: {DEFAULT_PATHEXT}"
-        );
-        // Empty entries in `PATHEXT` are skipped rather than producing a name equal to the program.
-        assert_eq!(
-            candidate_names("cmd", true, Some(".EXE;;  ")),
-            vec!["cmd".to_owned(), "cmd.EXE".to_owned()]
-        );
-        // On unix the program's own name is the whole answer: an extension list would invent names.
-        assert_eq!(
-            candidate_names("xdg-open", false, Some(".EXE")),
-            vec!["xdg-open".to_owned()]
-        );
+    fn the_platform_opener_follows_the_library_capability() {
+        let capability = rust_widgets::platform::platform_facts()
+            .capabilities()
+            .open_external;
+        assert_eq!(PlatformOpener::for_this_platform().is_ok(), capability);
     }
 }

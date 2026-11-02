@@ -133,6 +133,21 @@ impl Adapter {
         self.editor.line_count()
     }
 
+    /// The byte offset of a document position, through the widget's shared document.
+    ///
+    /// This is the editor-side conversion the host used to re-derive from `&str`; the document owns
+    /// the one column rule, so diagnostics and caret movement cannot disagree (blue22 H-7).
+    pub fn offset_of(&self, position: TextPosition) -> usize {
+        self.editor.offset_of(position)
+    }
+
+    /// The document position containing a byte offset, through the widget's shared document.
+    ///
+    /// The offset is clamped exactly as [`CodeEditorDocument::position_of`] documents.
+    pub fn position_of(&self, offset: usize) -> TextPosition {
+        self.editor.position_of(offset)
+    }
+
     /// The primary caret.
     pub fn caret(&self) -> TextPosition {
         self.editor.caret()

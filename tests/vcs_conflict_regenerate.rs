@@ -88,6 +88,7 @@ impl Workspace {
         let generated = self.path(GENERATED);
         Command::new(env!("CARGO_BIN_EXE_rustage"))
             .current_dir(&self.root)
+            .env("RUSTAGE_LANGUAGE_DIR", language_dir())
             .args([
                 "--generate",
                 &format!("document:{}", page.display()),
@@ -136,6 +137,7 @@ impl Workspace {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rustage"));
         command
             .current_dir(&self.root)
+            .env("RUSTAGE_LANGUAGE_DIR", language_dir())
             .arg("--vcs")
             .arg(format!("repo:{}", self.root.display()));
         for op in ops {
@@ -150,6 +152,15 @@ fn fixture(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/vcs-conflict")
         .join(relative)
+}
+
+/// The checkout's runtime language directory.
+///
+/// The binary runs with the throwaway repository as its working directory, so the checkout's
+/// `language/` is not on the default lookup chain. The test injects it explicitly rather than
+/// asking the host to guess, which is the fix blue22 VCS-1 asks for.
+fn language_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("language")
 }
 
 fn git_available() -> bool {

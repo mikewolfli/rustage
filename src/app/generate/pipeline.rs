@@ -340,6 +340,13 @@ impl Outcome {
         for gap in &self.report.unsupported {
             out.push(format!("refused {} ({})", gap.widget, gap.reason));
         }
+        if !self.report.icon_tokens.is_empty() {
+            out.push(format!(
+                "icons: {} token(s): {}",
+                self.report.icon_tokens.len(),
+                self.report.icon_tokens.join(", ")
+            ));
+        }
         out.push(format!("source: {} bytes", self.source.len()));
         out
     }

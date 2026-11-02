@@ -316,19 +316,14 @@ impl Catalog {
     /// visibly untranslated rather than silently empty.
     pub fn fill(&self, key: &str, arguments: &[(&str, &str)]) -> String {
         match self.text(key) {
-            Text::Found(template) => substitute(template, arguments),
+            Text::Found(template) => {
+                let mut out = String::with_capacity(template.len());
+                rust_widgets::i18n::interpolate_into(template, arguments, &mut out);
+                out
+            }
             Text::Missing { key } => format!("{key} (has no text)"),
         }
     }
-}
-
-/// Replaces each `{name}` in a template with its argument.
-fn substitute(template: &str, arguments: &[(&str, &str)]) -> String {
-    let mut out = template.to_owned();
-    for (name, value) in arguments {
-        out = out.replace(&format!("{{{name}}}"), value);
-    }
-    out
 }
 
 /// How the interface language was decided.

@@ -259,7 +259,7 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
                 Err(_) => Err(format!("{argument:?} is not a line")),
             },
             "visual" => match argument.parse::<usize>() {
-                Ok(offset) => match position_at(&text, offset) {
+                Ok(offset) => match position_at(&adapter, &text, offset) {
                     Ok(position) => Ok(format!(
                         "offset {offset} → {}",
                         visual_of(&adapter, position)
@@ -270,7 +270,7 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
             },
             "offset" => match argument.split_once(':') {
                 Some((row, column)) => match (row.parse::<usize>(), column.parse::<usize>()) {
-                    (Ok(row), Ok(column)) => match visual_at(&adapter, &text, row, column) {
+                    (Ok(row), Ok(column)) => match visual_at(&adapter, row, column) {
                         Some((position, offset)) => Ok(format!(
                             "row {row} col {column} → line {} char {} → offset {offset}",
                             position.line, position.column
@@ -289,7 +289,10 @@ pub(super) fn coordinates(options: &crate::cli::CoordinatesOptions) -> bool {
                 match parts.as_slice() {
                     [kind, start, end] => match (start.parse::<usize>(), end.parse::<usize>()) {
                         (Ok(start), Ok(end)) => {
-                            match (position_at(&text, start), position_at(&text, end)) {
+                            match (
+                                position_at(&adapter, &text, start),
+                                position_at(&adapter, &text, end),
+                            ) {
                                 (Ok(start_at), Ok(end_at)) => Ok(format!(
                                     "mark {kind} → {} .. {}",
                                     visual_of(&adapter, start_at),
@@ -341,7 +344,6 @@ fn visual_of(adapter: &crate::app::editor::adapter::Adapter, position: TextPosit
 /// A visual row and a character column within it, as a document position and a byte offset.
 fn visual_at(
     adapter: &crate::app::editor::adapter::Adapter,
-    text: &str,
     row: usize,
     column: usize,
 ) -> Option<(TextPosition, usize)> {
@@ -352,7 +354,7 @@ fn visual_at(
         .saturating_add(column)
         .min(line.end_column);
     let position = TextPosition::new(line.line, character);
-    Some((position, offset_of(text, position)))
+    Some((position, offset_of(adapter, position)))
 }
 
 /// The conversion's own report.
@@ -421,7 +423,7 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
     for op in actions {
         let (verb, argument) = op.split_once(':').unwrap_or((op.as_str(), ""));
         let step: Result<String, String> = match verb {
-            "carets" => match positions_of(&text, argument) {
+            "carets" => match positions_of(&adapter, &text, argument) {
                 Ok(positions) => match positions.split_first() {
                     None => Err("carets needs at least one offset".to_owned()),
                     Some((first, rest)) => {
@@ -438,7 +440,10 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
                 Some((anchor, cursor)) => {
                     match (anchor.parse::<usize>(), cursor.parse::<usize>()) {
                         (Ok(anchor), Ok(cursor)) => {
-                            match (position_at(&text, anchor), position_at(&text, cursor)) {
+                            match (
+                                position_at(&adapter, &text, anchor),
+                                position_at(&adapter, &text, cursor),
+                            ) {
                                 (Ok(anchor_at), Ok(cursor_at)) => {
                                     adapter.select(anchor_at, cursor_at);
                                     Ok(format!(
@@ -495,7 +500,7 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
                 Ok(format!("toggled comment {argument:?}"))
             }
             "matching" => match argument.parse::<usize>() {
-                Ok(offset) => match position_at(&text, offset) {
+                Ok(offset) => match position_at(&adapter, &text, offset) {
                     Ok(position) => {
                         adapter.set_caret(position);
                         match adapter.matching_brackets() {
@@ -503,7 +508,7 @@ pub(super) fn edit_ops(options: &crate::cli::EditOpsOptions) -> bool {
                                 let other = if position == open { close } else { open };
                                 Ok(format!(
                                     "bracket at {offset} matches {}",
-                                    offset_of(&text, other)
+                                    offset_of(&adapter, other)
                                 ))
                             }
                             None => Ok(format!("bracket at {offset} has no match")),
@@ -547,18 +552,29 @@ pub(super) fn single_char(argument: &str) -> Option<char> {
 }
 
 /// Parses `<offset>:<offset>:...` into widget positions.
-fn positions_of(text: &str, argument: &str) -> Result<Vec<TextPosition>, String> {
+fn positions_of(
+    adapter: &crate::app::editor::adapter::Adapter,
+    text: &str,
+    argument: &str,
+) -> Result<Vec<TextPosition>, String> {
     argument
         .split(':')
         .map(|number| match number.parse::<usize>() {
-            Ok(offset) => position_at(text, offset),
+            Ok(offset) => position_at(adapter, text, offset),
             Err(_) => Err(format!("{number:?} is not an offset")),
         })
         .collect()
 }
 
 /// Converts a byte offset to the widget's line/column position.
-fn position_at(text: &str, offset: usize) -> Result<TextPosition, String> {
+///
+/// The host owns the two refusals the command line needs (past the end, inside a character); the
+/// conversion itself is the editor document's (blue22 H-7).
+fn position_at(
+    adapter: &crate::app::editor::adapter::Adapter,
+    text: &str,
+    offset: usize,
+) -> Result<TextPosition, String> {
     if offset > text.len() {
         return Err(format!(
             "offset {offset} is past the end of the document ({} bytes)",
@@ -568,27 +584,12 @@ fn position_at(text: &str, offset: usize) -> Result<TextPosition, String> {
     if !text.is_char_boundary(offset) {
         return Err(format!("offset {offset} is inside a character"));
     }
-    let before = &text[..offset];
-    let line = before.matches('\n').count();
-    let column = before.rsplit('\n').next().unwrap_or("").chars().count();
-    Ok(TextPosition::new(line, column))
+    Ok(adapter.position_of(offset))
 }
 
 /// Converts a widget position back to a byte offset, for a report.
-fn offset_of(text: &str, position: TextPosition) -> usize {
-    let mut offset = 0;
-    for (index, line) in text.split('\n').enumerate() {
-        if index == position.line {
-            return offset
-                + line
-                    .char_indices()
-                    .nth(position.column)
-                    .map(|(at, _)| at)
-                    .unwrap_or(line.len());
-        }
-        offset += line.len() + 1;
-    }
-    text.len()
+fn offset_of(adapter: &crate::app::editor::adapter::Adapter, position: TextPosition) -> usize {
+    adapter.offset_of(position)
 }
 
 /// The language a command-line comment prefix names, when it names one.

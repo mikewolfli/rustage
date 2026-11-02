@@ -247,13 +247,19 @@ pub(super) fn parse_property_type(
     match kind {
         "number" => {
             let (min, max) = parse_bounds(args)?;
-            Ok(PropertyType::Number { min, max })
+            Ok(PropertyType::Number {
+                min,
+                max,
+                step: None,
+                places: None,
+            })
         }
         "integer" => {
             let (min, max) = parse_bounds(args)?;
             Ok(PropertyType::Integer {
                 min: min.map(|value| value as i64),
                 max: max.map(|value| value as i64),
+                step: None,
             })
         }
         "enum" => Ok(PropertyType::Enum {

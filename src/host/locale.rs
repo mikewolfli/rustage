@@ -125,24 +125,13 @@ impl Language {
 
     /// The language the system is set to, when this build recognises it.
     ///
-    /// Reads the conventional locale variables in their usual precedence and answers `None` when none
-    /// of them names a language this build knows — which is "the system asked for something else",
-    /// not "the system speaks English".
+    /// The platform backend owns the OS-specific read (`NSLocale` on macOS,
+    /// `GetUserDefaultLocaleName` on Windows, the POSIX variables on Linux); this build only decides
+    /// which of those tags it can actually present. A `zh-Hant` tag remains unrecognised because the
+    /// bundled Chinese pack is simplified (blue22 H-16).
     pub fn system() -> Option<Self> {
-        for variable in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-            let Ok(value) = std::env::var(variable) else {
-                continue;
-            };
-            let value = value.trim();
-            if value.is_empty() {
-                continue;
-            }
-            if value == "C" || value == "POSIX" {
-                return None;
-            }
-            return Self::from_locale(value);
-        }
-        None
+        let tag = rust_widgets::platform::platform_facts().system_locale()?;
+        Self::from_locale(tag)
     }
 }
 

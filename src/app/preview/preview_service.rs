@@ -495,6 +495,7 @@ impl Preview {
         let mut engine = ViewEngine::new();
         let report = engine.mount(document, &tracked);
         let created = created.into_inner();
+        let removed = report.removed_ids.clone();
         if report.widgets_created == 0 {
             for id in created {
                 rust_widgets::widget::runtime::unregister(id);
@@ -508,7 +509,7 @@ impl Preview {
         for node in &document.nodes {
             self.install(node.node)?;
         }
-        self.prune_controls(document);
+        self.release_controls(removed);
         Ok(MountReport {
             widgets_created: report.widgets_created,
             issues: report.errors.len(),
@@ -559,6 +560,7 @@ impl Preview {
             .expect("the engine was checked above")
             .update(document, &tracked);
         self.view_ids.extend(created.into_inner());
+        let removed = report.removed.clone();
 
         let failure = if report.root_replaced {
             Some(
@@ -595,7 +597,7 @@ impl Preview {
         for node in &document.nodes {
             self.install(node.node)?;
         }
-        self.prune_controls(document);
+        self.release_controls(removed);
         Ok(UpdateReport {
             patches: report.patch_count(),
             replaced_subtrees: report.replaced_subtrees,
@@ -724,46 +726,43 @@ impl Preview {
         self.view_ids.iter().copied().collect()
     }
 
-    /// Drops controls the mounted tree no longer contains (blue21 O-9).
+    /// The published events of each live control that nothing has subscribed to, per control.
     ///
-    /// The document is flat — root plus one ordered child list — so the engine's tree index names
-    /// each live control by path: `[]` is the root and `[i]` is the child at position `i`. A control
-    /// the index no longer answers for was removed or replaced by an update; it is unregistered and
-    /// forgotten here, so a long editing session does not accumulate the ids of every control it
-    /// ever created. A control a failed update left behind is handled the same way, because `create`
-    /// adds it to `view_ids` before the tree accepts it.
-    fn prune_controls(&mut self, document: &Document) {
-        let Some(engine) = &self.engine else {
-            return;
-        };
-        let index = engine.tree_index();
-        let mut current = BTreeSet::new();
-        if let Some(root) = index.id_at(&[]) {
-            current.insert(root);
-        }
-        for position in 0..document.nodes.len() {
-            if let Some(id) = index.id_at(&[position]) {
-                current.insert(id);
+    /// `None` from the library means "the wiring has not been observed yet", which is reported as
+    /// such rather than folded into "everything is wired" (principle #55). A control with no
+    /// unwired events contributes no line.
+    pub fn unwired_events(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for id in &self.view_ids {
+            match rust_widgets::signal::unwired_events(*id) {
+                Some(events) if !events.is_empty() => {
+                    out.push(format!("control {id}: {}", events.join(", ")));
+                }
+                Some(_) => {}
+                None => out.push(format!("control {id}: wiring not observed")),
             }
         }
-        let stale: Vec<ObjectId> = self
-            .view_ids
-            .iter()
-            .copied()
-            .filter(|id| !current.contains(id))
-            .collect();
-        for id in &stale {
-            rust_widgets::widget::runtime::unregister(*id);
-            self.view_ids.remove(id);
+        out
+    }
+
+    /// Releases the controls an engine report says a mount or update destroyed (blue22 H-1).
+    ///
+    /// The library names the ids it detached, subtree members included, so the session does not
+    /// infer them from the view's path shape. Only ids this session created are unregistered: an id
+    /// the report names but the session never tracked is not the session's control to release.
+    fn release_controls(&mut self, removed: impl IntoIterator<Item = ObjectId>) {
+        let mut released = 0usize;
+        for id in removed {
+            if self.view_ids.remove(&id) {
+                rust_widgets::widget::runtime::unregister(id);
+                released += 1;
+            }
         }
-        if !stale.is_empty() {
+        if released > 0 {
             crate::host::log::emit(
                 crate::host::log::Level::Info,
                 "app::preview::service",
-                &format!(
-                    "released {} control(s) the view no longer contains",
-                    stale.len()
-                ),
+                &format!("released {released} control(s) the view no longer contains"),
             );
         }
     }
@@ -833,6 +832,7 @@ impl Preview {
         };
         let report = engine.mount(document, &tracked);
         let created = created.into_inner();
+        let removed = report.removed_ids.clone();
         self.view_ids.extend(created);
         if report.widgets_created == 0 {
             self.engine = None;
@@ -846,7 +846,7 @@ impl Preview {
         for node in &document.nodes {
             self.install(node.node)?;
         }
-        self.prune_controls(document);
+        self.release_controls(removed);
         Ok(())
     }
 

@@ -448,6 +448,30 @@ impl PropertyState {
         }
     }
 
+    /// Whether the property is a colour, so the grid opens its colour editor.
+    pub(super) fn is_colour(&self) -> bool {
+        matches!(
+            self.editor.schema().kind_of(&self.name),
+            Some(PropertyType::Colour)
+        )
+    }
+
+    /// The numeric bounds and step the contract declares, when the property is a number.
+    ///
+    /// This is what the property grid receives as `NumberBounds`, so a cell's stepper and commit
+    /// check use the control's own declaration instead of an unbounded editor (blue22 H-12).
+    pub(super) fn number_bounds(&self) -> Option<(Option<f64>, Option<f64>, Option<f64>)> {
+        match self.editor.schema().kind_of(&self.name) {
+            Some(PropertyType::Number { min, max, step, .. }) => Some((*min, *max, *step)),
+            Some(PropertyType::Integer { min, max, step }) => Some((
+                min.map(|value| value as f64),
+                max.map(|value| value as f64),
+                *step,
+            )),
+            _ => None,
+        }
+    }
+
     /// The contract's default for the property, rendered for the field.
     pub(super) fn contract_default(&self) -> Option<String> {
         self.editor

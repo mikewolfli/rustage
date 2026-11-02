@@ -959,6 +959,27 @@ impl LibraryEngine {
                     if let Some(order) = entry.order {
                         flex.set_item_order(child.id, order);
                     }
+                    // The hint channel carries the declared maximum; `FlexItem::max_size` is where
+                    // the solver reads it. `0` is the item's "no limit" spelling, so an untouched
+                    // `u32::MAX` stays unbounded (blue22 H-17).
+                    let max_width = if entry.hints.width.max == u32::MAX {
+                        0
+                    } else {
+                        entry.hints.width.max
+                    };
+                    let max_height = if entry.hints.height.max == u32::MAX {
+                        0
+                    } else {
+                        entry.hints.height.max
+                    };
+                    if (max_width != 0 || max_height != 0)
+                        && let Some(item) = flex
+                            .items_mut()
+                            .iter_mut()
+                            .find(|item| item.widget_id == Some(child.id))
+                    {
+                        item.max_size = LibrarySize::new(max_width, max_height);
+                    }
                 }
                 emit(&flex, rect, &children, &library_context)
             }

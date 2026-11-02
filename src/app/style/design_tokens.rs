@@ -260,20 +260,17 @@ impl TokenSet {
             .to_str()
             .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?;
         let mut manager = rust_widgets::theme::ThemeManager::new();
-        // `load_and_activate_theme` is the load half that reports the name recorded in the file:
-        // `load_theme` only registers, and a file may be named anything while the theme keeps its
-        // own name.
-        let name = manager
-            .load_and_activate_theme(path_text)
-            .map_err(|error| {
-                format!(
-                    "the theme file {} could not be loaded: {error}",
-                    path.display()
-                )
-            })?;
-        let theme = manager.current_theme().ok_or_else(|| {
+        // `load_theme_named` registers the theme and reports the name recorded in the file without
+        // activating it; registration is the only effect this set wants (blue22 H-25).
+        let name = manager.load_theme_named(path_text).map_err(|error| {
             format!(
-                "the theme file {} loaded but no theme is active",
+                "the theme file {} could not be loaded: {error}",
+                path.display()
+            )
+        })?;
+        let theme = manager.get_theme(&name).ok_or_else(|| {
+            format!(
+                "the theme file {} loaded but no theme was registered under {name:?}",
                 path.display()
             )
         })?;

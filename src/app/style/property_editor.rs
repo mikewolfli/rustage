@@ -47,6 +47,10 @@ pub enum PropertyType {
         min: Option<f64>,
         /// The largest allowed, when bounded.
         max: Option<f64>,
+        /// The increment the control steps by, when it declares one.
+        step: Option<f64>,
+        /// The decimal places the control holds the value to, when it declares any.
+        places: Option<u8>,
     },
     /// A whole number, optionally bounded.
     Integer {
@@ -54,6 +58,8 @@ pub enum PropertyType {
         min: Option<i64>,
         /// The largest allowed, when bounded.
         max: Option<i64>,
+        /// The increment the control steps by, when it declares one.
+        step: Option<f64>,
     },
     /// A choice from a named set.
     Enum {
@@ -90,7 +96,7 @@ impl PropertyType {
     /// Turns typed text into a value, or explains why it is not one.
     pub fn parse(&self, text: &str) -> Result<PropertyValue, String> {
         match self {
-            Self::Number { min, max } => {
+            Self::Number { min, max, .. } => {
                 let value = text
                     .trim()
                     .parse::<f64>()
@@ -107,7 +113,7 @@ impl PropertyType {
                 }
                 Ok(PropertyValue::Number(value))
             }
-            Self::Integer { min, max } => {
+            Self::Integer { min, max, .. } => {
                 let value = text
                     .trim()
                     .parse::<i64>()
@@ -172,15 +178,23 @@ impl PropertyType {
     /// How the type reads, for the panel's field.
     pub fn render(&self) -> String {
         match self {
-            Self::Number { min, max } => format!(
-                "number [{}..{}]",
+            Self::Number {
+                min,
+                max,
+                step,
+                places,
+            } => format!(
+                "number [{}..{}]{}{}",
                 min.map_or("".to_owned(), |value| value.to_string()),
-                max.map_or("".to_owned(), |value| value.to_string())
+                max.map_or("".to_owned(), |value| value.to_string()),
+                step.map_or("".to_owned(), |value| format!(" step {value}")),
+                places.map_or("".to_owned(), |value| format!(" places {value}")),
             ),
-            Self::Integer { min, max } => format!(
-                "integer [{}..{}]",
+            Self::Integer { min, max, step } => format!(
+                "integer [{}..{}]{}",
                 min.map_or("".to_owned(), |value| value.to_string()),
-                max.map_or("".to_owned(), |value| value.to_string())
+                max.map_or("".to_owned(), |value| value.to_string()),
+                step.map_or("".to_owned(), |value| format!(" step {value}")),
             ),
             Self::Enum { variants } => format!("enum({})", variants.join(",")),
             Self::Text { max_len } if *max_len == usize::MAX => "text".to_owned(),
@@ -346,6 +360,10 @@ impl std::fmt::Display for SchemaError {
 struct Bounds {
     min: Option<f64>,
     max: Option<f64>,
+    /// The increment a `range` constraint declares, when it declares one.
+    step: Option<f64>,
+    /// The decimal places a `precision` constraint declares, when it declares any.
+    places: Option<u8>,
     required: bool,
 }
 
@@ -358,11 +376,10 @@ impl Bounds {
                 ContractConstraint::Range(range) => {
                     bounds.min = Some(range.minimum);
                     bounds.max = Some(range.maximum);
+                    bounds.step = range.step;
                 }
                 ContractConstraint::Required => bounds.required = true,
-                // A precision rounds a value rather than refusing one, so it does not make any
-                // input illegal; encoding it as a refusal would refuse values the control takes.
-                ContractConstraint::Precision { .. } => {}
+                ContractConstraint::Precision { places } => bounds.places = *places,
             }
         }
         bounds
@@ -376,8 +393,10 @@ impl Bounds {
                 "range" => {
                     bounds.min = constraint.minimum.or(bounds.min);
                     bounds.max = constraint.maximum.or(bounds.max);
+                    bounds.step = constraint.step.or(bounds.step);
                 }
                 "required" => bounds.required = true,
+                "precision" => bounds.places = constraint.places.or(bounds.places),
                 _ => {}
             }
         }
@@ -404,15 +423,19 @@ fn property_type(
             // An integer inside a float range is the integers the range contains.
             min: bounds.min.map(|value| value.ceil() as i64),
             max: bounds.max.map(|value| value.floor() as i64),
+            step: bounds.step,
         },
         PropertyValueKind::UInt => PropertyType::Integer {
             // An unsigned property cannot hold a negative value whether or not it declares a range.
             min: Some(bounds.min.unwrap_or(0.0).max(0.0).ceil() as i64),
             max: bounds.max.map(|value| value.floor() as i64),
+            step: bounds.step,
         },
         PropertyValueKind::Float | PropertyValueKind::Number => PropertyType::Number {
             min: bounds.min,
             max: bounds.max,
+            step: bounds.step,
+            places: bounds.places,
         },
         PropertyValueKind::String if bounds.required => {
             // `Required` is a refusal the text field cannot express today; accepting an empty
@@ -699,6 +722,8 @@ mod tests {
                     PropertyType::Number {
                         min: Some(0.0),
                         max: Some(1000.0),
+                        step: None,
+                        places: None,
                     },
                 )
                 .with(
@@ -824,10 +849,13 @@ mod tests {
             PropertyType::Number {
                 min: None,
                 max: None,
+                step: None,
+                places: None,
             },
             PropertyType::Integer {
                 min: None,
                 max: None,
+                step: None,
             },
             PropertyType::Enum {
                 variants: Vec::new(),
@@ -891,6 +919,8 @@ mod tests {
             Some(&PropertyType::Number {
                 min: Some(0.0),
                 max: Some(1.0),
+                step: None,
+                places: None,
             })
         );
         let kind = schema.kind_of(&name("value")).expect("a kind");
@@ -909,6 +939,7 @@ mod tests {
             &PropertyType::Integer {
                 min: Some(0),
                 max: None,
+                step: None,
             }
         );
         assert!(kind.parse("-1").is_err());
@@ -964,6 +995,7 @@ mod tests {
             ],
             events: Vec::new(),
             commands: Vec::new(),
+            children: Vec::new(),
         };
         let schema = Schema::from_manifest("button", &manifest);
 
@@ -1039,6 +1071,7 @@ mod tests {
             PropertyType::Integer {
                 min: None,
                 max: None,
+                step: None,
             },
         ));
         assert_eq!(editor.value(node(1), &text), None);
@@ -1086,6 +1119,7 @@ mod tests {
             Some(&PropertyType::Integer {
                 min: Some(0),
                 max: None,
+                step: None,
             })
         );
         assert_eq!(

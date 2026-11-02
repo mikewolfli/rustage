@@ -220,6 +220,9 @@
     "shell.version": {
       "message": "rustage {version}"
     },
+    "ui.assets.note": {
+      "message": "示例资产 · 缩略图已缓存"
+    },
     "ui.button.add": {
       "message": "添加"
     },
@@ -267,6 +270,12 @@
     },
     "ui.button.values": {
       "message": "值"
+    },
+    "ui.button.switch-theme": {
+      "message": "切换"
+    },
+    "ui.canvas": {
+      "message": "设计画布"
     },
     "ui.context.clear": {
       "message": "清除输入"
@@ -493,6 +502,9 @@
     "ui.panel.data": {
       "message": "数据与状态"
     },
+    "ui.panel.assets": {
+      "message": "资产"
+    },
     "ui.panel.debug": {
       "message": "调试"
     },
@@ -513,6 +525,9 @@
     },
     "ui.panel.problems": {
       "message": "问题"
+    },
+    "ui.panel.theme": {
+      "message": "主题"
     },
     "ui.panel.widgets": {
       "message": "控件库"
@@ -687,6 +702,12 @@
     },
     "ui.status.sent-to-back": {
       "message": "{name} 已置底"
+    },
+    "ui.theme.curve": {
+      "message": "动效曲线"
+    },
+    "ui.theme.metrics": {
+      "message": "度量档"
     },
     "ui.toolbar.commands": {
       "message": "命令"

@@ -403,7 +403,7 @@ pub const REQUIRED_PANELS: [RequiredPanel; 42] = [
     required("panel.project", "Project tree", "F02", None),
     required("panel.objects", "Object tree", "F09", None),
     required("panel.widgets", "Widget library", "F09", Some("widgets")),
-    required("panel.assets", "Asset library", "F12", None),
+    required("panel.assets", "Asset library", "F12", Some("assets")),
     required("panel.components", "Component library", "F12", None),
     required(
         "panel.properties",
@@ -412,7 +412,7 @@ pub const REQUIRED_PANELS: [RequiredPanel; 42] = [
         Some("inspector"),
     ),
     required("panel.layout", "Layout inspector", "F10", None),
-    required("panel.styles", "Style inspector", "F11", None),
+    required("panel.styles", "Style inspector", "F11", Some("theme")),
     required("panel.events", "Events and actions", "F13", Some("events")),
     required("panel.data", "Data and state", "F13", Some("data")),
     required("panel.pages", "Pages and navigation", "F13", Some("pages")),
@@ -825,7 +825,10 @@ mod tests {
                 assert!(!panel.is_deferred(), "{} has a host panel", panel.id());
                 assert!(
                     built_in().spec(host).is_some()
-                        || ["pages", "events", "data", "debug", "widgets"].contains(&host),
+                        || [
+                            "pages", "events", "data", "debug", "widgets", "assets", "theme"
+                        ]
+                        .contains(&host),
                     "{} names an unknown host panel {host}",
                     panel.id()
                 );

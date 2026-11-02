@@ -6,6 +6,11 @@
 > **本文只做任务登记与排序，不重复扫描证据**：每条的证据行号与消费点见 feedback-20261101.md 对应编号/章节。
 > 任务记号：`H-*` 宿主侧改动；`RW-*` 上游请求（blocked upstream）；`VCS-*` 既有缺陷；`M-*` 验证补证（回写支持矩阵）。
 > 状态：全部 `open`，另注明依赖。不修改上游代码；不改宿主既有属性/方法/变量名（原则 #34）。
+>
+> **执行更新（2026-11-03）：** 宿主已升级到 rust-widgets **4.0.0（`1a30785`）**；批次 A 与
+> 批次 B 全部关闭，VCS-1 已修复，M-1/M-2 已补证。M-3 被上游 RW-101
+> （Windows `WA_INACTIVE` 类型不匹配）阻断；其余未完成项见本文 §7。证据：
+> [log-20261103-1.md](../log/log-20261103-1.md)。
 
 ## 0. 已关闭（不再计入任务）
 
@@ -92,7 +97,7 @@
 | M-3 | Windows xwin 交叉构建（3.2.1） | rust-lld + xwin 的 `--bin rustage` 与五 profile `--lib` | `windows` 行五格升级 |
 | M-4 | Linux `linux-native`（GTK）构建与 GUI 运行（3.2.1） | `cargo build --features linux-native` + 窗口会话 | `linux` 宿主由 `build-verified` 评估 `certified` |
 
-当前矩阵基线：13 `unverified` / 2 `build-verified`（脚本校验通过）。补证必须附命令、环境、日期，不拿旧修订证据冒充（矩阵规则 2/4）。
+当前矩阵基线（2026-11-03，4.0.0）：10 `unverified` / 5 `build-verified`（macOS 宿主 `certified`；校验脚本 PASS）。补证必须附命令、环境、日期，不拿旧修订证据冒充（矩阵规则 2/4）。
 
 ## 4. 上游请求（RW 系列，blocked upstream）
 
@@ -162,3 +167,19 @@ RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14�
 - 不修改宿主既有属性/方法/变量名，除非确有冲突（原则 #34）。
 - 不新增自造控件：宿主侧任务一律优先消费上游能力（原则：控件全部来自 rust-widgets）。
 - 已知未覆盖：`benches/` 性能实测、Windows/macOS 实机运行、GPU 呈现路径运行行为；这些属 M 系列扩展，见 support-matrix 规则 2/4。
+
+## 7. 执行状态（2026-11-03）
+
+证据与验证命令见 [log-20261103-1.md](../log/log-20261103-1.md)。
+
+| 组 | 已关闭 | 未完成 / 依据 |
+|---|---|---|
+| 批次 A | H-1、H-2、H-3、H-4、H-6、H-7、H-8、H-12、H-15、H-16、H-17、H-25；H-13/H-14 复核为已满足 | 无 |
+| 批次 B | H-5、H-10、H-11、H-18、H-19、H-21、H-22、H-23、H-24、H-20 | 无（H-21 前置资产面板、H-22/H-23 前置主题面板已装配） |
+| VCS | VCS-1 | 无 |
+| M | M-1（macOS 四 profile）、M-2（GUI 有界会话） | M-3：上游 RW-101 阻断；M-4：本机无 Linux GTK 环境 |
+| RW | 新增 RW-101（4.0.0 Windows 编译回归，P1） | 其余 RW 仍待上游 |
+
+**矩阵（JSON+MD 同步，校验 PASS：10 `unverified` / 5 `build-verified`）：** macOS 宿主恢复
+`certified`，macos × 五 profile 均 `build-verified`；windows 与 linux 的 4.0.0 证据均未建立，
+维持/降为 `unverified`。

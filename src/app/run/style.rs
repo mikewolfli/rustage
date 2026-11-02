@@ -8,6 +8,32 @@
 
 use super::*;
 
+/// The kinds the theme-resolution dump prints when no list is given.
+///
+/// These are the controls the workbench's own chrome and the control demo place, so a
+/// "same as window background" row names a surface this host really paints.
+const THEME_RESOLVE_KINDS: &[&str] = &[
+    "button",
+    "check_box",
+    "radio_button",
+    "spin_box",
+    "combo_box",
+    "line_edit",
+    "list_box",
+    "slider",
+    "progress_bar",
+    "label",
+    "panel",
+    "frame",
+    "scroll_area",
+    "tool_bar",
+    "status_bar",
+    "menu_bar",
+    "group_box",
+    "scroll_bar",
+    "list_view",
+];
+
 /// Drives the schema-driven property editor (task T11.01).
 pub(super) fn property_editor(options: &crate::cli::PropertyEditorOptions) -> bool {
     use crate::app::style::property_editor::{Editor, Schema};
@@ -840,6 +866,65 @@ pub(super) fn style(options: &crate::cli::StyleOptions) -> bool {
                 }
                 None => Err("no element is selected".to_owned()),
             },
+            // H-30: the active theme's own values beside what the library resolves for each
+            // control kind. A kind whose resolved fill equals the window background is marked,
+            // which is the "invisible control" question the raw token dump cannot answer.
+            "resolve" => {
+                let kinds: Vec<&str> = if argument.is_empty() {
+                    THEME_RESOLVE_KINDS.to_vec()
+                } else {
+                    argument
+                        .split(',')
+                        .filter(|kind| !kind.is_empty())
+                        .collect()
+                };
+                let manager = rust_widgets::theme::global_theme_manager();
+                let Some(current) = manager.current_theme() else {
+                    return report("no active theme is registered".to_owned());
+                };
+                let background = current.colors.background;
+                let mut lines = vec![
+                    format!("theme: {} ({:?})", current.name, current.appearance),
+                    format!(
+                        "tokens: background={} text={} accent={} outline={}",
+                        background.to_hex_rgb(),
+                        current.colors.foreground.to_hex_rgb(),
+                        current.colors.primary.to_hex_rgb(),
+                        current.colors.outline.to_hex_rgb()
+                    ),
+                ];
+                for kind in kinds {
+                    match rust_widgets::theme::resolved_theme_style(kind) {
+                        Some(style) => {
+                            let fill = style
+                                .background_color
+                                .map(|color| color.to_hex_rgb())
+                                .unwrap_or_else(|| "(none)".to_owned());
+                            let ink = style
+                                .text_color
+                                .map(|color| color.to_hex_rgb())
+                                .unwrap_or_else(|| "(none)".to_owned());
+                            let border = style
+                                .border_color
+                                .map(|color| color.to_hex_rgb())
+                                .unwrap_or_else(|| "(none)".to_owned());
+                            let invisible = style
+                                .background_color
+                                .is_some_and(|color| color == background);
+                            lines.push(format!(
+                                "{kind}\tbackground={fill}\ttext={ink}\tborder={border}{}",
+                                if invisible {
+                                    "\t(same as window background)"
+                                } else {
+                                    ""
+                                }
+                            ));
+                        }
+                        None => lines.push(format!("{kind}\t(no theme style resolved)")),
+                    }
+                }
+                Ok(lines)
+            }
             "state" => {
                 let mut lines = tokens.render();
                 lines.push(format!(

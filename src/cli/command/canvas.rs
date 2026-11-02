@@ -17,7 +17,8 @@ use super::*;
 pub struct CatalogOptions {
     /// The operations: `widget:<id>:<name>:<category>`, `unsupported:<id>:<reason>`,
     /// `property:<id>:<name>:<type>[:<default>]`, `limit:<id>:<note>`, `search:<query>`,
-    /// `category:<name>`, `favorite:<id>`, `unfavorite:<id>`, `schema:<id>`, `show`.
+    /// `category:<name>`, `favorite:<id>`, `unfavorite:<id>`, `schema:<id>`, `census`,
+    /// `svg:<dir>`, `show`.
     pub ops: Vec<String>,
 }
 

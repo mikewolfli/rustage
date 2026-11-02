@@ -399,27 +399,27 @@ pub fn render_svg(sample: &mut ToolbarSample) -> String {
 
 /// The surface the strip is composited on: the forced background under a high-contrast override,
 /// otherwise the active theme's own background.
+///
+/// One snapshot, one lock: the manager's guard is not reentrant, so a caller that read it twice
+/// could deadlock (blue22 H-6).
 pub fn backdrop() -> Color {
-    let manager = theme::global_theme_manager();
-    if let Some((background, _)) = manager.high_contrast().forced_pair() {
+    let snapshot = theme::theme_snapshot();
+    if let Some((background, _)) = snapshot.high_contrast().forced_pair() {
         return background;
     }
-    manager
-        .current_theme()
+    snapshot
+        .theme()
         .map_or(Color::WHITE, |theme| theme.colors.background)
 }
 
 /// The accent plate colour, forced to the background under a high-contrast override.
-///
-/// One guard, no nesting: the manager's mutex is not re-entrant, so this cannot call
-/// [`backdrop`] while it holds the guard — doing so deadlocks the thread.
 fn accent_surface() -> Color {
-    let manager = theme::global_theme_manager();
-    if let Some((background, _)) = manager.high_contrast().forced_pair() {
+    let snapshot = theme::theme_snapshot();
+    if let Some((background, _)) = snapshot.high_contrast().forced_pair() {
         return background;
     }
-    manager
-        .current_theme()
+    snapshot
+        .theme()
         .map_or(Color::WHITE, |theme| theme.colors.primary)
 }
 

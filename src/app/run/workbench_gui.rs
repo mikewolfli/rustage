@@ -33,15 +33,17 @@ use std::time::Duration;
 
 use rust_widgets::app::{ButtonHandle, MenuHandle, WidgetHandle, WindowHandle};
 use rust_widgets::control_backend::get_control_backend_for_widget;
-use rust_widgets::core::{Point, Rect};
+use rust_widgets::core::{Color, Point, Rect};
 use rust_widgets::layout::{BoxLayout, Layout as _, LayoutConstraints, Orientation, SizePolicy};
 use rust_widgets::widget::PropertyGrid;
+use rust_widgets::widget::PropertyItem;
 use rust_widgets::widget::capability::CapabilityValue;
 use rust_widgets::widget::dialog::input_dialog::InputDialog;
 use rust_widgets::widget::runtime::{
     self, clear_focus, focus_widget, focused_widget, with_widget_mut,
 };
 use rust_widgets::widget::special_widgets::code_editor::CodeEditor;
+use rust_widgets::widget::view_widgets::PropertyItemKind;
 use rust_widgets::widget::{GroupBox, ListBox, Menu, TabWidget, ToolBar};
 
 use crate::app::canvas::scene::Rect as SceneRect;
@@ -78,11 +80,13 @@ const STATUS_Y: i32 = 768;
 const STATUS_HEIGHT: u32 = 28;
 
 /// The panels this window adds to the built-in set.
-const EXTRA_PANELS: [(&str, &str, Dock); 5] = [
+const EXTRA_PANELS: [(&str, &str, Dock); 7] = [
     ("widgets", "Widgets", Dock::Left),
     ("pages", "Pages", Dock::Left),
     ("events", "Events", Dock::Left),
+    ("assets", "Assets", Dock::Left),
     ("data", "Data & State", Dock::Right),
+    ("theme", "Theme", Dock::Right),
     ("debug", "Debug", Dock::Right),
 ];
 
@@ -215,8 +219,10 @@ fn panel_key(id: &str) -> &'static str {
     match id {
         "widgets" => "ui.panel.widgets",
         "pages" => "ui.panel.pages",
+        "assets" => "ui.panel.assets",
         "outline" => "ui.panel.outline",
         "events" => "ui.panel.events",
+        "theme" => "ui.panel.theme",
         "inspector" => "ui.panel.inspector",
         "data" => "ui.panel.data",
         "messages" => "ui.panel.messages",
@@ -314,11 +320,24 @@ struct Gui {
     diagnostic_menu: u64,
     canvas_panel: u64,
     canvas_surface: u64,
+    /// The library's one tooltip pipeline; the runtime forwards hover to it (blue22 H-20).
+    tooltip: u64,
+    /// The colour editor popup: a panel and the library's picker, well, history and swatch.
+    /// The row is the grid row the picker was opened for (blue22 H-18).
+    color_panel: u64,
+    color_picker: u64,
+    color_well: u64,
+    color_history: u64,
+    color_swatch: u64,
+    color_row: usize,
     /// The canvas pointer facts, in design space: whether a press is down, where it began and
     /// where the pointer last was. A drag wider/taller than [`DRAG_THRESHOLD`] is a marquee.
     drag_active: bool,
     drag_start: Option<(i32, i32)>,
     pointer: Option<(i32, i32)>,
+    /// The node drag the press started, and the ghost overlay while it is past the threshold.
+    drag: Option<crate::app::canvas::drag::Drag>,
+    ghost: u64,
     /// The debug panel's view of a real background DAP session.
     debug: DebugState,
     /// The fixed label per row; a label repaints reliably from a timer, a list box did not.
@@ -705,13 +724,156 @@ fn subscribe_cell(
     }
 }
 
-/// A row as the property grid shows it: name, value, and whether a person may edit it.
-type GridRow = (String, String, bool);
+/// A row as the property grid shows it.
+///
+/// `mixed` is the library's own "the selected objects differ" state: the grid paints the
+/// placeholder and an empty commit keeps the row mixed, rather than the host concatenating the
+/// differing values into read-only text (blue22 H-4).
+#[derive(Clone, PartialEq, Debug)]
+struct GridRow {
+    name: String,
+    value: String,
+    editable: bool,
+    mixed: bool,
+    /// The editor kind the grid opens: text by default, colour for a colour property.
+    kind: PropertyItemKind,
+    /// `(min, max, step)` for a numeric row, straight from the control's schema (blue22 H-12).
+    bounds: Option<(Option<f64>, Option<f64>, Option<f64>)>,
+}
+
+impl GridRow {
+    fn new(name: impl Into<String>, value: impl Into<String>, editable: bool) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            editable,
+            mixed: false,
+            kind: PropertyItemKind::Text,
+            bounds: None,
+        }
+    }
+
+    fn color(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            editable: true,
+            mixed: false,
+            kind: PropertyItemKind::Color,
+            bounds: None,
+        }
+    }
+
+    fn mixed(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: String::new(),
+            editable: true,
+            mixed: true,
+            kind: PropertyItemKind::Text,
+            bounds: None,
+        }
+    }
+
+    fn with_bounds(mut self, min: Option<f64>, max: Option<f64>, step: Option<f64>) -> Self {
+        self.bounds = Some((min, max, step));
+        self
+    }
+}
+
+/// Stages a control-level tooltip. Entry-level tooltips remain the upstream gap RW-62.
+fn set_control_tooltip(id: u64, text: String) {
+    if id == 0 {
+        return;
+    }
+    let _ = with_widget_mut(id, move |widget| {
+        widget.set_tooltip(text);
+        true
+    });
+}
+
+/// Drives the library's tooltip pipeline from the main thread.
+fn schedule_tooltips(gui: Arc<Mutex<Gui>>) {
+    let next = Arc::clone(&gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(100), move || {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
+        if let Ok(gui) = next.lock()
+            && gui.tooltip != 0
+        {
+            let hovered = runtime::hovered_widget().filter(|id| *id != gui.tooltip);
+            let anchor = hovered.and_then(|id| with_widget_mut(id, |widget| widget.geometry()));
+            let _ = with_widget_mut(gui.tooltip, move |widget| {
+                let Some(manager) = (widget as &mut dyn Any)
+                    .downcast_mut::<rust_widgets::widget::companions::TooltipManager>(
+                ) else {
+                    return false;
+                };
+                manager.tick(100, now);
+                true
+            });
+            let visible = with_widget_mut(gui.tooltip, |widget| {
+                (widget as &mut dyn Any)
+                    .downcast_mut::<rust_widgets::widget::companions::TooltipManager>()
+                    .is_some_and(|manager| manager.tooltip().is_some())
+            })
+            .unwrap_or(false);
+            match (visible, anchor) {
+                (true, Some(rect)) => {
+                    rust_widgets::set_widget_geometry(
+                        gui.tooltip,
+                        rect.x + 12,
+                        rect.y + 20,
+                        280,
+                        60,
+                    );
+                    rust_widgets::show_widget(gui.tooltip);
+                }
+                _ => rust_widgets::hide_widget(gui.tooltip),
+            }
+        }
+        schedule_tooltips(next);
+    });
+}
+
+/// Replaces a `ListBox`'s rows without clearing and rebuilding an unchanged list.
+///
+/// The library publishes no per-row text setter, so a changed row is a remove-and-insert at its
+/// index; an equal list is left untouched, which is the part that stops a repaint from rebuilding
+/// five panels every turn (blue22 H-5, and the limitation is stated rather than hidden).
+fn set_list_rows(list: u64, rows: Vec<String>) {
+    if list == 0 {
+        return;
+    }
+    let _ = with_widget_mut(list, move |widget| {
+        let Some(list) = (widget as &mut dyn Any).downcast_mut::<ListBox>() else {
+            return false;
+        };
+        let current = list.items().to_vec();
+        if current == rows {
+            return true;
+        }
+        let common = current
+            .iter()
+            .zip(&rows)
+            .take_while(|(before, after)| before == after)
+            .count();
+        for index in (common..current.len()).rev() {
+            list.remove_item(index);
+        }
+        for (offset, row) in rows.into_iter().enumerate().skip(common) {
+            list.insert_item(offset, row);
+        }
+        true
+    });
+}
 
 /// Replaces every row of a `PropertyGrid`.
 ///
-/// The grid owns the rows; the host only hands it the current model. `clear` + `add_property` is
-/// the widget's own structure-change path, so its cached display rows and hit test follow.
+/// The grid owns the rows; the host only hands it the current model. `clear` + adding the items
+/// is the widget's own structure-change path, so its cached display rows and hit test follow.
 fn set_property_rows(id: u64, rows: &[GridRow], selected: Option<usize>) {
     if id == 0 {
         return;
@@ -722,8 +884,18 @@ fn set_property_rows(id: u64, rows: &[GridRow], selected: Option<usize>) {
             return false;
         };
         grid.clear();
-        for (name, value, editable) in &rows {
-            grid.add_property(name.clone(), value.clone(), *editable);
+        for row in &rows {
+            let item = if row.mixed {
+                PropertyItem::mixed(row.name.clone()).with_placeholder(tr("ui.placeholder.mixed"))
+            } else {
+                PropertyItem::new(row.name.clone(), row.value.clone(), row.editable)
+                    .with_kind(row.kind.clone())
+            };
+            let item = match row.bounds {
+                Some((min, max, step)) => item.with_bounds(min, max, step),
+                None => item,
+            };
+            grid.add_property_item(item);
         }
         grid.set_selected_index(selected);
         true
@@ -850,27 +1022,29 @@ fn retranslate(gui: &mut Gui) {
         }
     }
     if gui.toolbar != 0 {
-        let items: Vec<(String, String)> = gui
+        let items: Vec<String> = gui
             .toolbar_items
             .iter()
-            .map(|(key, action)| (tr(key), (*action).to_owned()))
+            .map(|(key, _action)| tr(key))
             .collect();
-        let _ = with_widget_mut(gui.toolbar, move |widget| {
+        let relabelled = with_widget_mut(gui.toolbar, move |widget| {
             let Some(bar) = (widget as &mut dyn Any).downcast_mut::<ToolBar>() else {
                 return false;
             };
-            bar.clear();
-            for (index, (label, action)) in items.iter().enumerate() {
-                bar.insert_item(
-                    index,
-                    rust_widgets::widget::menu_toolbar::tool_bar::ToolBarItem::new(
-                        action.as_str(),
-                        label.as_str(),
-                    ),
-                );
+            for (index, label) in items.iter().enumerate() {
+                if !bar.set_item_text(index, label.as_str()) {
+                    return false;
+                }
             }
             true
-        });
+        })
+        .unwrap_or(false);
+        if !relabelled {
+            warn_failure(
+                "a toolbar label could not be replaced in place",
+                "the mounted control was not a ToolBar with the remembered item count",
+            );
+        }
     }
     update_status(gui);
 }
@@ -919,7 +1093,7 @@ fn refresh_inspector(gui: &mut Gui) {
             "app::run::workbench-property",
             "inspector rows: no selection",
         );
-        let rows: Vec<GridRow> = vec![(
+        let rows: Vec<GridRow> = vec![GridRow::new(
             tr("ui.inspector.node"),
             tr("ui.placeholder.no-selection"),
             false,
@@ -951,18 +1125,31 @@ fn refresh_inspector(gui: &mut Gui) {
     // The grid's own rows carry the Inspector's contract facts; the editable row is the one the
     // model validates, and every other row is a read-only answer beside it (blue21 W-2d).
     let mut rows: Vec<GridRow> = vec![
-        (tr("ui.inspector.node"), nodes, false),
-        (
+        GridRow::new(tr("ui.inspector.node"), nodes, false),
+        GridRow::new(
             tr("ui.inspector.kind"),
             format!("{kind} · {contract}"),
             false,
         ),
-        (
-            gui.property.name().as_str().to_owned(),
-            gui.property.summary(),
-            true,
-        ),
-        (
+        {
+            let colour = gui.property.is_colour();
+            let mut row = if colour {
+                GridRow::color(gui.property.name().as_str(), gui.property.summary())
+            } else {
+                GridRow::new(gui.property.name().as_str(), gui.property.summary(), true)
+            };
+            if gui.property.is_mixed() {
+                row = GridRow::mixed(gui.property.name().as_str());
+                if colour {
+                    row.kind = PropertyItemKind::Color;
+                }
+            }
+            if let Some((min, max, step)) = gui.property.number_bounds() {
+                row = row.with_bounds(min, max, step);
+            }
+            row
+        },
+        GridRow::new(
             tr("ui.inspector.theme"),
             format!(
                 "{} · computed background {}",
@@ -977,19 +1164,20 @@ fn refresh_inspector(gui: &mut Gui) {
     // The contract's default and accepted tokens are shown beside the value, so an enum property
     // does not ask a person to type a token the schema already enumerates.
     if let Some(default) = gui.property.contract_default() {
-        rows.push((tr("ui.inspector.default"), default, false));
+        rows.push(GridRow::new(tr("ui.inspector.default"), default, false));
     }
     let tokens = gui.property.accepted_tokens();
     if !tokens.is_empty() {
-        rows.push((tr("ui.inspector.accepted"), tokens.join(" | "), false));
+        rows.push(GridRow::new(
+            tr("ui.inspector.accepted"),
+            tokens.join(" | "),
+            false,
+        ));
     }
     for line in &gui.inspect_extra {
-        rows.push((tr("ui.inspector.inspect"), line.clone(), false));
-    }
-    if gui.property.is_mixed() {
-        rows.push((
-            tr("ui.inspector.selection"),
-            tr("ui.placeholder.mixed"),
+        rows.push(GridRow::new(
+            tr("ui.inspector.inspect"),
+            line.clone(),
             false,
         ));
     }
@@ -1030,7 +1218,7 @@ fn refresh_inspector(gui: &mut Gui) {
     crate::host::log::emit(
         crate::host::log::Level::Info,
         "app::run::workbench-property",
-        &format!("inspector rows: {} [contract {contract}]", rows[2].1),
+        &format!("inspector rows: {} [contract {contract}]", rows[2].value),
     );
     if let Some(note) = gui.property.contract_note() {
         crate::host::log::emit(
@@ -1081,10 +1269,7 @@ fn sync_events(gui: &mut Gui) {
         return;
     }
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for row in &rows {
-            let _ = rust_widgets::list_box_add_item(list, row);
-        }
+        set_list_rows(list, rows);
         let _ = rust_widgets::list_box_set_current_index(list, selected);
     });
 }
@@ -1095,7 +1280,7 @@ fn sync_events(gui: &mut Gui) {
 /// committing a cell edits exactly the field whose row it was.
 fn sync_data(gui: &mut Gui) {
     let fields = gui.inspect.fields();
-    let mut rows: Vec<GridRow> = vec![(
+    let mut rows: Vec<GridRow> = vec![GridRow::new(
         tr("ui.data.dataset"),
         format!(
             "form v{} · effects {} · runtime none",
@@ -1106,12 +1291,12 @@ fn sync_data(gui: &mut Gui) {
     )];
     for field in &fields {
         let value = gui.inspect.value_of(field).unwrap_or_default();
-        rows.push((field.clone(), value, true));
+        rows.push(GridRow::new(field.clone(), value, true));
     }
     // Keep the schema's diagnostics visible instead of hiding them behind the editable rows.
     for diagnostic in gui.inspect.rows() {
         if diagnostic.starts_with("problem:") || diagnostic.starts_with("sample refused:") {
-            rows.push((tr("ui.data.diagnostic"), diagnostic, false));
+            rows.push(GridRow::new(tr("ui.data.diagnostic"), diagnostic, false));
         }
     }
     let selected = gui.data_selected.min(fields.len().saturating_sub(1));
@@ -1155,10 +1340,7 @@ fn sync_pages(gui: &mut Gui) {
         return;
     }
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for row in &rows {
-            let _ = rust_widgets::list_box_add_item(list, row);
-        }
+        set_list_rows(list, rows);
         let _ = rust_widgets::list_box_set_current_index(list, selected);
     });
 }
@@ -1178,6 +1360,151 @@ fn retarget_panels(gui: &mut Gui) {
 }
 
 /// Commits a typed text through the schema editor (task T11.01).
+/// Wires the colour popup's four controls to the Inspector row it edits.
+///
+/// The picker's commit is the model write; the well shows the current value; the history records
+/// each commit and selecting an entry commits it; the swatch's activated cell commits its colour.
+/// A typed hex value still reaches the model through the grid's own text editor (blue22 H-18).
+fn wire_colour_editor(gui: &Arc<Mutex<Gui>>) {
+    let (picker, history, swatch) = match gui.lock() {
+        Ok(gui) => (gui.color_picker, gui.color_history, gui.color_swatch),
+        Err(_) => return,
+    };
+    if picker != 0 {
+        let state = Arc::clone(gui);
+        let _ = with_widget_mut(picker, move |widget| {
+            let Some(picker) = (widget as &mut dyn Any).downcast_mut::<rust_widgets::ColorPicker>()
+            else {
+                return false;
+            };
+            let committed = Arc::clone(&state);
+            picker.color_committed.connect(move |colour: Arc<Color>| {
+                if let Ok(mut gui) = committed.lock() {
+                    commit_colour(&mut gui, *colour);
+                }
+            });
+            let canceled = Arc::clone(&state);
+            picker.canceled.connect(move || {
+                if let Ok(mut gui) = canceled.lock() {
+                    close_colour(&mut gui);
+                }
+            });
+            true
+        });
+    }
+    if history != 0 {
+        let state = Arc::clone(gui);
+        let _ = with_widget_mut(history, move |widget| {
+            let Some(history) =
+                (widget as &mut dyn Any).downcast_mut::<rust_widgets::ColorHistory>()
+            else {
+                return false;
+            };
+            history.color_selected.connect(move |colour: Arc<Color>| {
+                if let Ok(mut gui) = state.lock() {
+                    commit_colour(&mut gui, *colour);
+                }
+            });
+            true
+        });
+    }
+    if swatch != 0 {
+        let state = Arc::clone(gui);
+        let _ = with_widget_mut(swatch, move |widget| {
+            let Some(swatch) =
+                (widget as &mut dyn Any).downcast_mut::<rust_widgets::widget::companions::Swatch>()
+            else {
+                return false;
+            };
+            swatch.swatch_activated.connect(move |colour: Arc<Color>| {
+                if let Ok(mut gui) = state.lock() {
+                    commit_colour(&mut gui, *colour);
+                }
+            });
+            true
+        });
+    }
+}
+
+/// Opens the colour popup for the grid row, seeded with the row's current hex value.
+fn open_colour(gui: &mut Gui, row: usize, seed: &str) {
+    gui.color_row = row;
+    let colour = Color::parse_hex(seed).unwrap_or(Color::WHITE);
+    if gui.color_picker != 0 {
+        let _ = with_widget_mut(gui.color_picker, move |widget| {
+            let Some(picker) = (widget as &mut dyn Any).downcast_mut::<rust_widgets::ColorPicker>()
+            else {
+                return false;
+            };
+            picker.set_initial(colour);
+            true
+        });
+    }
+    if gui.color_well != 0 {
+        let _ = with_widget_mut(gui.color_well, move |widget| {
+            let Some(well) = (widget as &mut dyn Any).downcast_mut::<rust_widgets::ColorWell>()
+            else {
+                return false;
+            };
+            well.set_color(colour);
+            true
+        });
+    }
+    for id in [
+        gui.color_panel,
+        gui.color_picker,
+        gui.color_well,
+        gui.color_history,
+        gui.color_swatch,
+    ] {
+        if id != 0 {
+            rust_widgets::show_widget(id);
+        }
+    }
+}
+
+/// Applies one committed colour to the Inspector property and records it in the popup.
+fn commit_colour(gui: &mut Gui, colour: Color) {
+    apply_property(gui, &colour.to_hex_rgb());
+    if gui.color_well != 0 {
+        let _ = with_widget_mut(gui.color_well, move |widget| {
+            let Some(well) = (widget as &mut dyn Any).downcast_mut::<rust_widgets::ColorWell>()
+            else {
+                return false;
+            };
+            well.set_color(colour);
+            true
+        });
+    }
+    if gui.color_history != 0 {
+        let _ = with_widget_mut(gui.color_history, move |widget| {
+            let Some(history) =
+                (widget as &mut dyn Any).downcast_mut::<rust_widgets::ColorHistory>()
+            else {
+                return false;
+            };
+            history.add_color(colour);
+            true
+        });
+    }
+    close_colour(gui);
+}
+
+/// Hides the colour popup without changing the model.
+fn close_colour(gui: &mut Gui) {
+    for id in [
+        gui.color_panel,
+        gui.color_picker,
+        gui.color_well,
+        gui.color_history,
+        gui.color_swatch,
+    ] {
+        if id != 0 {
+            rust_widgets::hide_widget(id);
+        }
+    }
+}
+
 fn apply_property(gui: &mut Gui, text: &str) {
     crate::host::log::emit(
         crate::host::log::Level::Info,
@@ -1383,11 +1710,8 @@ fn sync_messages(gui: &mut Gui) {
     let rows = gui.messages.clone();
     let selected = rust_widgets::list_box_current_index(list);
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for row in &rows {
-            let _ = rust_widgets::list_box_add_item(list, row);
-        }
         let last = rows.len().saturating_sub(1);
+        set_list_rows(list, rows);
         let _ = rust_widgets::list_box_set_current_index(list, selected.unwrap_or(last).min(last));
     });
 }
@@ -1469,10 +1793,7 @@ fn sync_outline(gui: &mut Gui) {
     let last = rows.as_ref().map_or(0, Vec::len).saturating_sub(1);
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
         if let Some(rows) = rows {
-            rust_widgets::list_box_clear_items(list);
-            for row in &rows {
-                let _ = rust_widgets::list_box_add_item(list, row);
-            }
+            set_list_rows(list, rows);
         }
         syncing.store(true, Ordering::SeqCst);
         match selected {
@@ -2281,10 +2602,7 @@ fn rebuild_widget_rows(gui: &mut Gui, query: &str) {
         return;
     }
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
-        rust_widgets::list_box_clear_items(list);
-        for label in &labels {
-            let _ = rust_widgets::list_box_add_item(list, label);
-        }
+        set_list_rows(list, labels);
     });
 }
 
@@ -2391,10 +2709,16 @@ fn marquee_select(gui: &mut Gui, rect: SceneRect) {
 
 /// Ends a canvas press: a short one is a click hit test, a long one is a marquee.
 fn finish_canvas_drag(gui: &mut Gui) {
+    if gui.ghost != 0 {
+        // The ghost layer is above the canvas and owns the release; its signal applies the drop.
+        gui.drag_active = false;
+        return;
+    }
     if !gui.drag_active {
         return;
     }
     gui.drag_active = false;
+    gui.drag = None;
     let start = gui.drag_start.take();
     let Some(end) = gui.pointer else {
         crate::host::log::emit(
@@ -2431,6 +2755,328 @@ fn finish_canvas_drag(gui: &mut Gui) {
         "app::run::workbench-scene",
         &format!("canvas click at {:?}: no selectable node", end),
     );
+}
+
+/// Starts the library's drag ghost for the node the press picked up (blue22 H-19).
+///
+/// The layer is a full-window overlay on purpose: it must paint outside the canvas's own clip.
+/// It is created once the drag passes the threshold, so an ordinary click never mounts it, and it
+/// is unregistered after the drop/cancel so it cannot keep the canvas from receiving pointers.
+fn create_drag_ghost(state: &Arc<Mutex<Gui>>, gui: &mut Gui) {
+    let Some(node) = gui.drag.as_ref().map(|drag| drag.node()) else {
+        return;
+    };
+    let Some(node_rect) = gui.scene.rect(node) else {
+        return;
+    };
+    let Some(origin) = with_widget_mut(gui.canvas_panel, move |widget| {
+        CanvasTransform::new(widget.geometry()).place(node_rect)
+    }) else {
+        warn_failure(
+            "the drag ghost could not be placed",
+            "the canvas panel is not mounted",
+        );
+        return;
+    };
+    let bounds = with_widget_mut(gui.canvas_panel, |widget| widget.geometry());
+    let name = gui.scene.name(node).unwrap_or("node").to_owned();
+    let mut layer =
+        rust_widgets::widget::companions::DragGhostLayer::new(Rect::new(0, 0, WIDTH, HEIGHT));
+    if let Some(bounds) = bounds {
+        layer.set_drop_bounds(Rect::new(bounds.x, bounds.y, bounds.width, bounds.height));
+    }
+    layer.begin(
+        Rect::new(origin.x, origin.y, origin.width, origin.height),
+        name,
+    );
+    let ghost = rust_widgets::control_backend::get_control_backend().mount_widget_box(
+        Box::new(layer),
+        Some(gui.window),
+        0,
+    );
+    if ghost == 0 {
+        warn_failure(
+            "the drag ghost could not be mounted",
+            "the control backend refused the overlay widget",
+        );
+        return;
+    }
+    gui.ghost = ghost;
+
+    let dropped_state = Arc::clone(state);
+    let cancelled_state = Arc::clone(state);
+    let _ = with_widget_mut(ghost, move |widget| {
+        let Some(layer) = (widget as &mut dyn Any)
+            .downcast_mut::<rust_widgets::widget::companions::DragGhostLayer>()
+        else {
+            return false;
+        };
+        layer
+            .ghost_dropped
+            .connect(move |value: Arc<(Point, bool)>| {
+                let (point, floated) = *value;
+                if let Ok(mut gui) = dropped_state.lock() {
+                    finish_ghost_drag(&mut gui, point, floated);
+                }
+            });
+        layer.ghost_cancelled.connect(move || {
+            if let Ok(mut gui) = cancelled_state.lock() {
+                cancel_ghost_drag(&mut gui);
+            }
+        });
+        true
+    });
+}
+
+/// Applies the ghost's reported drop point to the structural tree.
+fn finish_ghost_drag(gui: &mut Gui, point: Point, floated: bool) {
+    let ghost = gui.ghost;
+    gui.ghost = 0;
+    let Some(mut drag) = gui.drag.take() else {
+        unregister_later(ghost);
+        return;
+    };
+    if floated {
+        gui.message = "drop cancelled: outside the canvas".to_owned();
+    } else if let Some((x, y)) = canvas_point(gui.canvas_panel, point.x, point.y) {
+        let hit = gui.scene.hit(x, y);
+        let target = if hit.is_some_and(|node| drag.candidates().accepts(Some(node))) {
+            hit
+        } else {
+            hit.and_then(|node| gui.scene.parent(node))
+                .filter(|parent| drag.candidates().accepts(Some(*parent)))
+        };
+        let index = gui.scene.child_count(target);
+        drag.aim(target, index);
+        match drag.release(gui.scene.tree()) {
+            crate::app::canvas::drag::Drop::Move(moving) => match gui.scene.move_node(moving) {
+                Ok(()) => {
+                    gui.message = moving.render();
+                    sync_outline(gui);
+                    sync_canvas(gui);
+                }
+                Err(reason) => {
+                    gui.message = format!("drop refused: {reason}");
+                }
+            },
+            crate::app::canvas::drag::Drop::Refused(reason) => {
+                gui.message = format!("drop refused: {reason}");
+            }
+            crate::app::canvas::drag::Drop::Cancelled => {
+                gui.message = "drop cancelled".to_owned();
+            }
+        }
+    } else {
+        gui.message = "drop cancelled: no canvas point".to_owned();
+    }
+    update_status(gui);
+    unregister_later(ghost);
+}
+
+/// Cancels the drag when the ghost reports Escape.
+fn cancel_ghost_drag(gui: &mut Gui) {
+    let ghost = gui.ghost;
+    gui.ghost = 0;
+    gui.drag = None;
+    gui.message = "drop cancelled".to_owned();
+    update_status(gui);
+    unregister_later(ghost);
+}
+
+/// Unregisters an overlay after the signal that reported its end has returned.
+fn unregister_later(ghost: u64) {
+    if ghost == 0 {
+        return;
+    }
+    let _ = rust_widgets::schedule_on_main(Duration::ZERO, move || {
+        runtime::unregister(ghost);
+    });
+}
+
+/// One generated sample asset: a label and the two gradient ends.
+const SAMPLE_ASSETS: [(&str, [u8; 3], [u8; 3]); 6] = [
+    ("accent", [33, 150, 243], [156, 39, 176]),
+    ("surface", [238, 238, 238], [250, 250, 250]),
+    ("ink", [33, 33, 33], [97, 97, 97]),
+    ("success", [76, 175, 80], [0, 150, 136]),
+    ("warning", [255, 193, 7], [255, 112, 67]),
+    ("brand", [244, 67, 54], [255, 152, 0]),
+];
+
+/// RGBA sample images for the asset gallery.
+///
+/// These are generated, not decoded files, so the gallery's thumbnail strip and its owned
+/// `ThumbnailCache` are exercised on a fresh checkout with no raster fixtures (H-21).
+fn sample_asset_images() -> Vec<rust_widgets::GalleryImage> {
+    const WIDTH: u32 = 96;
+    const HEIGHT: u32 = 72;
+    SAMPLE_ASSETS
+        .iter()
+        .map(|(label, from, to)| {
+            let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    let tx = x as f32 / (WIDTH - 1) as f32;
+                    let ty = y as f32 / (HEIGHT - 1) as f32;
+                    let t = tx.max(ty);
+                    let channel =
+                        |a: u8, b: u8| (a as f32 * (1.0 - t) + b as f32 * t).round() as u8;
+                    pixels.extend_from_slice(&[
+                        channel(from[0], to[0]),
+                        channel(from[1], to[1]),
+                        channel(from[2], to[2]),
+                        255,
+                    ]);
+                }
+            }
+            let image = rust_widgets::Image::from_raw(
+                rust_widgets::image::ImageData::Rgba8(pixels),
+                WIDTH,
+                HEIGHT,
+            );
+            let mut item =
+                rust_widgets::GalleryImage::with_label(label, Some(label), WIDTH, HEIGHT);
+            item.image = Some(image);
+            item
+        })
+        .collect()
+}
+
+/// The registered theme names, in registration order.
+fn theme_names() -> Vec<String> {
+    rust_widgets::theme::global_theme_manager()
+        .theme_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The active theme's name, when one is selected.
+fn current_theme_name() -> Option<String> {
+    let name = rust_widgets::theme::global_theme_manager()
+        .current_theme_name()
+        .to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The combo index of the active theme's metrics profile.
+fn current_metrics_index() -> Option<usize> {
+    let manager = rust_widgets::theme::global_theme_manager();
+    let theme = manager.current_theme()?;
+    Some(match theme.metrics_profile {
+        rust_widgets::metrics::ControlMetricsProfile::Material => 0,
+        rust_widgets::metrics::ControlMetricsProfile::Macos => 1,
+        rust_widgets::metrics::ControlMetricsProfile::Cupertino => 2,
+    })
+}
+
+/// Switches the active theme through the library's reduced-motion-aware crossfade (H-24).
+fn switch_theme_faded(gui: &mut Gui, name: &str) {
+    let switched = {
+        let mut manager = rust_widgets::theme::global_theme_manager();
+        manager.set_theme_faded_default(name)
+    };
+    gui.message = if switched {
+        format!("theme {name}: switching")
+    } else {
+        format!("theme {name}: not registered")
+    };
+    update_status(gui);
+}
+
+/// Drives the theme crossfade until the manager reports it finished.
+fn schedule_theme_crossfade(gui: Arc<Mutex<Gui>>) {
+    let next = Arc::clone(&gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(16), move || {
+        let running = {
+            let mut manager = rust_widgets::theme::global_theme_manager();
+            let running = manager.is_crossfading();
+            if running {
+                manager.tick_theme_crossfade(16);
+            }
+            running
+        };
+        let window = next.lock().map(|gui| gui.window).unwrap_or(0);
+        if window != 0 {
+            rust_widgets::invalidate_surface(window);
+        }
+        if running {
+            schedule_theme_crossfade(next);
+        }
+    });
+}
+
+/// Writes the selected metrics profile into the active theme (H-23).
+fn apply_metrics_profile(gui: &mut Gui, index: usize) {
+    let profile = match index {
+        1 => rust_widgets::metrics::ControlMetricsProfile::Macos,
+        2 => rust_widgets::metrics::ControlMetricsProfile::Cupertino,
+        _ => rust_widgets::metrics::ControlMetricsProfile::Material,
+    };
+    let mut manager = rust_widgets::theme::global_theme_manager();
+    let Some(mut theme) = manager.current_theme().cloned() else {
+        gui.message = "metrics: no active theme".to_owned();
+        update_status(gui);
+        return;
+    };
+    let name = theme.name.clone();
+    theme.metrics_profile = profile;
+    manager.register_theme(theme);
+    let changed = manager.set_theme(&name);
+    drop(manager);
+    gui.message = format!(
+        "metrics {index}: {}",
+        if changed { "applied" } else { "refused" }
+    );
+    update_status(gui);
+}
+
+/// Writes the curve editor's control points into the active theme's motion easing (H-22).
+fn apply_motion_curve(gui: &mut Gui, x1: f32, y1: f32, x2: f32, y2: f32) {
+    let mut manager = rust_widgets::theme::global_theme_manager();
+    let Some(mut theme) = manager.current_theme().cloned() else {
+        gui.message = "motion: no active theme".to_owned();
+        update_status(gui);
+        return;
+    };
+    let name = theme.name.clone();
+    theme.motion.easing = rust_widgets::style::EasingFunction::cubic_bezier(x1, y1, x2, y2);
+    theme.motion.curve = rust_widgets::style::MotionCurve::Easing;
+    manager.register_theme(theme);
+    let changed = manager.set_theme(&name);
+    drop(manager);
+    gui.message = format!(
+        "motion easing: cubic-bezier({x1:.2}, {y1:.2}, {x2:.2}, {y2:.2}){}",
+        if changed { "" } else { " (refused)" }
+    );
+    update_status(gui);
+}
+
+/// Seeds the curve editor from the active theme's easing.
+fn seed_curve_editor(id: u64) {
+    let points = {
+        let manager = rust_widgets::theme::global_theme_manager();
+        manager
+            .current_theme()
+            .map_or(((0.42, 0.0), (0.58, 1.0)), |theme| {
+                match theme.motion.easing {
+                    rust_widgets::style::EasingFunction::CubicBezier { x1, y1, x2, y2 } => {
+                        ((x1, y1), (x2, y2))
+                    }
+                    _ => ((0.42, 0.0), (0.58, 1.0)),
+                }
+            })
+    };
+    let _ = with_widget_mut(id, move |widget| {
+        let Some(curve) =
+            (widget as &mut dyn Any).downcast_mut::<rust_widgets::BezierCurveEditor>()
+        else {
+            return false;
+        };
+        curve.set_control_point1(points.0.0, points.0.1);
+        curve.set_control_point2(points.1.0, points.1.1);
+        true
+    });
 }
 
 fn open_palette(gui: &mut Gui) {
@@ -2955,12 +3601,14 @@ pub(super) fn workbench_gui(
     for id in [
         "widgets",
         "pages",
+        "assets",
         "outline",
         "inspector",
         "messages",
         "problems",
         "events",
         "data",
+        "theme",
         "debug",
     ] {
         show_panel_if_available(&mut panels, id, &services);
@@ -3073,9 +3721,18 @@ pub(super) fn workbench_gui(
         diagnostic_menu: 0,
         canvas_panel: 0,
         canvas_surface: 0,
+        tooltip: 0,
+        color_panel: 0,
+        color_picker: 0,
+        color_well: 0,
+        color_history: 0,
+        color_swatch: 0,
+        color_row: 0,
         drag_active: false,
         drag_start: None,
         pointer: None,
+        drag: None,
+        ghost: 0,
         debug: DebugState::new(),
         debug_rows: Vec::new(),
         events: EventsState::new(),
@@ -3184,24 +3841,95 @@ pub(super) fn workbench_gui(
                 // produce an enabled entry whose click only says "no handler" — exactly the
                 // dangling enabled menu T05.08 forbids. `--app-menu` still lists it with its task.
                 crate::app::commands::menu::Item::Planned { .. } => {}
-                crate::app::commands::menu::Item::Submenu { id, items, .. } => {
-                    // The window's API has no nested menu, so a submenu's leaves are flattened under
-                    // its parent but keep the submenu-qualified key.
+                crate::app::commands::menu::Item::Submenu { id, title, items } => {
+                    // A real nested menu, not flattened leaves: the library creates the branch row
+                    // and the child popup, and the host opens the child on `submenu_requested`
+                    // (feedback C-4 / blue22 H-3).
+                    let title_key = format!("menu.{}.submenu.{id}.title", menu.id());
+                    let translated = tr(&title_key);
+                    let label = if translated == title_key {
+                        title.clone()
+                    } else {
+                        translated
+                    };
+                    let branch = handle_menu.item_count();
+                    let child_menu = handle_menu.new_submenu(&label, 0, 0, 0, 0);
+                    if let Ok(mut gui) = gui.lock() {
+                        gui.translatable.push(Translatable {
+                            id: child_menu.raw_id(),
+                            key: title_key,
+                            kind: LabelKind::MenuTitle,
+                        });
+                    }
                     for child in items {
                         // A planned submenu leaf is not painted, for the same reason as above.
-                        if let crate::app::commands::menu::Item::Command { title, command } = child
+                        if let crate::app::commands::menu::Item::Command {
+                            title: leaf,
+                            command,
+                        } = child
                         {
                             add_menu_leaf(
                                 &handle,
-                                &handle_menu,
+                                &child_menu,
                                 &format!("menu.{}.submenu.{id}.item.{command}", menu.id()),
                                 command,
-                                title,
+                                leaf,
                                 &mut menu_actions,
                                 &gui,
                             );
                         }
                     }
+                    // The window-only panels belong in the registry's own Panels submenu, not
+                    // flattened beside its branch row.
+                    if menu.id() == "view" && id == "panels" {
+                        for (key, action) in [
+                            ("ui.panel.pages", "toggle:pages"),
+                            ("ui.panel.widgets", "toggle:widgets"),
+                            ("ui.panel.assets", "toggle:assets"),
+                            ("ui.panel.theme", "toggle:theme"),
+                            ("ui.panel.messages", "toggle:messages"),
+                            ("ui.panel.problems", "toggle:problems"),
+                            ("ui.panel.events", "toggle:events"),
+                            ("ui.panel.data", "toggle:data"),
+                            ("ui.panel.debug", "toggle:debug"),
+                        ] {
+                            let item = handle.new_menu_item(&child_menu, &tr(key), None);
+                            menu_actions.insert(item.raw_id(), action.to_owned());
+                            if let Ok(mut gui) = gui.lock() {
+                                gui.translatable.push(Translatable {
+                                    id: item.raw_id(),
+                                    key: key.to_owned(),
+                                    kind: LabelKind::Text,
+                                });
+                            }
+                        }
+                    }
+                    let parent_id = handle_menu.raw_id();
+                    let child_id = child_menu.raw_id();
+                    subscribe_string(parent_id, "submenu_requested", move |requested| {
+                        if requested != label {
+                            return;
+                        }
+                        let Some(row) = MenuHandle::from_raw(parent_id).row_rect(branch) else {
+                            crate::host::log::emit(
+                                crate::host::log::Level::Warn,
+                                "app::run::workbench",
+                                "a submenu branch row has no painted rectangle",
+                            );
+                            return;
+                        };
+                        let opened = MenuHandle::from_raw(child_id).open_at(
+                            row.x,
+                            row.y.saturating_add(row.height as i32),
+                            Rect::new(0, 0, WIDTH, HEIGHT),
+                        );
+                        if !opened {
+                            warn_failure(
+                                "a submenu could not open",
+                                format!("{requested} was activated but its popup refused to open"),
+                            );
+                        }
+                    });
                 }
                 crate::app::commands::menu::Item::Separator => {}
             }
@@ -3222,28 +3950,8 @@ pub(super) fn workbench_gui(
                 }
             }
             "view" => {
-                // Outline and Inspector are already leaves of the registry's View menu
-                // (`panel.outline`/`panel.inspector`, which `run_command` maps to the toggles); the
-                // window-only panels are appended here so View stays one menu, not two.
-                for (key, action) in [
-                    ("ui.panel.pages", "toggle:pages"),
-                    ("ui.panel.widgets", "toggle:widgets"),
-                    ("ui.panel.messages", "toggle:messages"),
-                    ("ui.panel.problems", "toggle:problems"),
-                    ("ui.panel.events", "toggle:events"),
-                    ("ui.panel.data", "toggle:data"),
-                    ("ui.panel.debug", "toggle:debug"),
-                ] {
-                    let item = handle.new_menu_item(&handle_menu, &tr(key), None);
-                    menu_actions.insert(item.raw_id(), action.to_owned());
-                    if let Ok(mut gui) = gui.lock() {
-                        gui.translatable.push(Translatable {
-                            id: item.raw_id(),
-                            key: key.to_owned(),
-                            kind: LabelKind::Text,
-                        });
-                    }
-                }
+                // The panel toggles live in the registry's View > Panels branch, which the
+                // `Submenu` arm above fills; nothing is appended flat to View.
             }
             _ => {}
         }
@@ -3526,37 +4234,49 @@ pub(super) fn workbench_gui(
             "pages",
             "Pages",
             (0, CONTENT_Y, 260, 180),
-            Area::LeftPanel { index: 0, count: 4 },
+            Area::LeftPanel { index: 0, count: 5 },
         ),
         (
             "outline",
             "Outline",
             (0, 254, 260, 180),
-            Area::LeftPanel { index: 1, count: 4 },
+            Area::LeftPanel { index: 1, count: 5 },
         ),
         (
             "events",
             "Events",
             (0, 442, 260, 200),
-            Area::LeftPanel { index: 2, count: 4 },
+            Area::LeftPanel { index: 2, count: 5 },
         ),
         (
             "widgets",
             "Widgets",
             (0, 650, 260, 140),
-            Area::LeftPanel { index: 3, count: 4 },
+            Area::LeftPanel { index: 3, count: 5 },
+        ),
+        (
+            "assets",
+            "Assets",
+            (0, 790, 260, 150),
+            Area::LeftPanel { index: 4, count: 5 },
         ),
         (
             "inspector",
             "Inspector",
             (WIDTH as i32 - 320, CONTENT_Y, 320, 280),
-            Area::RightPanel { index: 0, count: 2 },
+            Area::RightPanel { index: 0, count: 3 },
         ),
         (
             "data",
             "Data & State",
             (WIDTH as i32 - 320, 358, 320, 280),
-            Area::RightPanel { index: 1, count: 2 },
+            Area::RightPanel { index: 1, count: 3 },
+        ),
+        (
+            "theme",
+            "Theme",
+            (WIDTH as i32 - 320, 646, 320, 180),
+            Area::RightPanel { index: 2, count: 3 },
         ),
         (
             "messages",
@@ -3589,7 +4309,7 @@ pub(super) fn workbench_gui(
         // as an implicit contract (feedback-20261020 §3.1, closed by 2.8.11).
         // The Inspector and Data panels edit through the library's `PropertyGrid` rather than a
         // list plus a hand-built field row (blue21 W-2d), so they create no list at all.
-        let list_id = if id == "inspector" || id == "data" {
+        let list_id = if id == "inspector" || id == "data" || id == "assets" || id == "theme" {
             0
         } else {
             // The widget library puts a search field above its list, so its rows start lower.
@@ -3898,6 +4618,186 @@ pub(super) fn workbench_gui(
             data_controls = Some((grid.raw_id(), error.raw_id(), note.raw_id()));
             extra_widgets.extend([grid.raw_id(), error.raw_id(), note.raw_id()]);
         }
+        if id == "assets" {
+            // H-21: the gallery is the asset surface, and it owns the library's
+            // `ThumbnailCache` (its strip is painted from cached thumbnails). The sample
+            // assets are generated RGBA so the thumbnail path is real rather than a row of
+            // placeholders; a project asset added later uses the same `set_images` path.
+            let gallery = handle
+                .mount_widget_by_name(
+                    "image_gallery",
+                    Rect::new(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 58),
+                    "",
+                )
+                .expect("the library registers the image gallery widget");
+            watch_focus(gallery.raw_id(), "asset gallery");
+            let images = sample_asset_images();
+            let filled = with_widget_mut(gallery.raw_id(), move |widget| {
+                let Some(gallery) =
+                    (widget as &mut dyn Any).downcast_mut::<rust_widgets::ImageGallery>()
+                else {
+                    return false;
+                };
+                gallery.set_images(images);
+                true
+            })
+            .unwrap_or(false);
+            if !filled {
+                warn_failure(
+                    "the asset gallery could not be filled",
+                    "the mounted control was not an ImageGallery",
+                );
+            }
+            let note = panel.new_label(
+                &tr("ui.assets.note"),
+                rect.0 + 8,
+                rect.1 + rect.3 as i32 - 22,
+                rect.2 - 16,
+                16,
+            );
+            inner.add_widget(gallery.raw_id(), 1);
+            inner.set_size_policy(gallery.raw_id(), SizePolicy::Expanding);
+            inner.add_widget(note.raw_id(), 0);
+            inner.set_constraints(note.raw_id(), LayoutConstraints::new(16, Some(16)));
+            inner.set_size_policy(note.raw_id(), SizePolicy::Fixed);
+            extra_widgets.extend([gallery.raw_id(), note.raw_id()]);
+        }
+        if id == "theme" {
+            // H-22/H-23/H-24: a real theme surface. The combo switches the active theme with
+            // the library's faded path, the metrics combo writes `Theme::metrics_profile`, and
+            // the curve editor edits `Theme::motion.easing` as a cubic Bézier.
+            let names = theme_names();
+            let row = panel.new_panel(rect.0 + 8, rect.1 + 30, rect.2 - 16, 26);
+            let themes = row.new_combo_box(0, 0, rect.2 - 96, 26);
+            for name in &names {
+                themes.add_item(name);
+            }
+            if let Some(index) =
+                current_theme_name().and_then(|name| names.iter().position(|n| *n == name))
+            {
+                themes.set_current_index(index);
+            }
+            let switch = row.new_button(&tr("ui.button.switch-theme"), 0, 0, 72, 26);
+            let mut row_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            row_layout.add_widget(themes.raw_id(), 1);
+            row_layout.set_size_policy(themes.raw_id(), SizePolicy::Expanding);
+            row_layout.add_widget(switch.raw_id(), 0);
+            row_layout.set_constraints(switch.raw_id(), LayoutConstraints::new(72, Some(72)));
+            row_layout.set_size_policy(switch.raw_id(), SizePolicy::Fixed);
+            row.set_layout(Box::new(row_layout));
+
+            let metrics_row = panel.new_panel(rect.0 + 8, rect.1 + 62, rect.2 - 16, 26);
+            let metrics_label = metrics_row.new_label(&tr("ui.theme.metrics"), 0, 0, 72, 26);
+            let metrics = metrics_row.new_combo_box(0, 0, rect.2 - 88, 26);
+            for token in ["material", "macos", "cupertino"] {
+                metrics.add_item(token);
+            }
+            if let Some(index) = current_metrics_index() {
+                metrics.set_current_index(index);
+            }
+            let mut metrics_layout = BoxLayout::new(Orientation::Horizontal, 4, 0);
+            metrics_layout.add_widget(metrics_label.raw_id(), 0);
+            metrics_layout
+                .set_constraints(metrics_label.raw_id(), LayoutConstraints::new(72, Some(72)));
+            metrics_layout.set_size_policy(metrics_label.raw_id(), SizePolicy::Fixed);
+            metrics_layout.add_widget(metrics.raw_id(), 1);
+            metrics_layout.set_size_policy(metrics.raw_id(), SizePolicy::Expanding);
+            metrics_row.set_layout(Box::new(metrics_layout));
+
+            let curve = handle
+                .mount_widget_by_name(
+                    "bezier_curve_editor",
+                    Rect::new(rect.0 + 8, rect.1 + 94, rect.2 - 16, rect.3 - 140),
+                    "",
+                )
+                .expect("the library registers the bezier curve editor");
+            watch_focus(curve.raw_id(), "theme motion curve");
+            seed_curve_editor(curve.raw_id());
+            let note = panel.new_label(
+                &tr("ui.theme.curve"),
+                rect.0 + 8,
+                rect.1 + rect.3 as i32 - 22,
+                rect.2 - 16,
+                16,
+            );
+            for (widget, height) in [
+                (row.raw_id(), 26),
+                (metrics_row.raw_id(), 26),
+                (note.raw_id(), 16),
+            ] {
+                inner.add_widget(widget, 0);
+                inner.set_constraints(widget, LayoutConstraints::new(height, Some(height)));
+                inner.set_size_policy(widget, SizePolicy::Fixed);
+            }
+            inner.add_widget(curve.raw_id(), 1);
+            inner.set_size_policy(curve.raw_id(), SizePolicy::Expanding);
+
+            {
+                let state = Arc::clone(&gui);
+                let themes_id = themes.raw_id();
+                ButtonHandle::from_raw(switch.raw_id()).on_click(move || {
+                    let combo = rust_widgets::app::ComboBoxHandle::from_raw(themes_id);
+                    let name = combo
+                        .current_index()
+                        .and_then(|index| combo.item_text(index));
+                    if let Some(name) = name
+                        && let Ok(mut gui) = state.lock()
+                    {
+                        switch_theme_faded(&mut gui, &name);
+                    }
+                    schedule_theme_crossfade(Arc::clone(&state));
+                });
+            }
+            {
+                let state = Arc::clone(&gui);
+                subscribe_index(metrics.raw_id(), "current_index_changed", move |index| {
+                    if let Ok(mut gui) = state.lock() {
+                        apply_metrics_profile(&mut gui, index as usize);
+                    }
+                });
+            }
+            {
+                let state = Arc::clone(&gui);
+                let _ = with_widget_mut(curve.raw_id(), move |widget| {
+                    let Some(curve) =
+                        (widget as &mut dyn Any).downcast_mut::<rust_widgets::BezierCurveEditor>()
+                    else {
+                        return false;
+                    };
+                    curve
+                        .curve_changed
+                        .connect(move |value: Arc<((f32, f32), (f32, f32))>| {
+                            let ((x1, y1), (x2, y2)) = *value;
+                            if let Ok(mut gui) = state.lock() {
+                                apply_motion_curve(&mut gui, x1, y1, x2, y2);
+                            }
+                        });
+                    true
+                });
+            }
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: switch.raw_id(),
+                    key: "ui.button.switch-theme".to_owned(),
+                    kind: LabelKind::Text,
+                });
+                gui.translatable.push(Translatable {
+                    id: metrics_label.raw_id(),
+                    key: "ui.theme.metrics".to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
+            extra_widgets.extend([
+                row.raw_id(),
+                themes.raw_id(),
+                switch.raw_id(),
+                metrics_row.raw_id(),
+                metrics_label.raw_id(),
+                metrics.raw_id(),
+                curve.raw_id(),
+                note.raw_id(),
+            ]);
+        }
         panel.set_layout(Box::new(inner));
         let items: Vec<String> = match id {
             "outline" => outline_items.clone(),
@@ -3905,7 +4805,7 @@ pub(super) fn workbench_gui(
             "messages" => vec![tr("ui.status.ready")],
             // The Events, Data and Pages lists are filled from their models once the controls exist;
             // the Inspector and Data panels own a property grid instead of a list.
-            "events" | "data" | "pages" | "inspector" => Vec::new(),
+            "events" | "data" | "pages" | "inspector" | "assets" | "theme" => Vec::new(),
             _ => vec![tr("ui.status.no-problems")],
         };
         for item in items {
@@ -3987,6 +4887,14 @@ pub(super) fn workbench_gui(
                     && row as usize == gui.property_row
                 {
                     apply_property(&mut gui, text);
+                }
+            });
+        }
+        {
+            let gui = Arc::clone(&gui);
+            subscribe_cell(grid_id, "color_picker_requested", move |row, seed| {
+                if let Ok(mut gui) = gui.lock() {
+                    open_colour(&mut gui, row as usize, seed);
                 }
             });
         }
@@ -4835,6 +5743,68 @@ pub(super) fn workbench_gui(
     }
     watch_focus(canvas_surface, "canvas");
 
+    // The Inspector's colour editor (blue22 H-18): the library's picker, well, history and swatch
+    // live in one hidden overlay. The grid asks for the picker through `color_picker_requested`
+    // and still accepts a typed hex value through its own text editor.
+    let color_panel = handle.new_panel(300, 130, 280, 372);
+    let color_picker =
+        get_control_backend_for_widget(rust_widgets::widget::WidgetKind::ColorPicker)
+            .create_color_picker(color_panel.raw_id(), 0, 0, 280, 240);
+    let color_well = get_control_backend_for_widget(rust_widgets::widget::WidgetKind::ColorWell)
+        .create_color_well(color_panel.raw_id(), 0, 244, 32, 24);
+    let color_history =
+        get_control_backend_for_widget(rust_widgets::widget::WidgetKind::ColorHistory)
+            .create_color_history(color_panel.raw_id(), 36, 244, 244, 24);
+    let color_swatch = get_control_backend_for_widget(rust_widgets::widget::WidgetKind::Swatch)
+        .create_swatch(color_panel.raw_id(), 0, 272, 280, 96);
+    for id in [
+        color_panel.raw_id(),
+        color_picker,
+        color_well,
+        color_history,
+        color_swatch,
+    ] {
+        if id != 0 {
+            rust_widgets::hide_widget(id);
+        }
+    }
+    if let Ok(mut gui) = gui.lock() {
+        gui.color_panel = color_panel.raw_id();
+        gui.color_picker = color_picker;
+        gui.color_well = color_well;
+        gui.color_history = color_history;
+        gui.color_swatch = color_swatch;
+    }
+    wire_colour_editor(&gui);
+
+    // Hover tooltips (blue22 H-20). The runtime forwards the hovered control and its `tooltip`
+    // property to every registered manager. The manager is a child of the window with a small
+    // bubble-sized geometry: a full-window overlay would intercept every click, so the tick below
+    // moves it next to the hovered control only while a bubble is visible.
+    let tooltip = get_control_backend_for_widget(rust_widgets::widget::WidgetKind::TooltipManager)
+        .create_tooltip_manager(handle.raw_id(), 0, 0, 1, 1);
+    if tooltip != 0 {
+        rust_widgets::hide_widget(tooltip);
+        if let Ok(mut gui) = gui.lock() {
+            gui.tooltip = tooltip;
+        }
+    }
+    if let Ok(gui) = gui.lock() {
+        for (id, key) in [
+            (gui.property_grid, "ui.panel.inspector"),
+            (gui.data_grid, "ui.panel.data"),
+            (gui.messages_list, "ui.panel.messages"),
+            (gui.outline_list, "ui.panel.outline"),
+            (gui.widgets_list, "ui.panel.widgets"),
+            (gui.events_list, "ui.panel.events"),
+            (gui.pages_list, "ui.panel.pages"),
+            (gui.canvas_surface, "ui.canvas"),
+        ] {
+            set_control_tooltip(id, tr(key));
+        }
+    }
+    schedule_tooltips(Arc::clone(&gui));
+
     // Pointer facts for click selection and drag marquee. `mouse_pressed`/`mouse_released` carry
     // no position, so the `mouse_moved` payload keeps the current design-space point; the press
     // then fixes the anchor. Reading the transform from the panel (not this control) is what
@@ -4845,6 +5815,10 @@ pub(super) fn workbench_gui(
             if let Ok(mut gui) = gui.lock() {
                 gui.drag_active = true;
                 gui.drag_start = gui.pointer;
+                gui.drag = gui.pointer.and_then(|(x, y)| {
+                    let node = gui.scene.hit(x, y)?;
+                    crate::app::canvas::drag::Drag::begin(gui.scene.tree(), node).ok()
+                });
                 crate::host::log::emit(
                     crate::host::log::Level::Info,
                     "app::run::workbench-scene",
@@ -4861,13 +5835,22 @@ pub(super) fn workbench_gui(
                 .map(|canvas| {
                     let gui = Arc::clone(&gui);
                     canvas.mouse_moved.connect(move |point: Arc<Point>| {
-                        if let Ok(mut gui) = gui.lock()
+                        let state = Arc::clone(&gui);
+                        if let Ok(mut gui) = state.lock()
                             && let Some(design) = canvas_point(gui.canvas_panel, point.x, point.y)
                         {
                             let previous = gui.pointer;
                             gui.pointer = Some(design);
                             if gui.drag_active && gui.drag_start.is_none() {
                                 gui.drag_start = Some(design);
+                            }
+                            if gui.drag_active && gui.drag.is_some() && gui.ghost == 0 {
+                                let start = gui.drag_start.unwrap_or(design);
+                                let moved =
+                                    start.0.abs_diff(design.0).max(start.1.abs_diff(design.1));
+                                if moved >= DRAG_THRESHOLD {
+                                    create_drag_ghost(&state, &mut gui);
+                                }
                             }
                             if gui.drag_active && previous != Some(design) {
                                 sync_canvas(&mut gui);
@@ -5234,8 +6217,18 @@ fn schedule_menu(gui: Arc<Mutex<Gui>>, actions: Arc<BTreeMap<u64, String>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::onboarding_text;
+    use super::{onboarding_text, sample_asset_images};
     use crate::app::commands::command::built_in;
+
+    #[test]
+    fn the_sample_assets_are_decoded_rgba_thumbnails() {
+        let assets = sample_asset_images();
+        assert_eq!(assets.len(), 6);
+        for asset in &assets {
+            assert!(asset.image.is_some(), "{} has no pixels", asset.path);
+            assert_eq!((asset.width, asset.height), (96, 72));
+        }
+    }
 
     #[test]
     fn the_onboarding_page_lists_every_registered_command() {

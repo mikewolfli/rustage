@@ -618,6 +618,8 @@ mod tests {
         PropertyType::Number {
             min: None,
             max: None,
+            step: None,
+            places: None,
         }
     }
 

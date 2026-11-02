@@ -260,6 +260,35 @@ impl CanvasState {
         self.tree.get(node).and_then(|entry| entry.parent)
     }
 
+    /// The structural tree, for drag decisions that must read it without writing.
+    pub(super) fn tree(&self) -> &Tree {
+        &self.tree
+    }
+
+    /// How many direct children a container (or the root) holds.
+    pub(super) fn child_count(&self, node: Option<NodeId>) -> usize {
+        match node {
+            Some(node) => self.tree.get(node).map_or(0, |entry| entry.children.len()),
+            None => self.tree.roots().len(),
+        }
+    }
+
+    /// Applies a checked drag move to the structural tree.
+    ///
+    /// Scene rectangles and contracts travel with the node, so only the tree changes; a refused
+    /// move returns the tree's own reason and leaves every node where it was.
+    pub(super) fn move_node(
+        &mut self,
+        moving: crate::app::canvas::drag::Move,
+    ) -> Result<(), String> {
+        self.tree
+            .reparent_at(moving.node, moving.parent, moving.index)
+            .map_err(|error| error.message())?;
+        self.revision += 1;
+        self.content_revision += 1;
+        Ok(())
+    }
+
     /// Duplicates a node's subtree under the same parent and selects the copy.
     ///
     /// The structural copy comes from [`Tree::copy`], which deep-copies in pre-order with fresh ids;
@@ -1025,8 +1054,26 @@ impl Layout for CanvasLayout {
 #[cfg(test)]
 mod tests {
     use super::CanvasState;
+    use crate::app::canvas::drag::Move;
     use crate::app::canvas::scene::Rect;
     use crate::contracts::identity::NodeId;
+
+    #[test]
+    fn a_drag_move_reparents_without_moving_the_scene_rectangle() {
+        let mut state = CanvasState::demo();
+        let rows = state.row_nodes();
+        let label = rows[3];
+        let before = state.rect(label).expect("a rectangle");
+        state
+            .move_node(Move::new(label, None, 0))
+            .expect("the label may move to the root");
+        assert_eq!(state.parent(label), None);
+        assert_eq!(state.rect(label), Some(before));
+        // A container cannot move inside its own subtree.
+        let panel = rows[1];
+        let button = rows[2];
+        assert!(state.move_node(Move::new(panel, Some(button), 0)).is_err());
+    }
 
     #[test]
     fn the_topmost_overlapping_node_is_the_hit_and_the_tree_still_reaches_the_one_below() {

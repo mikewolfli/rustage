@@ -40,7 +40,7 @@ use super::network::{
     ServicePolicy, TlsPolicy, connect, default_store, exchange, redact,
 };
 use super::notify::{Cause, NotificationCentre, Severity};
-use super::open_url::{OpenRefusal, OpenTarget, ProgramOpener};
+use super::open_url::{OpenRefusal, OpenTarget, PlatformOpener};
 use super::paths::{HostDirectories, HostDirectory, ProjectRoot};
 use super::permission::{PermissionService, Scope};
 use super::registry::{ScopeRefusal, ServiceRegistry};
@@ -1126,7 +1126,7 @@ fn check_directories() -> CapabilityCheck {
 /// Whether this operating system has a handler program, and whether the host refuses the targets it
 /// must refuse.
 fn check_url() -> (CapabilityCheck, CapabilityCheck) {
-    let opener = match ProgramOpener::for_this_platform() {
+    let _opener = match PlatformOpener::for_this_platform() {
         Ok(opener) => opener,
         Err(OpenRefusal::UnsupportedPlatform { os }) => {
             let missing = CapabilityCheck::new(
@@ -1188,30 +1188,17 @@ fn check_url() -> (CapabilityCheck, CapabilityCheck) {
         .map(|(name, _)| *name)
         .collect();
     let evidence = format!(
-        "{} is {} on PATH; refused before launch: {}",
-        opener.program(),
-        if opener.is_on_path() {
-            "present"
-        } else {
-            "absent"
-        },
+        "the platform reports external opening; refused before launch: {}",
         refused.join(", "),
     );
 
-    let present = if opener.is_on_path() && refused.len() == refusals.len() {
+    let present = if refused.len() == refusals.len() {
         CapabilityCheck::new(Capability::UrlHandlerPresent, CheckStatus::Ready, evidence)
     } else {
         CapabilityCheck::new(
             Capability::UrlHandlerPresent,
             CheckStatus::Gap {
-                reason: if !opener.is_on_path() {
-                    format!(
-                        "{} is not on PATH, so no target can be handed to it",
-                        opener.program()
-                    )
-                } else {
-                    "a target the host must refuse was accepted".to_owned()
-                },
+                reason: "a target the host must refuse was accepted".to_owned(),
             },
             evidence,
         )
@@ -1228,7 +1215,7 @@ fn check_url() -> (CapabilityCheck, CapabilityCheck) {
                      person asks for it"
                 .to_owned(),
         },
-        format!("{} would be started with the accepted target as its only argument", opener.program()),
+        format!("the platform handler would be asked to open the accepted target"),
     );
 
     (present, handover)

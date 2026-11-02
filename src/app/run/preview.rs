@@ -99,10 +99,17 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                     match preview.mount_view(&next, &make) {
                         Ok(report) => {
                             document = Some(next);
-                            Ok(vec![format!(
+                            let mut lines = vec![format!(
                                 "mounted {} control(s), {} issue(s), generation {}",
                                 report.widgets_created, report.issues, report.generation
-                            )])
+                            )];
+                            lines.extend(
+                                preview
+                                    .unwired_events()
+                                    .into_iter()
+                                    .map(|line| format!("unwired: {line}")),
+                            );
+                            Ok(lines)
                         }
                         Err(reason) => Err(reason),
                     }
@@ -120,10 +127,19 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                         let factory = WidgetFactory::new_with_defaults();
                         let make = creator(&factory);
                         match preview.update_view(current, &make) {
-                            Ok(report) => Ok(vec![format!(
-                                "updated: {} patch(es), generation {}, {} update(s)",
-                                report.patches, report.generation, report.updates
-                            )]),
+                            Ok(report) => {
+                                let mut lines = vec![format!(
+                                    "updated: {} patch(es), generation {}, {} update(s)",
+                                    report.patches, report.generation, report.updates
+                                )];
+                                lines.extend(
+                                    preview
+                                        .unwired_events()
+                                        .into_iter()
+                                        .map(|line| format!("unwired: {line}")),
+                                );
+                                Ok(lines)
+                            }
                             Err(reason) => Err(reason),
                         }
                     }
@@ -188,6 +204,17 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                 Err(reason) => Err(reason),
             },
             "gap" => Ok(vec![Preview::scroll_gap().to_owned()]),
+            "unwired" => {
+                let lines = preview.unwired_events();
+                if lines.is_empty() {
+                    Ok(vec!["unwired: none reported".to_owned()])
+                } else {
+                    Ok(lines
+                        .into_iter()
+                        .map(|line| format!("unwired: {line}"))
+                        .collect())
+                }
+            }
             "install" => match node(argument) {
                 Ok(node) => match preview.install(node) {
                     Ok(instance) => Ok(vec![format!(

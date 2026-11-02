@@ -110,7 +110,7 @@ impl MotionOptions {
 pub struct StyleOptions {
     /// The operations: `css:<rule text>`, `element:<compound>`, `inline:<property>:<value>`,
     /// `token:<kind>:<name>:<value>`, `theme:<name>:<token>=<value>[,...]`, `under:<theme|->`,
-    /// `preview`, `generate`, `migrate`, `state`, `show`.
+    /// `preview`, `generate`, `migrate`, `resolve[:<kind>,...]`, `state`, `show`.
     pub ops: Vec<String>,
 }
 

@@ -536,6 +536,11 @@ impl Catalog {
         self.descriptors.len()
     }
 
+    /// Every captured descriptor, in contract order.
+    pub fn descriptors(&self) -> &[WidgetDescriptor] {
+        &self.descriptors
+    }
+
     /// Whether it describes none.
     pub fn is_empty(&self) -> bool {
         self.descriptors.is_empty()

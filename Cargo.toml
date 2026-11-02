@@ -25,11 +25,11 @@ publish = false
 linux-native = ["rust_widgets/gtk-native"]
 
 [dependencies]
-rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "be69fa2b69917c82c7bad0e24b06ea2c437607b0", default-features = false, features = ["desktop", "runtime-fonts"] }
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "1a30785842140e45789bf50a81bd7280c8f9b7a2", default-features = false, features = ["desktop", "runtime-fonts"] }
 # The form group is an opt-in suite package in the same pinned revision. The host installs it into
 # its own factory instead of expecting the parent crate to depend on the suite (which would be a
 # package cycle).
-rust-widgets-suites = { git = "https://github.com/mikewolfli/rust-widgets", rev = "be69fa2b69917c82c7bad0e24b06ea2c437607b0", package = "rust-widgets-suites" }
+rust-widgets-suites = { git = "https://github.com/mikewolfli/rust-widgets", rev = "1a30785842140e45789bf50a81bd7280c8f9b7a2", package = "rust-widgets-suites" }
 
 # Extension packages and the release SBOM need a real digest; `sha2` is already resolved through the
 # widget dependency, so this adds no download. A hand-rolled checksum would not be comparable with

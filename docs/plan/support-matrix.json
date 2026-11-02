@@ -2,7 +2,7 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "be69fa2b69917c82c7bad0e24b06ea2c437607b0",
+    "revision": "1a30785842140e45789bf50a81bd7280c8f9b7a2",
     "profile": "desktop"
   },
   "capacityBudgets": [
@@ -26,20 +26,20 @@
     {
       "id": "macos",
       "triple": "aarch64-apple-darwin",
-      "designerHost": "build-verified",
-      "reason": "3.2.1（be69fa2b）上 cargo test --bin rustage 多域测试在 macOS aarch64 构建并通过（rust_widgets 以 desktop 依赖 features 构建），见 docs/log/log-20261101-2.md；3.1.0（d44ca0e9）的 --workbench-gui 真实 1280x800 窗口会话证据保留于 docs/log/archived/log-20261029-11.md，但 3.2.1 未复跑 GUI 有界会话，故由 certified 降为 build-verified"
+      "designerHost": "certified",
+      "reason": "4.0.0（1a30785）上 macOS aarch64 的 cargo check/test 多域通过，并以 cargo run -- --workbench-gui --exit-after-ms 4000 建立真实 1280x800 窗口会话（docs/log/log-20261103-1.md），故恢复 certified"
     },
     {
       "id": "windows",
       "triple": "x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据）",
       "designerHost": "unverified",
-      "reason": "3.1.0（d44ca0e9）曾在 macOS 宿主用 rust-lld + xwin 交叉构建 --bin rustage（69 MB PE32+），见 docs/log/archived/log-20261029-11.md；3.2.1（be69fa2b）未复跑交叉构建，按“不拿旧修订证据冒充新修订”降为 unverified"
+      "reason": "4.0.0（1a30785）在 macOS 宿主以 cargo-xwin 交叉构建失败于上游 src/platform/windows/types.rs:540 的 WA_INACTIVE 类型不匹配（RW-101，docs/rw-feedback/feedback-20261101.md 第六轮）；3.1.0 的 xwin 证据不作为 4.0.0 证据"
     },
     {
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
-      "designerHost": "build-verified",
-      "reason": "2026-11-02 在 Linux x86_64 上 cargo test probe:: 通过（probe 契约 19/19，五域探针全 Verified；rust_widgets 以 3.2.1 desktop 依赖 features 完整构建），见 docs/rw-feedback/feedback-20261101.md 决策记录；产品 GUI 运行需 linux-native（GTK）特性，未运行，故为 build-verified"
+      "designerHost": "unverified",
+      "reason": "4.0.0（1a30785）未在 Linux 复跑；3.2.1 上 cargo test probe:: 19/19 的证据见 docs/rw-feedback/feedback-20261101.md 决策记录，按矩阵规则 2/4 不作为 4.0.0 证据；产品 GUI 运行需 linux-native（GTK），本轮未运行"
     }
   ],
   "profiles": [
@@ -49,39 +49,39 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "3.2.1（be69fa2b）的 desktop 为宿主默认依赖 features：macOS aarch64 上 cargo test --bin rustage 多域通过（docs/log/log-20261101-2.md），2026-11-02 Linux x86_64 上 cargo test probe:: 19/19 通过；profile 专属 --no-default-features --features desktop --lib 构建在 3.2.1 未单独复跑；未运行产品，故不写成 certified"
+      "mode2Reason": "4.0.0（1a30785）的 desktop 为宿主默认依赖 features：macOS aarch64 上 cargo check/test 多域通过并完成 GUI 有界会话（docs/log/log-20261103-1.md）；Linux 4.0.0 未复跑，故不写成 certified"
     },
     {
       "id": "tablet",
       "feature": "tablet",
       "mode1": "unverified",
       "mode1Reason": null,
-      "mode2": "unverified",
-      "mode2Reason": "3.1.0 上曾在 macOS aarch64 以 --no-default-features --features tablet --lib 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，按矩阵原则降为 unverified"
+      "mode2": "build-verified",
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "id": "mobile",
       "feature": "mobile",
       "mode1": "unverified",
       "mode1Reason": null,
-      "mode2": "unverified",
-      "mode2Reason": "3.1.0 上曾在 macOS aarch64 以 --no-default-features --features mobile --lib 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，按矩阵原则降为 unverified"
+      "mode2": "build-verified",
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "id": "mini",
       "feature": "mini",
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
-      "mode2": "unverified",
-      "mode2Reason": "3.1.0 上曾在 macOS aarch64 以 --no-default-features --features mini --lib 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，按矩阵原则降为 unverified"
+      "mode2": "build-verified",
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "id": "embedded",
       "feature": "embedded",
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
-      "mode2": "unverified",
-      "mode2Reason": "2.8.12 已把四个构造器与 WidgetKind 变体统一为 widgets_unstripped 门控；3.1.0 的 embedded --lib 曾在 macOS aarch64 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，按矩阵原则降为 unverified"
+      "mode2": "build-verified",
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
     }
   ],
   "cells": [
@@ -89,67 +89,67 @@
       "host": "macos",
       "profile": "desktop",
       "status": "build-verified",
-      "reason": "3.2.1（be69fa2b）上 macOS aarch64 cargo test --bin rustage 多域通过（rust_widgets 以 desktop 依赖 features 构建），见 docs/log/log-20261101-2.md；profile 专属 --lib 构建未复跑；未运行产品"
+      "reason": "4.0.0（1a30785）在 macOS aarch64 以 host desktop 依赖 features 完成 cargo check/test 与 GUI 有界会话（docs/log/log-20261103-1.md）"
     },
     {
       "host": "macos",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": "3.1.0 的 --no-default-features --features tablet --lib 曾在 macOS aarch64 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "macos",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": "3.1.0 的 --no-default-features --features mobile --lib 曾在 macOS aarch64 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "macos",
       "profile": "mini",
-      "status": "unverified",
-      "reason": "3.1.0 的 --no-default-features --features mini --lib 曾在 macOS aarch64 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "macos",
       "profile": "embedded",
-      "status": "unverified",
-      "reason": "3.1.0 的 embedded --lib 曾在 macOS aarch64 构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "windows",
       "profile": "desktop",
       "status": "unverified",
-      "reason": "3.1.0 的 --target x86_64-pc-windows-msvc --no-default-features --features desktop --lib 曾交叉构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "reason": "4.0.0（1a30785）以 cargo-xwin 交叉构建失败于上游 src/platform/windows/types.rs:540 的 WA_INACTIVE 类型不匹配（RW-101，docs/rw-feedback/feedback-20261101.md 第六轮）"
     },
     {
       "host": "windows",
       "profile": "tablet",
       "status": "unverified",
-      "reason": "3.1.0 的 --target x86_64-pc-windows-msvc --no-default-features --features tablet --lib 曾交叉构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
     },
     {
       "host": "windows",
       "profile": "mobile",
       "status": "unverified",
-      "reason": "3.1.0 的 --target x86_64-pc-windows-msvc --no-default-features --features mobile --lib 曾交叉构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
     },
     {
       "host": "windows",
       "profile": "mini",
       "status": "unverified",
-      "reason": "3.1.0 的 --target x86_64-pc-windows-msvc --no-default-features --features mini --lib 曾交叉构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
     },
     {
       "host": "windows",
       "profile": "embedded",
       "status": "unverified",
-      "reason": "3.1.0 的 --target x86_64-pc-windows-msvc --no-default-features --features embedded --lib 曾交叉构建通过（docs/log/archived/log-20261029-11.md）；3.2.1 未复跑，降为 unverified"
+      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
     },
     {
       "host": "linux",
       "profile": "desktop",
-      "status": "build-verified",
-      "reason": "2026-11-02 在 Linux x86_64 上 cargo test probe:: 通过（probe 契约 19/19，五域探针全 Verified；rust_widgets 以 3.2.1 desktop 依赖 features 完整构建），见 docs/rw-feedback/feedback-20261101.md 决策记录；未运行产品 GUI"
+      "status": "unverified",
+      "reason": "4.0.0（1a30785）未在 Linux 复跑；3.2.1 的 probe 证据（docs/rw-feedback/feedback-20261101.md 决策记录）不作为 4.0.0 证据；GUI 需 linux-native（GTK），未运行"
     },
     {
       "host": "linux",

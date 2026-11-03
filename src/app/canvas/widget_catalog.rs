@@ -39,6 +39,7 @@ use std::collections::BTreeSet;
 use rust_widgets::designer::generator::availability_with;
 use rust_widgets::designer::{Availability, TargetProfile};
 use rust_widgets::widget::WidgetFactory;
+use rust_widgets::widget::capability::designer_manifest::{DesignerCommand, DesignerConstraint};
 use rust_widgets::widget::capability::{
     CapabilityValue, DesignerEvent, DesignerManifest, DesignerProperty,
     EventSchema as ContractEventSchema, ManifestExportError,
@@ -98,6 +99,7 @@ impl ValueType {
             Self::Bool => "bool".to_owned(),
             Self::Color => "color".to_owned(),
             Self::Dimension => "dimension".to_owned(),
+            Self::Enum(values) if values.is_empty() => "enum".to_owned(),
             Self::Enum(values) => format!("enum({})", values.join(",")),
             Self::Resource { kind } => format!("resource({kind})"),
             Self::Rect => "rect".to_owned(),
@@ -117,6 +119,21 @@ pub struct PropertySchema {
     pub value_type: ValueType,
     /// The default value, when the contract gives one.
     pub default: Option<String>,
+    /// Whether the contract allows reading it.
+    pub readable: bool,
+    /// Whether the contract allows writing it.
+    pub writable: bool,
+    /// The accepted spellings of an enum property, in the order the contract gives them.
+    ///
+    /// The same list is already inside [`ValueType::Enum`]; it is carried separately so a reader
+    /// does not have to match the type to answer "what may this property hold".
+    pub tokens: Vec<String>,
+    /// The runtime-enforced constraints, rendered as the contract publishes them.
+    ///
+    /// Rendered rather than stored as `f64` so [`PropertySchema`] keeps `Eq`; the structured form
+    /// is what the Inspector reads from the manifest itself (blue22 H-12), and a palette only has
+    /// to display it.
+    pub constraints: Vec<String>,
 }
 
 impl PropertySchema {
@@ -126,6 +143,10 @@ impl PropertySchema {
             name: name.into(),
             value_type,
             default: None,
+            readable: true,
+            writable: true,
+            tokens: Vec::new(),
+            constraints: Vec::new(),
         }
     }
 
@@ -135,12 +156,43 @@ impl PropertySchema {
         self
     }
 
+    /// The same property with the contract's read/write access.
+    pub fn with_access(mut self, readable: bool, writable: bool) -> Self {
+        self.readable = readable;
+        self.writable = writable;
+        self
+    }
+
+    /// The same property with its accepted enum spellings.
+    pub fn with_tokens(mut self, tokens: impl IntoIterator<Item = String>) -> Self {
+        self.tokens = tokens.into_iter().collect();
+        self
+    }
+
+    /// The same property with one rendered constraint.
+    pub fn with_constraint(mut self, constraint: impl Into<String>) -> Self {
+        self.constraints.push(constraint.into());
+        self
+    }
+
     /// The property in one line.
     pub fn render(&self) -> String {
-        match &self.default {
+        let mut line = match &self.default {
             Some(default) => format!("{}: {} = {default}", self.name, self.value_type.name()),
             None => format!("{}: {}", self.name, self.value_type.name()),
+        };
+        // Enum tokens already appear inside `value_type.name()`; printing them again would make
+        // one fact look like two. The separate `tokens` field is for programmatic consumers.
+        match (self.readable, self.writable) {
+            (false, true) => line.push_str(" (write-only)"),
+            (true, false) => line.push_str(" (read-only)"),
+            (false, false) => line.push_str(" (no access)"),
+            (true, true) => {}
         }
+        for constraint in &self.constraints {
+            line.push_str(&format!(" {{{constraint}}}"));
+        }
+        line
     }
 }
 
@@ -165,6 +217,51 @@ impl EventSchema {
             (Some(payload), None) => format!("{}: {}", self.name, payload.name()),
             (None, _) => format!("{}: no payload", self.name),
         }
+    }
+}
+
+/// One command (method) a control accepts.
+///
+/// The manifest publishes these as BLUE26 B26.03; a palette that showed only properties and events
+/// would leave out the calls a designer can make without writing Rust.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CommandSchema {
+    /// The published command name.
+    pub name: String,
+    /// The parameter shape: `none`, `value` or `composite`.
+    pub signature: String,
+    /// The parameter name, empty for a payload-free command.
+    pub parameter: String,
+    /// The declared kind of a `value` parameter.
+    pub kind: Option<ValueType>,
+    /// How many values a `composite` payload carries, or `None` for a list.
+    pub arity: Option<usize>,
+    /// The declared kind of each composite element, when homogeneous.
+    pub element: Option<ValueType>,
+    /// The side-effect class the contract declares.
+    pub effect: String,
+}
+
+impl CommandSchema {
+    /// The command in one line.
+    pub fn render(&self) -> String {
+        let mut line = format!("{}: {}", self.name, self.signature);
+        if !self.parameter.is_empty() {
+            line.push_str(&format!(" {}", self.parameter));
+            if let Some(kind) = &self.kind {
+                line.push_str(&format!(": {}", kind.name()));
+            }
+        }
+        if let Some(arity) = self.arity {
+            line.push_str(&format!(" x{arity}"));
+        }
+        if let Some(element) = &self.element {
+            line.push_str(&format!(" of {}", element.name()));
+        }
+        if !self.effect.is_empty() {
+            line.push_str(&format!(" ({})", self.effect));
+        }
+        line
     }
 }
 
@@ -267,13 +364,28 @@ pub struct WidgetDescriptor {
     pub properties: Vec<PropertySchema>,
     /// The events it publishes.
     pub events: Vec<EventSchema>,
+    /// The commands (methods) it accepts.
+    pub commands: Vec<CommandSchema>,
+    /// The canonical names it accepts as children, or [`ANY_CHILD`] for any constructible child.
+    ///
+    /// Empty for a leaf. The distinction between "no children" and "any child" is the wildcard,
+    /// not an empty list.
+    pub children: Vec<String>,
     /// Every other name the factory accepts for this control.
     pub aliases: Vec<String>,
+    /// The canonical control this name is a second spelling of, empty for a canonical row.
+    pub alias_of: String,
     /// Whether the target can place it.
     pub support: Support,
     /// What the contract cannot express, with a note.
     pub limits: Vec<String>,
 }
+
+/// The manifest's "any constructible child" token (upstream `ANY_CHILD_WILDCARD`).
+///
+/// Spelled here rather than imported so the catalog's own type is not silently tied to an internal
+/// constant; a test pins it against the library's exported value.
+pub const ANY_CHILD: &str = "*";
 
 impl WidgetDescriptor {
     /// A supported control.
@@ -288,7 +400,10 @@ impl WidgetDescriptor {
             category: category.into(),
             properties: Vec::new(),
             events: Vec::new(),
+            commands: Vec::new(),
+            children: Vec::new(),
             aliases: Vec::new(),
+            alias_of: String::new(),
             support: Support::Supported,
             limits: Vec::new(),
         }
@@ -314,21 +429,60 @@ impl WidgetDescriptor {
         self
     }
 
+    /// The same descriptor with a command.
+    pub fn with_command(mut self, command: CommandSchema) -> Self {
+        self.commands.push(command);
+        self
+    }
+
+    /// The same descriptor with a child kind.
+    pub fn with_child(mut self, child: impl Into<String>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+
+    /// The same descriptor marked as a second spelling of `canonical`.
+    pub fn with_alias_of(mut self, canonical: impl Into<String>) -> Self {
+        self.alias_of = canonical.into();
+        self
+    }
+
     /// The same descriptor with a limit note.
     pub fn with_limit(mut self, note: impl Into<String>) -> Self {
         self.limits.push(note.into());
         self
     }
 
+    /// Whether the contract lets this control hold `child`.
+    ///
+    /// A leaf answers `false`; a container that accepts any constructible child answers `true` for
+    /// every name; a constrained container answers only for a listed name. This is the rule the
+    /// palette needs for a drop target, read from the contract rather than guessed from a name.
+    pub fn accepts_child(&self, child: &str) -> bool {
+        self.children
+            .iter()
+            .any(|allowed| allowed == ANY_CHILD || allowed == child)
+    }
+
+    /// Whether the contract declares this control as a container.
+    pub fn is_container(&self) -> bool {
+        !self.children.is_empty()
+    }
+
     /// The descriptor in one line.
     pub fn render(&self) -> String {
         let mut line = format!(
-            "{} [{}] — properties: {}, events: {}",
+            "{} [{}] — properties: {}, events: {}, commands: {}, children: {}",
             self.name,
             self.category,
             self.properties.len(),
-            self.events.len()
+            self.events.len(),
+            self.commands.len(),
+            self.children.len()
         );
+        if !self.alias_of.is_empty() {
+            line.push_str(&format!(" — alias of {}", self.alias_of));
+        }
         match &self.support {
             Support::Supported => {}
             Support::CrossProfile { reason } => line.push_str(&format!(" — caveat: {reason}")),
@@ -655,6 +809,164 @@ impl Catalog {
         self.get(id).map(|descriptor| descriptor.events.as_slice())
     }
 
+    /// A kind's command schema.
+    pub fn commands(&self, id: &str) -> Option<&[CommandSchema]> {
+        self.get(id)
+            .map(|descriptor| descriptor.commands.as_slice())
+    }
+
+    /// The canonical names a kind accepts as children, or `["*"]` for any constructible child.
+    pub fn children(&self, id: &str) -> Option<&[String]> {
+        self.get(id)
+            .map(|descriptor| descriptor.children.as_slice())
+    }
+
+    /// What the captured descriptors do and do not carry.
+    ///
+    /// This is the completeness check a palette needs before it claims a control is fully
+    /// described: a row with no properties, events or commands is listed rather than silently
+    /// rendered as an empty tile, and a container states its child rule. It makes no judgement —
+    /// a label legitimately publishes no command — it only measures what the contract answered.
+    pub fn audit(&self) -> Vec<String> {
+        let mut lines = vec![format!("audit: {} kind(s)", self.descriptors.len())];
+
+        let unread: Vec<&str> = self
+            .descriptors
+            .iter()
+            .filter(|descriptor| {
+                descriptor
+                    .limits
+                    .iter()
+                    .any(|limit| limit.contains("manifest could not be read"))
+            })
+            .map(|descriptor| descriptor.id.as_str())
+            .collect();
+        lines.push(format!(
+            "manifests: {} read, {} unread{}",
+            self.descriptors.len() - unread.len(),
+            unread.len(),
+            if unread.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", unread.join(", "))
+            }
+        ));
+
+        for (label, count) in [
+            (
+                "properties",
+                self.descriptors
+                    .iter()
+                    .filter(|descriptor| !descriptor.properties.is_empty())
+                    .count(),
+            ),
+            (
+                "events",
+                self.descriptors
+                    .iter()
+                    .filter(|descriptor| !descriptor.events.is_empty())
+                    .count(),
+            ),
+            (
+                "commands",
+                self.descriptors
+                    .iter()
+                    .filter(|descriptor| !descriptor.commands.is_empty())
+                    .count(),
+            ),
+            (
+                "containers",
+                self.descriptors
+                    .iter()
+                    .filter(|descriptor| descriptor.is_container())
+                    .count(),
+            ),
+            (
+                "alias rows",
+                self.descriptors
+                    .iter()
+                    .filter(|descriptor| !descriptor.alias_of.is_empty())
+                    .count(),
+            ),
+        ] {
+            lines.push(format!("{label}: {count}"));
+        }
+
+        for descriptor in &self.descriptors {
+            if !descriptor.alias_of.is_empty() {
+                lines.push(format!(
+                    "  {}: alias of {}",
+                    descriptor.id, descriptor.alias_of
+                ));
+            }
+            if descriptor.is_container() {
+                let rule = if descriptor.children.iter().any(|child| child == ANY_CHILD) {
+                    "any constructible child"
+                } else {
+                    "listed children"
+                };
+                lines.push(format!(
+                    "  {}: {rule} ({})",
+                    descriptor.id,
+                    descriptor.children.join(", ")
+                ));
+                continue;
+            }
+            if descriptor.properties.is_empty() {
+                lines.push(format!("  {}: no declared property", descriptor.id));
+            }
+            if descriptor.events.is_empty() {
+                lines.push(format!("  {}: no declared event", descriptor.id));
+            }
+            if descriptor.commands.is_empty() {
+                lines.push(format!("  {}: no declared command", descriptor.id));
+            }
+        }
+        lines
+    }
+
+    /// The audit failures that make the catalog unusable.
+    ///
+    /// The baseline is deliberately narrow: a control with no events or no commands is not a
+    /// failure (a presentation-only control is legitimate), but a manifest that could not be read,
+    /// a child kind the catalog does not contain, or an alias target it does not contain are facts
+    /// that make the table lie. Those are the only problems this gate reports.
+    pub fn audit_problems(&self) -> Vec<String> {
+        let known: BTreeSet<&str> = self
+            .descriptors
+            .iter()
+            .map(|descriptor| descriptor.id.as_str())
+            .collect();
+        let mut problems = Vec::new();
+        for descriptor in &self.descriptors {
+            if descriptor
+                .limits
+                .iter()
+                .any(|limit| limit.contains("manifest could not be read"))
+            {
+                problems.push(format!(
+                    "{}: the designer manifest could not be read",
+                    descriptor.id
+                ));
+            }
+            for child in &descriptor.children {
+                if child != ANY_CHILD && !known.contains(child.as_str()) {
+                    problems.push(format!(
+                        "{}: child kind {child:?} is not in the catalog",
+                        descriptor.id
+                    ));
+                }
+            }
+            if !descriptor.alias_of.is_empty() && !known.contains(descriptor.alias_of.as_str()) {
+                problems.push(format!(
+                    "{}: alias target {:?} is not in the catalog",
+                    descriptor.id, descriptor.alias_of
+                ));
+            }
+        }
+        problems
+    }
+
     /// The catalog in one report.
     pub fn render(&self) -> Vec<String> {
         let mut lines = Vec::new();
@@ -698,44 +1010,72 @@ fn descriptor_from_contract(
     manifest: Result<DesignerManifest, ManifestExportError>,
 ) -> WidgetDescriptor {
     let capability = factory.capability(name);
-    // The contract publishes no designer category. Its own kind spelling is the one grouping the
-    // contract does declare; an unregistered name has none, and an empty category says so.
-    let category = capability
+    // Protocol 5 publishes the designer-palette category; a manifest that predates it leaves the
+    // field empty, and the contract's kind spelling is the one grouping it does declare. An
+    // unregistered name has neither, and an empty category says so.
+    let kind_category = capability
         .map(|capability| capability.kind.css_name().to_owned())
         .unwrap_or_default();
 
     let mut limits = Vec::new();
-    let (properties, events, aliases) = match manifest {
-        Ok(manifest) => (
-            manifest
-                .properties
-                .iter()
-                .map(property_from_designer)
-                .collect(),
-            manifest.events.iter().map(event_from_designer).collect(),
-            manifest.aliases.clone(),
-        ),
+    let (category, properties, events, commands, children, aliases, alias_of) = match manifest {
+        Ok(manifest) => {
+            let category = if manifest.category.is_empty() {
+                kind_category
+            } else {
+                manifest.category.clone()
+            };
+            (
+                category,
+                manifest
+                    .properties
+                    .iter()
+                    .map(property_from_designer)
+                    .collect(),
+                manifest.events.iter().map(event_from_designer).collect(),
+                manifest
+                    .commands
+                    .iter()
+                    .map(command_from_designer)
+                    .collect(),
+                manifest.children.clone(),
+                manifest.aliases.clone(),
+                manifest.alias_of.clone(),
+            )
+        }
         Err(reason) => {
             // The manifest is the only source that carries defaults; falling back keeps the
             // declared properties and events visible while the note records what is missing.
             limits.push(format!(
-                "the designer manifest could not be read ({reason}); properties and events are the capability schema, so no defaults are shown"
+                "the designer manifest could not be read ({reason}); properties and events are the capability schema, so no defaults, commands or child kinds are shown"
             ));
             match capability {
                 Some(capability) => (
+                    kind_category,
                     capability
                         .properties
                         .iter()
                         .map(property_from_schema)
                         .collect(),
                     capability.events.iter().map(event_from_schema).collect(),
+                    Vec::new(),
+                    Vec::new(),
                     capability
                         .aliases
                         .iter()
                         .map(|alias| (*alias).to_owned())
                         .collect(),
+                    String::new(),
                 ),
-                None => (Vec::new(), Vec::new(), Vec::new()),
+                None => (
+                    kind_category,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    String::new(),
+                ),
             }
         }
     };
@@ -752,7 +1092,10 @@ fn descriptor_from_contract(
         category,
         properties,
         events,
+        commands,
+        children,
         aliases,
+        alias_of,
         support,
         limits,
     }
@@ -764,6 +1107,10 @@ fn property_from_designer(property: &DesignerProperty) -> PropertySchema {
         name: property.name.clone(),
         value_type: value_type(property.kind, &property.tokens),
         default: render_default(&property.default_value),
+        readable: property.readable,
+        writable: property.writable,
+        tokens: property.tokens.clone(),
+        constraints: property.constraints.iter().map(render_constraint).collect(),
     }
 }
 
@@ -778,6 +1125,68 @@ fn property_from_schema(schema: &ContractPropertySchema) -> PropertySchema {
         name: schema.name.to_owned(),
         value_type: value_type(schema.value_kind, &tokens),
         default: None,
+        readable: schema.readable,
+        writable: schema.writable,
+        tokens,
+        constraints: schema
+            .constraints
+            .iter()
+            .map(|constraint| constraint_token(*constraint))
+            .collect(),
+    }
+}
+
+/// One command from the designer manifest.
+fn command_from_designer(command: &DesignerCommand) -> CommandSchema {
+    CommandSchema {
+        name: command.name.clone(),
+        signature: command.signature.to_owned(),
+        parameter: command.parameter.clone(),
+        kind: command.kind.map(|kind| value_type(kind, &[])),
+        arity: command.arity,
+        element: command.element.map(|kind| value_type(kind, &[])),
+        effect: command.effect.to_owned(),
+    }
+}
+
+/// One runtime constraint in the manifest's display spelling.
+fn render_constraint(constraint: &DesignerConstraint) -> String {
+    match constraint.kind {
+        "range" => {
+            let minimum = constraint
+                .minimum
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-inf".to_owned());
+            let maximum = constraint
+                .maximum
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "inf".to_owned());
+            match constraint.step {
+                Some(step) => format!("range {minimum}..={maximum} step {step}"),
+                None => format!("range {minimum}..={maximum}"),
+            }
+        }
+        "precision" => constraint
+            .places
+            .map(|places| format!("precision {places}"))
+            .unwrap_or_else(|| "precision".to_owned()),
+        "required" => "required".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// A runtime constraint's display spelling, from the capability schema.
+fn constraint_token(constraint: rust_widgets::widget::capability::Constraint) -> String {
+    use rust_widgets::widget::capability::Constraint;
+    match constraint {
+        Constraint::Range(range) => match range.step {
+            Some(step) => format!("range {}..={} step {step}", range.minimum, range.maximum),
+            None => format!("range {}..={}", range.minimum, range.maximum),
+        },
+        Constraint::Precision { places } => places
+            .map(|places| format!("precision {places}"))
+            .unwrap_or_else(|| "precision".to_owned()),
+        Constraint::Required => "required".to_owned(),
     }
 }
 
@@ -863,8 +1272,8 @@ fn render_default(value: &CapabilityValue) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CATALOG_CAPTURE_VERSION, Catalog, ContractError, PropertySchema, Support, ValueType,
-        WidgetDescriptor,
+        ANY_CHILD, CATALOG_CAPTURE_VERSION, Catalog, CommandSchema, ContractError, PropertySchema,
+        Support, ValueType, WidgetDescriptor,
     };
     use rust_widgets::widget::WidgetFactory;
 
@@ -872,10 +1281,26 @@ mod tests {
         Catalog::of(vec![
             WidgetDescriptor::new("button", "Button", "controls")
                 .with_property(PropertySchema::new("label", ValueType::Text).with_default("Button"))
-                .with_property(PropertySchema::new(
-                    "variant",
-                    ValueType::Enum(vec!["primary".to_owned(), "ghost".to_owned()]),
-                )),
+                .with_property(
+                    PropertySchema::new(
+                        "variant",
+                        ValueType::Enum(vec!["primary".to_owned(), "ghost".to_owned()]),
+                    )
+                    .with_access(true, false)
+                    .with_tokens(vec!["primary".to_owned(), "ghost".to_owned()])
+                    .with_constraint("required"),
+                )
+                .with_command(CommandSchema {
+                    name: "click".to_owned(),
+                    signature: "none".to_owned(),
+                    parameter: String::new(),
+                    kind: None,
+                    arity: None,
+                    element: None,
+                    effect: "mutates-control".to_owned(),
+                })
+                .with_child(ANY_CHILD)
+                .with_alias_of("control"),
             WidgetDescriptor::new("image", "Image", "media")
                 .with_property(PropertySchema::new(
                     "source",
@@ -970,6 +1395,148 @@ mod tests {
     }
 
     #[test]
+    fn every_descriptor_is_the_manifests_own_properties_events_commands_and_children() {
+        // The catalog is a view of the contract, not a second table: every column must equal the
+        // manifest's own answer for the same control. This is the host-side mirror of the
+        // single-creation/uniform-property principle (blue22 H-33).
+        let factory = crate::app::contract::factory();
+        let catalog = contract("desktop");
+        for descriptor in catalog.descriptors() {
+            let manifest =
+                rust_widgets::widget::capability::designer_manifest(factory, &descriptor.id)
+                    .expect("a registered desktop control has a manifest");
+
+            let properties: Vec<&str> = descriptor
+                .properties
+                .iter()
+                .map(|property| property.name.as_str())
+                .collect();
+            let expected: Vec<&str> = manifest
+                .properties
+                .iter()
+                .map(|property| property.name.as_str())
+                .collect();
+            assert_eq!(properties, expected, "{} properties", descriptor.id);
+
+            let events: Vec<&str> = descriptor
+                .events
+                .iter()
+                .map(|event| event.name.as_str())
+                .collect();
+            let expected: Vec<&str> = manifest
+                .events
+                .iter()
+                .map(|event| event.name.as_str())
+                .collect();
+            assert_eq!(events, expected, "{} events", descriptor.id);
+
+            let commands: Vec<&str> = descriptor
+                .commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect();
+            let expected: Vec<&str> = manifest
+                .commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect();
+            assert_eq!(commands, expected, "{} commands", descriptor.id);
+
+            assert_eq!(
+                descriptor.children, manifest.children,
+                "{} children",
+                descriptor.id
+            );
+            assert_eq!(
+                descriptor.alias_of, manifest.alias_of,
+                "{} alias_of",
+                descriptor.id
+            );
+            for (actual, expected) in descriptor.properties.iter().zip(&manifest.properties) {
+                assert_eq!(actual.readable, expected.readable, "{}", descriptor.id);
+                assert_eq!(actual.writable, expected.writable, "{}", descriptor.id);
+                assert_eq!(actual.tokens, expected.tokens, "{}", descriptor.id);
+                assert_eq!(
+                    actual.constraints.len(),
+                    expected.constraints.len(),
+                    "{} constraints",
+                    descriptor.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_catalog_kind_is_built_by_the_one_factory() {
+        let factory = crate::app::contract::factory();
+        let constructible: std::collections::BTreeSet<String> = factory
+            .constructible_names()
+            .into_iter()
+            .map(|name| name.to_string())
+            .collect();
+        for descriptor in contract("desktop").descriptors() {
+            assert!(
+                constructible.contains(&descriptor.id)
+                    || matches!(descriptor.support, Support::Unsupported { .. }),
+                "{} is neither constructible nor reported unsupported",
+                descriptor.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_audit_gate_fails_only_on_facts_that_make_the_table_lie() {
+        let clean = contract("desktop");
+        assert!(
+            clean.audit_problems().is_empty(),
+            "{:?}",
+            clean.audit_problems()
+        );
+
+        let broken = Catalog::of(vec![
+            WidgetDescriptor::new("panel", "Panel", "container")
+                .with_child("invented")
+                .with_alias_of("missing"),
+        ]);
+        let problems = broken.audit_problems();
+        assert!(
+            problems.iter().any(|problem| problem.contains("invented")),
+            "{problems:?}"
+        );
+        assert!(
+            problems.iter().any(|problem| problem.contains("missing")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn the_audit_reports_the_capabilities_the_manifest_answered() {
+        let catalog = contract("desktop");
+        let audit = catalog.audit().join("\n");
+        assert!(audit.contains("manifests: "), "{audit}");
+        assert!(audit.contains("commands: "), "{audit}");
+        assert!(audit.contains("containers: "), "{audit}");
+        assert!(
+            audit.contains("panel: any constructible child (*)"),
+            "{audit}"
+        );
+        assert!(
+            !audit.contains("unread:"),
+            "every desktop manifest in this build is readable: {audit}"
+        );
+    }
+
+    #[test]
+    fn the_any_child_token_is_the_librarys_own() {
+        // The catalog spells the wildcard itself so its public constant is stable, but it must not
+        // drift from the manifest token the contract writes.
+        assert_eq!(
+            ANY_CHILD,
+            rust_widgets::widget::capability::ANY_CHILD_WILDCARD
+        );
+    }
+
+    #[test]
     fn a_support_reason_is_queryable_from_the_type() {
         let support = Support::Unsupported {
             reason: "not here".to_owned(),
@@ -1001,8 +1568,65 @@ mod tests {
         );
         // The alias list is the contract's, not a guess.
         assert!(button.aliases.iter().any(|alias| alias == "btn"));
+        // Protocol 5 publishes the designer category, so the palette no longer guesses it from
+        // the kind's spelling.
+        assert_eq!(button.category, "basic");
+        // Commands are methods the contract publishes; a descriptor without them shows a control
+        // with only half its surface.
+        assert!(
+            button
+                .commands
+                .iter()
+                .any(|command| command.name == "set_text"),
+            "button publishes `set_text`: {:?}",
+            button.commands
+        );
+        // A button is a leaf; a panel is a container that accepts any constructible child.
+        assert!(!button.is_container());
+        assert!(!button.accepts_child("label"));
+        let panel = catalog.get("panel").expect("the contract names panel");
+        assert!(panel.is_container());
+        assert!(panel.accepts_child("label"));
+        assert!(
+            catalog
+                .children("panel")
+                .is_some_and(|children| !children.is_empty())
+        );
+        // Access flags and constraints come from the contract, not from this file.
+        let geometry = button
+            .properties
+            .iter()
+            .find(|property| property.name == "geometry")
+            .expect("button publishes geometry");
+        assert!(
+            !geometry.readable && !geometry.writable,
+            "geometry is not readable or writable (readable={}, writable={})",
+            geometry.readable,
+            geometry.writable
+        );
+        let progress = catalog
+            .get("progress_circle")
+            .expect("the contract names progress_circle");
+        let value = progress
+            .properties
+            .iter()
+            .find(|property| property.name == "value")
+            .expect("progress_circle publishes value");
+        assert!(
+            value
+                .constraints
+                .iter()
+                .any(|constraint| constraint.starts_with("range ")),
+            "progress_circle value declares its range: {:?}",
+            value.constraints
+        );
         // The aggregate accessors answer the same facts as the descriptor.
         assert!(catalog.schema("button").is_some());
+        assert!(
+            catalog
+                .commands("button")
+                .is_some_and(|commands| !commands.is_empty())
+        );
         assert!(
             catalog
                 .events("button")

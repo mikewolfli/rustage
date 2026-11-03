@@ -27,7 +27,9 @@
 
 #![allow(dead_code)]
 
+use crate::app::language::protocol::{Position, to_offset};
 use crate::app::language::session::{Capabilities, Capability};
+use crate::project::record::json::Json;
 
 /// A byte range in a document.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -175,6 +177,30 @@ impl SymbolKind {
     /// The kind a name picks.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|kind| kind.name() == name)
+    }
+
+    /// The kind an LSP `SymbolKind` number names.
+    ///
+    /// The protocol has twenty-six kinds and this model has seven, so the mapping collapses the
+    /// ones that mean the same thing to a reader of an outline (a class, an enum, a struct and an
+    /// interface are all [`Self::Type`]) and keeps the rest from being dropped: a number this model
+    /// has no closer word for is a [`Self::Variable`], not an error.
+    pub fn from_lsp(number: u64) -> Self {
+        match number {
+            // File, module, namespace, package.
+            1..=4 => Self::Module,
+            // Class, enum, interface, struct, type parameter.
+            5 | 10 | 11 | 23 | 26 => Self::Type,
+            // Constructor, function.
+            9 | 12 => Self::Function,
+            // Method.
+            6 => Self::Method,
+            // Property, field, event.
+            7 | 8 | 24 => Self::Field,
+            // Enum member, constant.
+            14 | 22 => Self::Constant,
+            _ => Self::Variable,
+        }
     }
 }
 
@@ -409,6 +435,77 @@ impl Navigation {
     }
 }
 
+/// The symbols an LSP `textDocument/documentSymbol` result reports, with byte spans.
+///
+/// Both shapes the protocol allows are accepted: `DocumentSymbol` (which carries `range`,
+/// `selectionRange` and nested `children`) and `SymbolInformation` (whose range lives under
+/// `location` and which is flat). Positions are UTF-16 pairs, so they are converted against `text`
+/// — the same buffer the request was made for — and a symbol the conversion cannot place is dropped
+/// rather than guessed at.
+///
+/// The name span is the jump target: `selectionRange` when the server sent one, else the whole
+/// range, which is the closest thing `SymbolInformation` can say.
+pub fn symbols_from_lsp(uri: &str, text: &str, result: &Json) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    if let Some(items) = result.as_array() {
+        for item in items {
+            collect_symbol(uri, text, item, &mut out);
+        }
+    }
+    out.sort_by_key(|symbol| (symbol.span.start, symbol.span.end));
+    out
+}
+
+/// One `DocumentSymbol`/`SymbolInformation` object, and its `children` when it has any.
+fn collect_symbol(uri: &str, text: &str, item: &Json, out: &mut Vec<Symbol>) {
+    let Some(object) = item.as_object() else {
+        return;
+    };
+    let Some(name) = object.get("name").and_then(Json::as_str) else {
+        return;
+    };
+    if name.is_empty() {
+        return;
+    }
+    let location = object.get("location").and_then(Json::as_object);
+    let span = range_span(location.and_then(|location| location.get("range")), text)
+        .or_else(|| range_span(object.get("range"), text));
+    let Some(span) = span else {
+        return;
+    };
+    let name_span = range_span(object.get("selectionRange"), text).unwrap_or(span);
+    let kind = object
+        .get("kind")
+        .and_then(Json::as_u64)
+        .map(SymbolKind::from_lsp)
+        .unwrap_or(SymbolKind::Variable);
+    out.push(Symbol::new(uri, name, kind, span, name_span));
+    if let Some(children) = object.get("children").and_then(Json::as_array) {
+        for child in children {
+            collect_symbol(uri, text, child, out);
+        }
+    }
+}
+
+/// The byte span an LSP `Range` names, when both of its positions exist in `text`.
+fn range_span(range: Option<&Json>, text: &str) -> Option<Span> {
+    let range = range.and_then(Json::as_object)?;
+    let start = position_offset(range.get("start"), text)?;
+    let end = position_offset(range.get("end"), text)?;
+    Some(Span::new(start, end))
+}
+
+/// The byte offset an LSP `Position` names.
+fn position_offset(position: Option<&Json>, text: &str) -> Option<usize> {
+    let position = position.and_then(Json::as_object)?;
+    let line = position.get("line").and_then(Json::as_u64)? as u32;
+    let character = position
+        .get("character")
+        .and_then(Json::as_u64)
+        .unwrap_or(0) as u32;
+    to_offset(text, Position::new(line, character))
+}
+
 /// Builds the outline tree from spans: a symbol strictly inside another is its child.
 fn build_outline(symbols: &[Symbol]) -> Vec<OutlineNode> {
     let mut roots = Vec::new();
@@ -605,5 +702,89 @@ mod tests {
         for kind in SymbolKind::ALL {
             assert_eq!(SymbolKind::from_name(kind.name()), Some(kind));
         }
+    }
+
+    #[test]
+    fn an_lsp_document_symbol_tree_becomes_symbols_with_byte_spans() {
+        use crate::project::record::json::parse;
+
+        // Two lines of Chinese shift every offset by three bytes per character: the conversion
+        // has to count UTF-16 units, not bytes, or "main" lands in the comment.
+        let text = "// 中文注释\nfn main() {\n    let run = 1;\n}\nconst LIMIT: u32 = 1;\n";
+        let result = parse(
+            r#"[
+                {"name": "main", "kind": 12,
+                 "range": {"start": {"line": 1, "character": 0},
+                           "end": {"line": 3, "character": 1}},
+                 "selectionRange": {"start": {"line": 1, "character": 3},
+                                    "end": {"line": 1, "character": 7}},
+                 "children": [
+                   {"name": "run", "kind": 6,
+                    "range": {"start": {"line": 2, "character": 4},
+                              "end": {"line": 2, "character": 17}},
+                    "selectionRange": {"start": {"line": 2, "character": 8},
+                                       "end": {"line": 2, "character": 11}}}
+                 ]},
+                {"name": "LIMIT", "kind": 14,
+                 "location": {"uri": "file:///a.rs",
+                              "range": {"start": {"line": 4, "character": 6},
+                                        "end": {"line": 4, "character": 11}}}}
+            ]"#,
+        )
+        .expect("valid JSON");
+
+        let symbols = super::symbols_from_lsp("file:///a.rs", text, &result);
+        let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+        assert_eq!(names, vec!["main", "run", "LIMIT"]);
+        assert_eq!(symbols[0].kind, SymbolKind::Function);
+        assert_eq!(symbols[1].kind, SymbolKind::Method);
+        assert_eq!(symbols[2].kind, SymbolKind::Constant);
+        // The name span is `main`, not the whole declaration.
+        assert_eq!(
+            &text[symbols[0].name_span.start..symbols[0].name_span.end],
+            "main"
+        );
+        assert_eq!(
+            &text[symbols[1].name_span.start..symbols[1].name_span.end],
+            "run"
+        );
+        // A `SymbolInformation` has no selection range, so its whole range is the jump target.
+        assert_eq!(symbols[2].name_span, symbols[2].span);
+
+        let mut nav = Navigation::new(Capabilities::of([Capability::Symbols]));
+        for symbol in symbols {
+            nav.add(symbol);
+        }
+        let outline = nav.outline("file:///a.rs");
+        assert_eq!(outline.len(), 2);
+        assert_eq!(outline[0].name, "main");
+        assert_eq!(outline[0].children.len(), 1);
+        assert_eq!(outline[0].children[0].name, "run");
+    }
+
+    #[test]
+    fn an_lsp_symbol_whose_range_is_off_the_document_is_dropped() {
+        use crate::project::record::json::parse;
+
+        let text = "fn main() {}\n";
+        let result = parse(
+            r#"[{"name": "ghost", "kind": 12,
+                 "range": {"start": {"line": 7, "character": 0},
+                           "end": {"line": 8, "character": 0}},
+                 "selectionRange": {"start": {"line": 7, "character": 0},
+                                    "end": {"line": 7, "character": 5}}}]"#,
+        )
+        .expect("valid JSON");
+        assert!(super::symbols_from_lsp("file:///a.rs", text, &result).is_empty());
+    }
+
+    #[test]
+    fn the_protocol_symbol_kinds_collapse_onto_the_models() {
+        assert_eq!(SymbolKind::from_lsp(12), SymbolKind::Function);
+        assert_eq!(SymbolKind::from_lsp(6), SymbolKind::Method);
+        assert_eq!(SymbolKind::from_lsp(23), SymbolKind::Type);
+        assert_eq!(SymbolKind::from_lsp(8), SymbolKind::Field);
+        assert_eq!(SymbolKind::from_lsp(14), SymbolKind::Constant);
+        assert_eq!(SymbolKind::from_lsp(13), SymbolKind::Variable);
     }
 }

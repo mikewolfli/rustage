@@ -38,8 +38,8 @@
     {
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
-      "designerHost": "unverified",
-      "reason": "4.0.0（1a30785）未在 Linux 复跑；3.2.1 上 cargo test probe:: 19/19 的证据见 docs/rw-feedback/feedback-20261101.md 决策记录，按矩阵规则 2/4 不作为 4.0.0 证据；产品 GUI 运行需 linux-native（GTK），本轮未运行"
+      "designerHost": "certified",
+      "reason": "4.0.0（1a30785）在 Linux x86_64（GTK3 3.24.41）上 cargo build --features linux-native --bin rustage 通过，并以 cargo run --features linux-native -- --workbench-gui --exit-after-ms 3000 建立真实 1280x800 窗口会话（docs/log/log-20261103-1.md），故恢复 certified"
     }
   ],
   "profiles": [
@@ -49,7 +49,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）的 desktop 为宿主默认依赖 features：macOS aarch64 上 cargo check/test 多域通过并完成 GUI 有界会话（docs/log/log-20261103-1.md）；Linux 4.0.0 未复跑，故不写成 certified"
+      "mode2Reason": "4.0.0（1a30785）的 desktop 为宿主默认依赖 features：macOS aarch64 上 cargo check/test 多域通过并完成 GUI 有界会话；Linux x86_64 上上游 --features desktop --lib 构建通过，宿主以 linux-native 完成 GUI 有界会话（docs/log/log-20261103-1.md）；生成物本身未链接，故不写成 certified"
     },
     {
       "id": "tablet",
@@ -57,7 +57,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "id": "mobile",
@@ -65,7 +65,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "id": "mini",
@@ -73,7 +73,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "id": "embedded",
@@ -81,7 +81,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
     }
   ],
   "cells": [
@@ -148,32 +148,32 @@
     {
       "host": "linux",
       "profile": "desktop",
-      "status": "unverified",
-      "reason": "4.0.0（1a30785）未在 Linux 复跑；3.2.1 的 probe 证据（docs/rw-feedback/feedback-20261101.md 决策记录）不作为 4.0.0 证据；GUI 需 linux-native（GTK），未运行"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --features desktop --lib 构建通过，宿主以 linux-native（GTK3）完成 GUI 有界会话；生成物本身未链接，保持 build-verified（docs/log/log-20261103-1.md）"
     },
     {
       "host": "linux",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": "3.1.0 未在 Linux 复跑；3.2.1 亦未复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为新修订证据"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "linux",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": "3.1.0 未在 Linux 复跑；3.2.1 亦未复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为新修订证据"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "linux",
       "profile": "mini",
-      "status": "unverified",
-      "reason": "3.1.0 未在 Linux 复跑；3.2.1 亦未复跑；2.8.11 的构建证据见 docs/log/log-20261020-3.md，不作为新修订证据"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
     },
     {
       "host": "linux",
       "profile": "embedded",
-      "status": "unverified",
-      "reason": "3.1.0 未在 Linux 复跑；3.2.1 亦未复跑；2.8.11 的 embedded 构建失败与 2.8.12 的修复证据见 docs/log/log-20261020-4.md，不作为新修订证据"
+      "status": "build-verified",
+      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
     }
   ]
 }

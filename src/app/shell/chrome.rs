@@ -41,10 +41,8 @@ use crate::host::notify::{Counts, Severity};
 pub fn toolbar_for(area: &str) -> Vec<String> {
     match area {
         "welcome" => Vec::new(),
-        "debug" => vec!["build.run".to_owned(), "file.save".to_owned()],
+        "debug" => vec!["build.run".to_owned(), "edit.undo".to_owned()],
         "code" | "editor" => vec![
-            "file.save".to_owned(),
-            "file.save-all".to_owned(),
             "edit.undo".to_owned(),
             "edit.redo".to_owned(),
             "view.palette".to_owned(),
@@ -490,7 +488,7 @@ mod tests {
         let mut editor = Chrome::new();
         editor.set_focus(Target::Editor);
         let entries = editor.toolbar(&registry, &context);
-        assert!(entries.iter().any(|entry| entry.id() == "file.save-all"));
+        assert!(entries.iter().any(|entry| entry.id() == "edit.redo"));
         assert_eq!(toolbar_for("editor"), toolbar_for("code"));
 
         // A command whose effect is not authorized keeps its reason, exactly as the menu would.
@@ -592,7 +590,7 @@ mod tests {
         let mut chrome = Chrome::new();
         chrome.set_focus(Target::Canvas);
         let entries = chrome.toolbar(&registry, &context);
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 3);
 
         // Wide enough for every button.
         let (shown, overflowed) = fit_toolbar(&entries, 1000);
@@ -602,7 +600,7 @@ mod tests {
         // A narrow window shows what fits and overflows the rest; nothing is lost.
         let (shown, overflowed) = fit_toolbar(&entries, 200);
         assert_eq!(shown.len(), 2);
-        assert_eq!(overflowed.len(), 3);
+        assert_eq!(overflowed.len(), 1);
         assert_eq!(shown.len() + overflowed.len(), entries.len());
 
         // Too narrow for even one button: all overflow rather than a clipped button.

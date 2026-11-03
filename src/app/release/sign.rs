@@ -35,6 +35,10 @@ use crate::host::subprocess::{OwnedProcess, ProcessSpec};
 /// How long a signing tool may take.
 const SIGN_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a notarisation may take; the service can queue for minutes.
+///
+/// macOS-only because [`notarize`] is the only reader: on another target this constant would be
+/// dead code that looks like a capability the build does not have.
+#[cfg(target_os = "macos")]
 const NOTARIZE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// What signing produced.
@@ -227,6 +231,7 @@ mod tests {
     use super::{digest_of, path_with_suffix, sign};
     use std::path::PathBuf;
 
+    #[cfg(target_os = "macos")]
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "rustage-sign-{}-{}-{name}",

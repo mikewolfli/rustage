@@ -261,7 +261,9 @@ fn digest_of(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Format, deb_architecture, digest_of, package};
+    #[cfg(target_os = "macos")]
+    use super::digest_of;
+    use super::{Format, deb_architecture, package};
     use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {

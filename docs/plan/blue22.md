@@ -8,9 +8,11 @@
 > 状态：全部 `open`，另注明依赖。不修改上游代码；不改宿主既有属性/方法/变量名（原则 #34）。
 >
 > **执行更新（2026-11-03）：** 宿主已升级到 rust-widgets **4.0.0（`1a30785`）**；批次 A 与
-> 批次 B 全部关闭，VCS-1 已修复，M-1/M-2 已补证。M-3 被上游 RW-101
-> （Windows `WA_INACTIVE` 类型不匹配）阻断；其余未完成项见本文 §7。证据：
-> [log-20261103-1.md](../log/log-20261103-1.md)。
+> 批次 B 全部关闭，VCS-1 已修复，M-1/M-2 已补证，M-4（Linux native GTK 构建与 GUI 会话）
+> 已补证，Linux 五个 profile 的 4.0.0 构建证据已建立。M-3 仍被上游 RW-101
+> （Windows `WA_INACTIVE` 类型不匹配，4.0.0 源码未变）阻断；批次 C 的可行性结论见 §7。证据：
+> [log-20261103-1.md](../log/log-20261103-1.md) 与
+> [feedback-20261103.md](../rw-feedback/feedback-20261103.md)。
 
 ## 0. 已关闭（不再计入任务）
 
@@ -59,6 +61,7 @@
 | H-22 | 主题 `Motion` token 编辑接 `bezier_curve_editor` | 缓动曲线可视化编辑 | P2 |
 | H-23 | 主题编辑器暴露 `ControlMetricsProfile`（Material/Macos/Cupertino） | 切换度量档后控件尺寸档变化 | P2 |
 | H-24 | 预览切主题接 crossfade（`set_theme_faded`/`tick_theme_crossfade`） | 主题切换有淡入淡出且尊重 reduced-motion | P3 |
+| H-36 | 预览改用库 JSON 声明：`Preview::mount_json`/`update_json` 走 `json::JsonViewSession`，`--preview mount-page:<page>` / `update-page:<page>` 挂载与 `--generate` 相同的文档 | 页面预览与生成消费同一份声明；键节点跨更新保持控件 id；`dropped` 逐条报告 | P1 |
 | H-5 | 5 处列表面板 clear+全量重插部分退役（限于上游无逐行 set text） | 数量相等时跳过；差异删插；注释如实说明限制 | P2 |
 | H-10 | 消费上游 `unwired_events`，在生成/检查报告中提示未接线信号 | 未接线信号可被设计器呈现（原则 #55） | P2 |
 | H-11 | 消费 `GenerationReport.icon_tokens` | 生成报告展示图标 token | P3 |
@@ -101,9 +104,9 @@
 
 ## 4. 上游请求（RW 系列，blocked upstream）
 
-共 100 条，证据与修法建议全部见 feedback-20261101.md 对应编号（本表只登记标题与宿主阻塞点）。上游未关闭前，相关宿主任务标注 `blocked`，不自行实现替代语义（原则 #25）。
+共 105 条，证据与修法建议全部见 feedback-20261101.md 对应编号（本表只登记标题与宿主阻塞点）。上游未关闭前，相关宿主任务标注 `blocked`，不自行实现替代语义（原则 #25）。
 
-### 4.1 P1（23 条，阻断 roadmap 验收或迫使宿主手写绕行）
+### 4.1 P1（25 条，阻断 roadmap 验收或迫使宿主手写绕行）
 
 | ID | 标题 | 宿主阻塞点 |
 |---|---|---|
@@ -119,8 +122,8 @@
 | RW-29 | 命中测试无节点身份 | 画布选中 |
 | RW-30 | 覆盖层/装饰绘制钩子 | 画布（Y-1 缝） |
 | RW-41 | 父子类型校验契约缺失 | T09.04 子节点约束 |
-| RW-42 | 生成物无逐节点锚点 | T15.03 source-map |
-| RW-43 | JSON loader 未接 ViewEngine（G-406） | 编辑-重载增量 |
+| RW-42 | 生成物无逐节点锚点 | T15.03 source-map —— **4.0.0 已解决（`GenerationReport::node_anchors`），宿主已消费（`panel.outline`），见 log §44/§48** |
+| RW-43 | JSON loader 未接 ViewEngine（G-406） | 编辑-重载增量 —— **4.0.0 已解决（`JsonViewSession`），见 feedback-20261103 §RW-110** |
 | RW-48 | solver 级钳制/溢出遥测缺失 | T10.03 布局诊断 |
 | RW-52 | 窗口激活 API 与窗口焦点触发器缺失 | `window.*` 命令族 |
 | RW-53 | 关闭 veto 缺失 | 未保存修改拦截 |
@@ -130,14 +133,16 @@
 | RW-88 | macOS 像素滚动增量当槽计数 | macOS 画布滚动手感 |
 | RW-89 | Windows/Linux 横向滚轮分量被丢 | 画布/时间线横向平移 |
 | RW-96 | 运行时语言切换无失效机制 | 设计器语言切换 |
+| RW-109 | 声明式文档无每节点 min/max/pref、margin、overflow 字段 | T10.03 约束进入生成、`panel.layout` |
+| RW-111 | 默认产物不带已求解布局坐标，文件头仍声称已求解 | `panel.layout` 的“声明进生成”、默认产物布局 |
 
-### 4.2 P2（39 条）
+### 4.2 P2（40 条）
 
-RW-2（StatusBar/ToolBar 嵌入只收 Box<dyn Widget>）、RW-3（ToolButton 无 tooltip）、RW-6（ColumnSpec 无数据类型）、RW-8（无公开内存表模型）、RW-10（树项无图标）、RW-11（PropertyGrid 无差量行更新）、RW-12（PropertyGrid 无行级错误）、RW-15（CommandPalette 条目无 enabled）、RW-17（集合控件无空态/错误态）、RW-22（书签生命周期）、RW-23（导航栈）、RW-27（类型化校验通道）、RW-31（模型空间网格）、RW-32（标尺与对齐参考线）、RW-34（A11yRole 无 name）、RW-36（IconName 缺 19 个语义名）、RW-38（i18n 无逐语言目录访问）、RW-39（inject_translations 无热重载路径）、RW-44（隐藏 setter 面未收编）、RW-47（layout schema 未接生成器）、RW-49（apply_layout_with_context）、RW-54（窗口位置 get/set）、RW-57（整树断言工具）、RW-58（通用 scroll 原语）、RW-62（条目级 tooltip 永不渲染）、RW-63（handle 平价 Top15）、RW-64（SaveState 未实现清单）、RW-65（a11y 表 132/230 Unknown）、RW-66（信号命名混乱）、RW-68（图表数据不进 data_binding）、RW-69（数据变更不可观测）、RW-70（Heatmap 数据无属性）、RW-71（RadarChart axes/series 无属性）、RW-81（媒体三伴件未注册）、RW-82（VideoPlayer 缺 source 属性）、RW-90（无 debounce/throttle）、RW-91（无 queued connection）、RW-92（Tab 焦点不按窗口限定）、RW-97（无 BCP-47 回退链）。
+RW-2（StatusBar/ToolBar 嵌入只收 Box<dyn Widget>）、RW-3（ToolButton 无 tooltip）、RW-6（ColumnSpec 无数据类型）、RW-8（无公开内存表模型）、RW-10（树项无图标）、RW-11（PropertyGrid 无差量行更新）、RW-12（PropertyGrid 无行级错误）、RW-15（CommandPalette 条目无 enabled）、RW-17（集合控件无空态/错误态）、RW-22（书签生命周期）、RW-23（导航栈）、RW-27（类型化校验通道）、RW-31（模型空间网格）、RW-32（标尺与对齐参考线）、RW-34（A11yRole 无 name）、RW-36（IconName 缺 19 个语义名）、RW-38（i18n 无逐语言目录访问）、RW-39（inject_translations 无热重载路径）、RW-44（隐藏 setter 面未收编）、RW-47（layout schema 未接生成器——**4.0.0 已接通诊断与根容器求解**）、RW-49（apply_layout_with_context）、RW-54（窗口位置 get/set）、RW-57（整树断言工具）、RW-58（通用 scroll 原语）、RW-62（条目级 tooltip 永不渲染）、RW-63（handle 平价 Top15）、RW-64（SaveState 未实现清单）、RW-65（a11y 表 132/230 Unknown）、RW-66（信号命名混乱）、RW-68（图表数据不进 data_binding）、RW-69（数据变更不可观测）、RW-70（Heatmap 数据无属性）、RW-71（RadarChart axes/series 无属性）、RW-81（媒体三伴件未注册）、RW-82（VideoPlayer 缺 source 属性）、RW-90（无 debounce/throttle）、RW-91（无 queued connection）、RW-92（Tab 焦点不按窗口限定）、RW-97（无 BCP-47 回退链）、RW-112（`CodeEditorConfig` 只在构造时可设，运行期无 `set_config`/逐字段 setter；行号/空白/小地图/自动折行无法切换，见 feedback-20261103）。
 
-### 4.3 P3（38 条）
+### 4.3 P3（39 条）
 
-RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14（cell_changed 只带 row/text；Inspector 选型已定，见决策 4）、RW-16（CommandPalette 无动态 provider；过滤归属已定，见决策 4）、RW-18（懒加载失败无消息位/TreeTable、ListView 无编辑）、RW-24（环绕选择/inline diff）、RW-28（无取消信号）、RW-33（光标形状/平移手势）、RW-35（无逐控件 role 覆盖）、RW-37（图标 RTL 镜像）、RW-40（方向映射/复数类别）、RW-45（bindings_of/发射计数）、RW-46（verify_target 无离线通道）、RW-50（Absolute 无 by-id 改位）、RW-51（Grid 无分数单位）、RW-55（IME/Linux text_scale）、RW-59（基准缺口）、RW-60（上游文档漂移）、RW-72（图表动画无进度 setter）、RW-73（BarChart 多序列无增量）、RW-74（LineChart 点级无增量）、RW-75（ChartDataTable/ZoomStrip attach 未上移）、RW-76（Gantt 任务无差量 CRUD）、RW-77（ChartCrosshair 未注册）、RW-78（Volume/Indicator 无流式入口）、RW-79（QuoteBoard 无属性/增量）、RW-80（OrderBook book 无属性）、RW-83（Lottie/AnimatedImage 缺 current_frame）、RW-84（AnimatedImage 无文件加载）、RW-85（Rive 无 progress setter）、RW-86（AudioVisualizer 无样例数据）、RW-87（ChapterListPanel 无差量）、RW-93（FocusPolicy 未接运行时）、RW-94（无信号级整体暂停）、RW-95（手势引擎只吃 Touch）、RW-98（占位符无类型化/本地化格式化）、RW-99（token 编辑不发 on_theme_changed）、RW-100（drum_column/preset_chip_bar/thumbnail_cache 未注册）。
+RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14（cell_changed 只带 row/text；Inspector 选型已定，见决策 4）、RW-16（CommandPalette 无动态 provider；过滤归属已定，见决策 4）、RW-18（懒加载失败无消息位/TreeTable、ListView 无编辑）、RW-24（环绕选择/inline diff）、RW-28（无取消信号）、RW-33（光标形状/平移手势）、RW-35（无逐控件 role 覆盖）、RW-37（图标 RTL 镜像）、RW-40（方向映射/复数类别）、RW-45（bindings_of/发射计数）、RW-46（verify_target 无离线通道）、RW-50（Absolute 无 by-id 改位）、RW-51（Grid 无分数单位）、RW-55（IME/Linux text_scale）、RW-59（基准缺口）、RW-60（上游文档漂移）、RW-72（图表动画无进度 setter）、RW-73（BarChart 多序列无增量）、RW-74（LineChart 点级无增量）、RW-75（ChartDataTable/ZoomStrip attach 未上移）、RW-76（Gantt 任务无差量 CRUD）、RW-77（ChartCrosshair 未注册）、RW-78（Volume/Indicator 无流式入口）、RW-79（QuoteBoard 无属性/增量）、RW-80（OrderBook book 无属性）、RW-83（Lottie/AnimatedImage 缺 current_frame）、RW-84（AnimatedImage 无文件加载）、RW-85（Rive 无 progress setter）、RW-86（AudioVisualizer 无样例数据）、RW-87（ChapterListPanel 无差量）、RW-93（FocusPolicy 未接运行时）、RW-94（无信号级整体暂停）、RW-95（手势引擎只吃 Touch）、RW-98（占位符无类型化/本地化格式化）、RW-99（token 编辑不发 on_theme_changed）、RW-100（drum_column/preset_chip_bar/thumbnail_cache 未注册）、RW-113（跳转栏只有 open/commit，无写入目标行的入口，`nav.open.*` 无法命令化）、RW-114（结构选择只有扩大没有缩小）、RW-115（CodeLens 只能整体替换，无可见性开关）、RW-116（设计器不公开已求解的节点几何，页面无法绑定画布）。
 
 ### 4.4 扩展缝与新 kind（随 RW 一并提给上游）
 
@@ -175,11 +180,16 @@ RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14�
 | 组 | 已关闭 | 未完成 / 依据 |
 |---|---|---|
 | 批次 A | H-1、H-2、H-3、H-4、H-6、H-7、H-8、H-12、H-15、H-16、H-17、H-25；H-13/H-14 复核为已满足 | 无 |
-| 批次 B | H-5、H-10、H-11、H-18、H-19、H-21、H-22、H-23、H-24、H-20 | 无（H-21 前置资产面板、H-22/H-23 前置主题面板已装配） |
+| 批次 B | H-5、H-10、H-11、H-18、H-19、H-21、H-22、H-23、H-24、H-20、H-36 | 无（H-21 前置资产面板、H-22/H-23 前置主题面板已装配） |
+| 批次 C | H-26（`--catalog census`）、H-27（`--catalog svg:<dir>`）、H-30（`--style … resolve`）、H-31（`--catalog icons`）、H-33（目录逐列对齐 manifest + 单一工厂测试）、H-34（`--preview paint:<path>:<w>x<h>` 的 SVG 帧）、H-32/H-35（`--audit` 每平台清点 + `--launch --smoke` 前置检查） | H-28：缺 HarmonyOS SDK/工具链；H-29：文档模型尚无断点字段 |
 | VCS | VCS-1 | 无 |
-| M | M-1（macOS 四 profile）、M-2（GUI 有界会话） | M-3：上游 RW-101 阻断；M-4：本机无 Linux GTK 环境 |
-| RW | 新增 RW-101（4.0.0 Windows 编译回归，P1） | 其余 RW 仍待上游 |
+| M | M-1（macOS 四 profile）、M-2（GUI 有界会话）、M-4（Linux native GTK 构建与 GUI 会话；Linux 五 profile `--lib` 构建） | M-3：上游 RW-101 阻断（4.0.0 `types.rs:540` 未变） |
+| RW | 新增 RW-101（Windows 编译回归，P1）、RW-102（manifest 配套类型未根级重导出，P3）、RW-103（命令枚举参数无 tokens，P2）、RW-104（无事件/无命令控件清单待上游确认，P3）、RW-105（suites 四个控件的 designer manifest 不可导出，P1）、RW-106（新注册控件缺设计期写路径，P2）、RW-107（manifest 不表达伴件与宿主配对，P3）；**复核关闭 RW-42（逐节点锚点）、RW-43（JSON↔ViewEngine）、RW-47（layout 诊断/根容器求解）——4.0.0 已落地，见 feedback-20261103 §RW-108/§RW-110**；新增 RW-108..RW-116（4.0.0 复核、编辑器设置/跳转栏入口、结构选择缩小、CodeLens 可见性与设计器求解几何，见 feedback-20261103）；RW-42 已在宿主侧消费（`panel.outline` 节点关联，log §44） | 其余 RW 仍待上游 |
 
-**矩阵（JSON+MD 同步，校验 PASS：10 `unverified` / 5 `build-verified`）：** macOS 宿主恢复
-`certified`，macos × 五 profile 均 `build-verified`；windows 与 linux 的 4.0.0 证据均未建立，
-维持/降为 `unverified`。
+**4.0.0 suites 分组（2026-11-03）：** 宿主启用 `form`/`webview`/`finance`/`media-playback` 后目录
+242 → **261 kind**（新增 19），`--catalog audit` 为 0 unsupported / 0 caveat。`maps`/`project`/`devtools`
+因 RW-105 暂不启用，原因写在 `Cargo.toml` 注释与 feedback-20261103 §RW-105；修好后可一行开启。
+
+**矩阵（JSON+MD 同步，校验 PASS：5 `unverified` / 10 `build-verified`）：** macOS 与 Linux 宿主
+均为 `certified`，两宿主 × 五 profile 均 `build-verified`；windows × 五 profile 因 RW-101 维持
+`unverified`。Linux 证据为 4.0.0 上五个 `--lib` 构建与 `linux-native`（GTK3）GUI 有界会话。

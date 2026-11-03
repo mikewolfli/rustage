@@ -340,6 +340,45 @@ pub(super) fn save(options: &crate::cli::SaveOptions) -> bool {
         }
     }
 
+    // `--save-page` writes the parsed page model, not typed text. It is the migration/save path a
+    // model edit uses: a version 1 file is written as version 2 and the bytes that were read are
+    // kept beside it.
+    if options.save_page {
+        if documents.len() != 1 {
+            println!(
+                "rustage: --save-page writes one page document; {} files were given",
+                documents.len()
+            );
+            return false;
+        }
+        let page = match crate::project::record::page::PageDocument::read(&root, &documents[0]) {
+            Ok(page) => page,
+            Err(error) => {
+                println!("rustage: {}", error.message());
+                return false;
+            }
+        };
+        return match page.save() {
+            Ok(written) => {
+                println!("wrote {} (page model)", written.target().display());
+                if let Some(backup) = written.backup() {
+                    println!("kept {} as it was read", backup.display());
+                }
+                if let Some(from) = written.migrated_from() {
+                    println!(
+                        "migrated from {from} to {}",
+                        crate::project::record::page::PAGE_FORMAT
+                    );
+                }
+                true
+            }
+            Err(reason) => {
+                println!("rustage: {reason}");
+                false
+            }
+        };
+    }
+
     // A single file goes through a buffer, so the text that is saved is the text somebody typed, not
     // the file re-read. A set is the files as they now stand, and takes no edits — the point of a set
     // is that the commit is one transaction, not that it edits several files at once.

@@ -196,6 +196,8 @@ pub struct SaveOptions {
     pub verb: Verb,
     /// Whether to print the plan and write nothing.
     pub plan_only: bool,
+    /// Write the page *model* back (page format v2) instead of saving typed text.
+    pub save_page: bool,
 }
 
 impl SaveOptions {
@@ -207,6 +209,7 @@ impl SaveOptions {
             root: None,
             verb: Verb::Save,
             plan_only: false,
+            save_page: false,
         }
     }
 }
@@ -452,6 +455,7 @@ pub(super) fn parse_document(
                 }
                 match flag {
                     "--plan" => options.plan_only = true,
+                    "--save-page" => options.save_page = true,
                     "--set-text" | "--set-text-file" => {
                         let Some(value) = rest.next() else {
                             return Some(Err(ParseError { argument }));

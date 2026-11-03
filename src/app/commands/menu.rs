@@ -94,6 +94,20 @@ impl Item {
             items,
         }
     }
+
+    /// Whether this item is a place a person can run something.
+    ///
+    /// A planned leaf is ledger material, not a surface: the native menu has no disabled switch, so
+    /// painting it would produce an enabled entry with no handler. A submenu is paintable only when
+    /// it contains at least one command leaf; an empty branch would open an empty popup. This is the
+    /// rule the window applies before it creates a menu handle (principle #22/#26).
+    pub fn is_paintable(&self) -> bool {
+        match self {
+            Self::Command { .. } => true,
+            Self::Planned { .. } | Self::Separator => false,
+            Self::Submenu { items, .. } => items.iter().any(Item::is_paintable),
+        }
+    }
 }
 
 /// A menu: a stable id, a title and its items.
@@ -127,6 +141,15 @@ impl Menu {
     /// Its items.
     pub fn items(&self) -> &[Item] {
         &self.items
+    }
+
+    /// Whether the menu has at least one leaf that runs a command.
+    ///
+    /// A menu made only of planned leaves is a roadmap entry, not something the window should
+    /// paint. The window checks this before creating the menu handle; the tree can therefore hold
+    /// the full ledger without producing empty menus (principle #26/#61).
+    pub fn is_paintable(&self) -> bool {
+        self.items.iter().any(Item::is_paintable)
     }
 
     /// Every leaf that runs a command, as `(title, command)`, in menu order.
@@ -218,6 +241,35 @@ fn collect_leaves<'a>(path: &str, items: &'a [Item], found: &mut Vec<(String, &'
 
 /// The menus this build declares: the §3 groups whose commands exist, with the rest marked planned so
 /// the tree is honest about what a person would see rather than only about what works.
+/// The roadmap task that owns a planned command, when the menu ledger names one.
+///
+/// The runtime uses this so a command a key still binds (Ctrl+S, Ctrl+Z) answers with the task that
+/// will implement it instead of "no handler": the menu is the ledger, and a second table here would
+/// be the drift the module note warns about.
+pub fn planned_task(command: &str) -> Option<String> {
+    fn find(items: &[Item], command: &str) -> Option<String> {
+        for item in items {
+            match item {
+                Item::Planned {
+                    command: id, task, ..
+                } if id == command => {
+                    return Some(task.clone());
+                }
+                Item::Submenu { items, .. } => {
+                    if let Some(task) = find(items, command) {
+                        return Some(task);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    built_in()
+        .iter()
+        .find_map(|menu| find(menu.items(), command))
+}
+
 pub fn built_in() -> Vec<Menu> {
     vec![
         Menu::new(
@@ -227,8 +279,15 @@ pub fn built_in() -> Vec<Menu> {
                 Item::command("Save", "file.save"),
                 Item::command("Save All", "file.save-all"),
                 Item::command("Save As", "file.save-as"),
+                Item::command("Save Copy", "file.save-copy"),
                 Item::separator(),
                 Item::command("Close", "file.close"),
+                Item::command("Close Others", "file.close-others"),
+                Item::command("Close Saved", "file.close-saved"),
+                Item::command("Close Project", "file.close-project"),
+                Item::command("Reopen Closed Document", "file.open-reopen"),
+                Item::command("Copy Project Path", "file.copy-path"),
+                Item::command("Reveal Project", "file.reveal"),
                 Item::planned("New Project", "file.new-project", "T02.02"),
                 Item::planned("Open Project", "file.open-project", "T02.03"),
             ],
@@ -239,9 +298,41 @@ pub fn built_in() -> Vec<Menu> {
             vec![
                 Item::command("Undo", "edit.undo"),
                 Item::command("Redo", "edit.redo"),
-                Item::planned("Cut", "edit.cut", "T05.06"),
-                Item::planned("Copy", "edit.copy", "T05.06"),
-                Item::planned("Paste", "edit.paste", "T05.06"),
+                Item::command("Operation History", "edit.history-view"),
+                Item::command("Cut", "edit.cut"),
+                Item::command("Copy", "edit.copy"),
+                Item::command("Copy Node ID", "edit.copy-node-id"),
+                Item::command("Paste", "edit.paste"),
+                Item::command("Select All", "edit.select-all"),
+                Item::command("Clear Selection", "edit.select-clear"),
+                Item::command("Expand Selection", "edit.select-expand"),
+                Item::command("Shrink Selection", "edit.select-shrink"),
+                Item::command("Select All Occurrences", "edit.select-occurrences"),
+                Item::command("Select Next Occurrence", "edit.select-next-occurrence"),
+                Item::command("Add Cursor Above", "edit.select-cursor-above"),
+                Item::command("Add Cursor Below", "edit.select-cursor-below"),
+                Item::separator(),
+                Item::submenu(
+                    "text",
+                    "Text",
+                    vec![
+                        Item::command("Toggle Comment", "edit.text-comment"),
+                        Item::command("Indent", "edit.text-indent"),
+                        Item::command("Outdent", "edit.text-outdent"),
+                        Item::command("Move Lines Up", "edit.text-move-up"),
+                        Item::command("Move Lines Down", "edit.text-move-down"),
+                        Item::command("Duplicate Lines", "edit.text-duplicate"),
+                        Item::command("Delete Lines", "edit.text-delete"),
+                        Item::command("Join Lines", "edit.text-join"),
+                        Item::command("Sort Lines", "edit.text-sort"),
+                    ],
+                ),
+                Item::separator(),
+                Item::command("Find", "edit.find"),
+                Item::command("Replace", "edit.replace"),
+                Item::command("Find Next", "edit.find-next"),
+                Item::command("Find Previous", "edit.find-previous"),
+                Item::command("Find in Selection", "edit.find-selection"),
             ],
         ),
         Menu::new(
@@ -254,8 +345,40 @@ pub fn built_in() -> Vec<Menu> {
                 // operation is reachable by eye as well as by key, and these three were bound
                 // with nothing in a menu to point at them.
                 Item::command("Keyboard Shortcuts", "keys.show"),
-                Item::command("Close Panel", "panel.close"),
-                Item::command("Activate Tree Item", "tree.activate"),
+                Item::command("Hide Current Panel", "view.panel-hide-current"),
+                Item::command("Restore Closed Panel", "view.panel-restore"),
+                Item::command("Toolbar", "view.display-toolbar"),
+                Item::command("Status Bar", "view.display-status-bar"),
+                Item::command("Zoom In", "view.display-zoom-in"),
+                Item::command("Zoom Out", "view.display-zoom-out"),
+                Item::command("Reset Zoom", "view.display-zoom-reset"),
+                Item::submenu(
+                    "editor",
+                    "Editor",
+                    vec![
+                        Item::command("Split Editor", "view.split"),
+                        Item::command("Split Editor Down", "view.split-down"),
+                        Item::command("Merge Editor Group", "view.merge-group"),
+                        Item::command("Next Editor Group", "view.next-group"),
+                        Item::command("Previous Editor Group", "view.previous-group"),
+                        Item::command("Move Tab to Next Group", "view.move-tab"),
+                    ],
+                ),
+                Item::submenu(
+                    "modes",
+                    "Modes",
+                    vec![
+                        Item::command("Welcome", "view.mode-welcome"),
+                        Item::command("Project", "view.mode-project"),
+                        Item::command("Design", "view.mode-design"),
+                        Item::command("Code", "view.mode-code"),
+                        Item::command("Debug", "view.mode-debug"),
+                        Item::command("Test", "view.mode-test"),
+                        Item::command("Release", "view.mode-release"),
+                    ],
+                ),
+                Item::planned("Close Panel", "panel.close", "T04.02"),
+                Item::planned("Activate Tree Item", "tree.activate", "T04.02"),
                 Item::submenu(
                     "panels",
                     "Panels",
@@ -266,7 +389,143 @@ pub fn built_in() -> Vec<Menu> {
                 ),
             ],
         ),
-        Menu::new("build", "Build", vec![Item::command("Run", "build.run")]),
+        Menu::new(
+            "navigate",
+            "Navigate",
+            vec![
+                Item::command("Select Parent", "nav.design-parent"),
+                Item::command("Select First Child", "nav.design-child"),
+                Item::command("Select Next Sibling", "nav.design-next-sibling"),
+                Item::command("Select Previous Sibling", "nav.design-previous-sibling"),
+                Item::command("Go to Line", "nav.goto-line"),
+                Item::command("Open File", "nav.open-file"),
+                Item::command("Go to Symbol in File", "nav.file-symbol"),
+                Item::command("Go to Symbol in Workspace", "nav.workspace-symbol"),
+                Item::command("Reveal Current File", "nav.reveal-current-file"),
+                Item::submenu(
+                    "code",
+                    "Code",
+                    vec![
+                        Item::command("Go to Definition", "nav.code-definition"),
+                        Item::command("Go to Declaration", "nav.code-declaration"),
+                        Item::command("Go to Type Definition", "nav.code-type-definition"),
+                        Item::command("Go to Implementation", "nav.code-implementation"),
+                        Item::command("Find References", "nav.code-references"),
+                        Item::command("Go Back", "nav.code-back"),
+                        Item::command("Go Forward", "nav.code-forward"),
+                        Item::separator(),
+                        Item::command("Fold Block", "code.fold"),
+                        Item::command("Unfold Block", "code.unfold"),
+                        Item::command("Fold All", "code.fold-all"),
+                        Item::command("Unfold All", "code.unfold-all"),
+                        Item::command("Show Outline", "code.outline"),
+                        Item::command("Show Breadcrumbs", "code.breadcrumbs"),
+                        Item::command("Toggle Inlay Hints", "code.inlay-hints"),
+                        Item::command("Toggle Bookmark", "code.bookmark-toggle"),
+                    ],
+                ),
+            ],
+        ),
+        Menu::new(
+            "debug",
+            "Debug",
+            vec![
+                Item::command("Start Debugging", "debug.start"),
+                Item::command("Continue", "debug.continue"),
+                Item::command("Pause", "debug.pause"),
+                Item::command("Step Over", "debug.step"),
+                Item::command("Step Into", "debug.step-in"),
+                Item::command("Step Out", "debug.step-out"),
+                Item::command("Stop Debugging", "debug.stop"),
+            ],
+        ),
+        Menu::new(
+            "project",
+            "Project",
+            vec![
+                Item::command("Check Project", "project.check"),
+                Item::command("Trust Project", "project.trust"),
+                Item::command("Clean Unused Resources", "project.clean-resources"),
+                Item::command("Rescan Project", "project.rescan"),
+                Item::command("Check References", "project.check-references"),
+                Item::command("Migration Preview", "project.migration"),
+            ],
+        ),
+        Menu::new(
+            "design",
+            "Design",
+            vec![
+                Item::command("Fit Canvas", "design.fit"),
+                Item::command("Actual Size", "design.actual-size"),
+                Item::command("Show Grid", "design.grid"),
+                Item::command("Show Rulers", "design.rulers"),
+            ],
+        ),
+        Menu::new(
+            "build",
+            "Build",
+            vec![
+                Item::command("Run", "build.run"),
+                Item::command("Check", "build.check"),
+                Item::command("Rebuild", "build.rebuild"),
+                Item::command("Clean", "build.clean"),
+                Item::command("Cancel", "build.cancel"),
+                Item::command("Copy Output", "build.copy-output"),
+                Item::command("Copy Build Command", "build.copy-command"),
+                Item::command("Go to First Error", "build.locate-first-error"),
+            ],
+        ),
+        Menu::new(
+            "run",
+            "Run",
+            vec![
+                Item::command("Run Application", "run.start"),
+                Item::command("Stop Application", "run.stop"),
+                Item::command("Clear Output", "run.clear"),
+                Item::command("Copy Output", "run.copy-output"),
+            ],
+        ),
+        Menu::new(
+            "preview",
+            "Preview",
+            vec![
+                Item::command("Start Preview", "preview.start"),
+                Item::command("Stop Preview", "preview.stop"),
+                Item::command("Rebuild Preview UI", "preview.rebuild"),
+            ],
+        ),
+        Menu::new(
+            "vcs",
+            "Version Control",
+            vec![Item::command("Refresh Version Control", "vcs.refresh")],
+        ),
+        Menu::new(
+            "terminal",
+            "Terminal",
+            vec![
+                Item::command("Start Terminal", "terminal.start"),
+                Item::command("Stop Terminal", "terminal.stop"),
+            ],
+        ),
+        Menu::new(
+            "test",
+            "Test",
+            vec![
+                Item::command("Run Tests", "test.run"),
+                Item::command("Rerun Failed Tests", "test.run-failed"),
+                Item::command("Run Tests in Current File", "test.run-current-file"),
+                Item::command("Stop Tests", "test.run-stop"),
+            ],
+        ),
+        Menu::new(
+            "help",
+            "Help",
+            vec![
+                Item::command("Keyboard Shortcuts", "help.shortcuts"),
+                Item::command("Command Reference", "help.commands"),
+                Item::command("Widget Reference", "help.controls"),
+            ],
+        ),
     ]
 }
 
@@ -296,7 +555,7 @@ mod tests {
         // And the leaves really are bound: the menu is not empty of commands.
         let total: usize = menus.iter().map(|menu| menu.commands().len()).sum();
         assert!(
-            total >= 7,
+            total >= 5,
             "expected the implemented commands to appear, got {total}"
         );
     }
@@ -322,13 +581,13 @@ mod tests {
             "file",
             "File",
             vec![
-                Item::command("Save", "file.save"),
-                Item::command("Save (again)", "file.save"),
+                Item::command("Close", "file.close"),
+                Item::command("Close (again)", "file.close"),
             ],
         );
         let problems = menu.problems(&registry);
         assert_eq!(problems.len(), 1);
-        assert!(problems[0].contains("both bind file.save"), "{problems:?}");
+        assert!(problems[0].contains("both bind file.close"), "{problems:?}");
         assert!(
             problems[0].contains("alias is a second command"),
             "{problems:?}"
@@ -341,11 +600,46 @@ mod tests {
         let menu = Menu::new(
             "file",
             "File",
-            vec![Item::planned("Save", "file.save", "T99.99")],
+            vec![Item::planned("Close", "file.close", "T99.99")],
         );
         let problems = menu.problems(&registry);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("would be hiding"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_menu_or_submenu_of_only_planned_leaves_is_not_paintable() {
+        let planned = Menu::new(
+            "planned",
+            "Planned",
+            vec![Item::planned("Later", "file.later", "T99.99")],
+        );
+        assert!(!planned.is_paintable());
+        assert!(!Item::planned("Later", "file.later", "T99.99").is_paintable());
+        assert!(
+            !Item::submenu(
+                "planned",
+                "Planned",
+                vec![Item::planned("Later", "file.later", "T99.99")]
+            )
+            .is_paintable()
+        );
+
+        let implemented = Menu::new(
+            "implemented",
+            "Implemented",
+            vec![Item::command("Close", "file.close")],
+        );
+        assert!(implemented.is_paintable());
+        assert!(Item::command("Close", "file.close").is_paintable());
+        assert!(
+            Item::submenu(
+                "implemented",
+                "Implemented",
+                vec![Item::command("Close", "file.close")]
+            )
+            .is_paintable()
+        );
     }
 
     #[test]

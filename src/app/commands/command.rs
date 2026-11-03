@@ -792,26 +792,23 @@ impl Registry {
     }
 }
 
+/// The panel ids §2.2 requires, in the ledger's order, as `view.panel-show` accepts them.
+///
+/// The command takes the ledger id (`panel.pages`), not the window's host id (`pages`): §2.2 is the
+/// roadmap's own vocabulary, and a second list here would drift from it.
+fn panel_choices() -> Vec<String> {
+    crate::app::shell::panels::REQUIRED_PANELS
+        .iter()
+        .map(|panel| panel.id().to_owned())
+        .collect()
+}
+
 /// The commands this build registers: the ones the roadmap's §3 menu tree names and that have a
 /// handler today. Registering a command here is a claim that it exists, so the set is deliberately
 /// small — the id convention (`P-CMD-ID`) fixes 16 namespaces, but a namespace is not a command.
 pub fn built_in() -> Registry {
     let mut registry = Registry::new();
     let commands = [
-        Command::new(
-            CommandId::parse("file.save").expect("a valid id"),
-            "Save",
-            "File",
-        )
-        .with_undo(Undo::None)
-        .described_as("write the current document back to disk"),
-        Command::new(
-            CommandId::parse("file.save-all").expect("a valid id"),
-            "Save All",
-            "File",
-        )
-        .with_undo(Undo::None)
-        .described_as("write every document with unsaved changes"),
         Command::new(
             CommandId::parse("file.close").expect("a valid id"),
             "Close",
@@ -828,6 +825,89 @@ pub fn built_in() -> Registry {
         ))
         .described_as("close the current document, deciding what to do with unsaved changes"),
         Command::new(
+            CommandId::parse("file.close-others").expect("a valid id"),
+            "Close Others",
+            "File",
+        )
+        .described_as("close every other document in the focused editor group"),
+        Command::new(
+            CommandId::parse("file.close-saved").expect("a valid id"),
+            "Close Saved",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .described_as("close every document that has no unsaved changes"),
+        Command::new(
+            CommandId::parse("file.close-project").expect("a valid id"),
+            "Close Project",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .described_as("close the open project after its documents have no unsaved changes"),
+        Command::new(
+            CommandId::parse("file.open-reopen").expect("a valid id"),
+            "Reopen Closed Document",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .described_as("reopen the most recently closed document"),
+        Command::new(
+            CommandId::parse("file.exit").expect("a valid id"),
+            "Exit",
+            "File",
+        )
+        .described_as("close the window and end the session"),
+        Command::new(
+            CommandId::parse("file.copy-path").expect("a valid id"),
+            "Copy Project Path",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .described_as("copy the open project's root path to the clipboard"),
+        Command::new(
+            CommandId::parse("file.reveal").expect("a valid id"),
+            "Reveal Project",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .described_as("hand the project root to the system's file manager"),
+        Command::new(
+            CommandId::parse("file.save").expect("a valid id"),
+            "Save",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .with_effect(EffectClass::FileWrite)
+        .needing_trust()
+        .described_as("write the focused document back to the file it was opened from"),
+        Command::new(
+            CommandId::parse("file.save-all").expect("a valid id"),
+            "Save All",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .with_effect(EffectClass::FileWrite)
+        .needing_trust()
+        .described_as("write every open document that came from disk"),
+        Command::new(
+            CommandId::parse("file.save-as").expect("a valid id"),
+            "Save As",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .with_effect(EffectClass::FileWrite)
+        .needing_trust()
+        .described_as("write the focused document under a new project path"),
+        Command::new(
+            CommandId::parse("file.save-copy").expect("a valid id"),
+            "Save Copy",
+            "File",
+        )
+        .with_undo(Undo::None)
+        .with_effect(EffectClass::FileWrite)
+        .needing_trust()
+        .described_as("write a copy without changing the active document"),
+        Command::new(
             CommandId::parse("edit.undo").expect("a valid id"),
             "Undo",
             "Edit",
@@ -835,12 +915,820 @@ pub fn built_in() -> Registry {
         .with_undo(Undo::None)
         .described_as("take back the newest change, in its own domain"),
         Command::new(
+            CommandId::parse("edit.cut").expect("a valid id"),
+            "Cut",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("move the editor selection to the clipboard"),
+        Command::new(
+            CommandId::parse("edit.copy").expect("a valid id"),
+            "Copy",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("copy the editor selection to the clipboard"),
+        Command::new(
+            CommandId::parse("edit.copy-node-id").expect("a valid id"),
+            "Copy Node ID",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("copy the selected design node's stable id"),
+        Command::new(
+            CommandId::parse("edit.history-view").expect("a valid id"),
+            "Operation History",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("show the commands this window executed, newest first"),
+        Command::new(
+            CommandId::parse("edit.paste").expect("a valid id"),
+            "Paste",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("paste the clipboard at the caret"),
+        Command::new(
+            CommandId::parse("nav.design-parent").expect("a valid id"),
+            "Select Parent",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("select the selected design node's parent"),
+        Command::new(
+            CommandId::parse("nav.design-child").expect("a valid id"),
+            "Select First Child",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("select the selected design node's first child"),
+        Command::new(
+            CommandId::parse("nav.design-next-sibling").expect("a valid id"),
+            "Select Next Sibling",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("select the selected design node's next sibling in tree order"),
+        Command::new(
+            CommandId::parse("nav.design-previous-sibling").expect("a valid id"),
+            "Select Previous Sibling",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("select the selected design node's previous sibling in tree order"),
+        Command::new(
+            CommandId::parse("nav.goto-line").expect("a valid id"),
+            "Go to Line",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("move the caret to a line (and column) in the focused editor"),
+        Command::new(
+            CommandId::parse("nav.open-file").expect("a valid id"),
+            "Open File",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("open a project file by exact path or fuzzy query"),
+        Command::new(
+            CommandId::parse("nav.file-symbol").expect("a valid id"),
+            "Go to Symbol in File",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("jump to a symbol in the focused editor's document"),
+        Command::new(
+            CommandId::parse("nav.workspace-symbol").expect("a valid id"),
+            "Go to Symbol in Workspace",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("search the project's symbols through the language server"),
+        Command::new(
+            CommandId::parse("nav.reveal-current-file").expect("a valid id"),
+            "Reveal Current File",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("hand the focused editor's document to the system's file manager"),
+        Command::new(
+            CommandId::parse("nav.code-definition").expect("a valid id"),
+            "Go to Definition",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("move to where the symbol under the caret is defined"),
+        Command::new(
+            CommandId::parse("nav.code-declaration").expect("a valid id"),
+            "Go to Declaration",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("move to where the symbol under the caret is declared"),
+        Command::new(
+            CommandId::parse("nav.code-type-definition").expect("a valid id"),
+            "Go to Type Definition",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("move to the definition of the symbol's type"),
+        Command::new(
+            CommandId::parse("nav.code-implementation").expect("a valid id"),
+            "Go to Implementation",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("move to the implementation of the symbol under the caret"),
+        Command::new(
+            CommandId::parse("nav.code-references").expect("a valid id"),
+            "Find References",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("list every reference to the symbol under the caret"),
+        Command::new(
+            CommandId::parse("nav.code-back").expect("a valid id"),
+            "Go Back",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("return to the previous jump location"),
+        Command::new(
+            CommandId::parse("nav.code-forward").expect("a valid id"),
+            "Go Forward",
+            "Navigate",
+        )
+        .with_undo(Undo::None)
+        .described_as("move to the next jump location"),
+        Command::new(
+            CommandId::parse("design.fit").expect("a valid id"),
+            "Fit Canvas",
+            "Design",
+        )
+        .with_undo(Undo::None)
+        .described_as("scale the design surface to fit its control"),
+        Command::new(
+            CommandId::parse("design.actual-size").expect("a valid id"),
+            "Actual Size",
+            "Design",
+        )
+        .with_undo(Undo::None)
+        .described_as("show the design surface at one screen pixel per design pixel"),
+        Command::new(
+            CommandId::parse("design.grid").expect("a valid id"),
+            "Show Grid",
+            "Design",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide the design grid"),
+        Command::new(
+            CommandId::parse("design.rulers").expect("a valid id"),
+            "Show Rulers",
+            "Design",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide the rulers along the design surface's edges"),
+        Command::new(
+            CommandId::parse("view.mode-welcome").expect("a valid id"),
+            "Welcome Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the welcome mode"),
+        Command::new(
+            CommandId::parse("view.mode-project").expect("a valid id"),
+            "Project Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the project mode"),
+        Command::new(
+            CommandId::parse("view.mode-design").expect("a valid id"),
+            "Design Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the design mode"),
+        Command::new(
+            CommandId::parse("view.mode-code").expect("a valid id"),
+            "Code Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the code mode"),
+        Command::new(
+            CommandId::parse("view.mode-debug").expect("a valid id"),
+            "Debug Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the debug mode"),
+        Command::new(
+            CommandId::parse("view.mode-test").expect("a valid id"),
+            "Test Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the test mode"),
+        Command::new(
+            CommandId::parse("view.mode-release").expect("a valid id"),
+            "Release Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("switch the workbench to the release mode"),
+        Command::new(
+            CommandId::parse("edit.select-all").expect("a valid id"),
+            "Select All",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("select the whole document in the focused editor"),
+        Command::new(
+            CommandId::parse("edit.find").expect("a valid id"),
+            "Find",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("open the find bar in the focused editor"),
+        Command::new(
+            CommandId::parse("edit.replace").expect("a valid id"),
+            "Replace",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("open the find bar with its replacement field"),
+        Command::new(
+            CommandId::parse("edit.find-next").expect("a valid id"),
+            "Find Next",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("go to the next match of the current search"),
+        Command::new(
+            CommandId::parse("edit.find-previous").expect("a valid id"),
+            "Find Previous",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("go to the previous match of the current search"),
+        Command::new(
+            CommandId::parse("edit.find-selection").expect("a valid id"),
+            "Find in Selection",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("search for the selected text in the focused editor"),
+        Command::new(
+            CommandId::parse("edit.select-clear").expect("a valid id"),
+            "Clear Selection",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("collapse the editor selection to the caret"),
+        Command::new(
+            CommandId::parse("edit.select-expand").expect("a valid id"),
+            "Expand Selection",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("widen the editor selection to the next structural unit"),
+        Command::new(
+            CommandId::parse("edit.select-shrink").expect("a valid id"),
+            "Shrink Selection",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("restore the selection before the last expansion"),
+        Command::new(
+            CommandId::parse("code.fold").expect("a valid id"),
+            "Fold Block",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("fold the block at the caret"),
+        Command::new(
+            CommandId::parse("code.unfold").expect("a valid id"),
+            "Unfold Block",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("unfold the region at the caret"),
+        Command::new(
+            CommandId::parse("code.fold-all").expect("a valid id"),
+            "Fold All",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("fold every multi-line block in the document"),
+        Command::new(
+            CommandId::parse("code.unfold-all").expect("a valid id"),
+            "Unfold All",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("unfold every collapsed region"),
+        Command::new(
+            CommandId::parse("code.outline").expect("a valid id"),
+            "Show Outline",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("show the source outline panel"),
+        Command::new(
+            CommandId::parse("code.breadcrumbs").expect("a valid id"),
+            "Show Breadcrumbs",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("name the symbols containing the caret"),
+        Command::new(
+            CommandId::parse("code.inlay-hints").expect("a valid id"),
+            "Toggle Inlay Hints",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide inlay hints without discarding them"),
+        Command::new(
+            CommandId::parse("code.bookmark-toggle").expect("a valid id"),
+            "Toggle Bookmark",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("add or remove a bookmark on the caret line"),
+        Command::new(
+            CommandId::parse("edit.select-occurrences").expect("a valid id"),
+            "Select All Occurrences",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("add a cursor at every occurrence of the selection"),
+        Command::new(
+            CommandId::parse("edit.text-comment").expect("a valid id"),
+            "Toggle Comment",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("toggle the line comment on the selected lines"),
+        Command::new(
+            CommandId::parse("edit.text-indent").expect("a valid id"),
+            "Indent",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("indent the selected lines by one level"),
+        Command::new(
+            CommandId::parse("edit.text-outdent").expect("a valid id"),
+            "Outdent",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("remove one level of indentation from the selected lines"),
+        Command::new(
+            CommandId::parse("edit.text-move-up").expect("a valid id"),
+            "Move Lines Up",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("move the selected lines up"),
+        Command::new(
+            CommandId::parse("edit.text-move-down").expect("a valid id"),
+            "Move Lines Down",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("move the selected lines down"),
+        Command::new(
+            CommandId::parse("edit.text-duplicate").expect("a valid id"),
+            "Duplicate Lines",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("duplicate the selected lines"),
+        Command::new(
+            CommandId::parse("edit.text-delete").expect("a valid id"),
+            "Delete Lines",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("delete the selected lines"),
+        Command::new(
+            CommandId::parse("edit.text-join").expect("a valid id"),
+            "Join Lines",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("join the selected lines into one"),
+        Command::new(
+            CommandId::parse("edit.text-sort").expect("a valid id"),
+            "Sort Lines",
+            "Edit",
+        )
+        .with_undo(Undo::Text)
+        .described_as("sort the selected lines in ascending order"),
+        Command::new(
+            CommandId::parse("edit.select-next-occurrence").expect("a valid id"),
+            "Select Next Occurrence",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("add a cursor at the next occurrence of the selection"),
+        Command::new(
+            CommandId::parse("edit.select-cursor-above").expect("a valid id"),
+            "Add Cursor Above",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("add a cursor one line above the primary caret"),
+        Command::new(
+            CommandId::parse("edit.select-cursor-below").expect("a valid id"),
+            "Add Cursor Below",
+            "Edit",
+        )
+        .with_undo(Undo::None)
+        .described_as("add a cursor one line below the primary caret"),
+        Command::new(
             CommandId::parse("edit.redo").expect("a valid id"),
             "Redo",
             "Edit",
         )
         .with_undo(Undo::None)
         .described_as("put back the newest change that was taken back"),
+        // The window's own layout and editor actions, reachable from the menu, the toolbar and
+        // the palette as the same commands (T05.02/T04.02).
+        Command::new(
+            CommandId::parse("view.split").expect("a valid id"),
+            "Split Editor",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("split the focused editor group and show the document in the new group"),
+        Command::new(
+            CommandId::parse("view.next-group").expect("a valid id"),
+            "Next Editor Group",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("move the keyboard focus to the next editor group"),
+        Command::new(
+            CommandId::parse("view.previous-group").expect("a valid id"),
+            "Previous Editor Group",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("move the keyboard focus to the previous editor group"),
+        Command::new(
+            CommandId::parse("view.split-down").expect("a valid id"),
+            "Split Editor Down",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("split the focused editor group into stacked panes"),
+        Command::new(
+            CommandId::parse("view.merge-group").expect("a valid id"),
+            "Merge Editor Group",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("move the focused group's views into a neighbour and close it"),
+        Command::new(
+            CommandId::parse("view.move-tab").expect("a valid id"),
+            "Move Tab to Next Group",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("move the focused group's active tab into the next editor group"),
+        Command::new(
+            CommandId::parse("view.save-layout").expect("a valid id"),
+            "Save Layout",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("write the panels and editor groups to the layout file"),
+        Command::new(
+            CommandId::parse("view.layout-load").expect("a valid id"),
+            "Load Layout",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("apply the saved layout file without restarting"),
+        Command::new(
+            CommandId::parse("view.layout-lock").expect("a valid id"),
+            "Lock Layout",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("lock or unlock the layout against save, load and reset"),
+        Command::new(
+            CommandId::parse("view.layout-zen").expect("a valid id"),
+            "Zen Mode",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("hide every docked panel and the window chrome, and restore them on exit"),
+        Command::new(
+            CommandId::parse("view.layout-fullscreen").expect("a valid id"),
+            "Full Screen",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("ask the platform window to enter or leave full screen"),
+        Command::new(
+            CommandId::parse("view.reset-layout").expect("a valid id"),
+            "Reset Layout",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("restore the layout the window started with"),
+        // Roadmap §3's view/panels group: one command whose argument names the panel, so the menu's
+        // every panel entry binds the same id and the §2.2 ledger is the only list of panels.
+        Command::new(
+            CommandId::parse("view.panel-show").expect("a valid id"),
+            "Show Panel",
+            "View",
+        )
+        .with_param(Param::required(
+            "panel",
+            ParamType::Choice(panel_choices()),
+            "the §2.2 panel to show",
+        ))
+        .described_as("show a panel, hiding the panel sharing its dock slot"),
+        Command::new(
+            CommandId::parse("view.panel-hide-current").expect("a valid id"),
+            "Hide Current Panel",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("hide the panel that holds the keyboard focus"),
+        Command::new(
+            CommandId::parse("view.panel-restore").expect("a valid id"),
+            "Restore Closed Panel",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("show the panel hidden most recently"),
+        Command::new(
+            CommandId::parse("view.display-toolbar").expect("a valid id"),
+            "Toolbar",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide the toolbar, reflowing the editor area"),
+        Command::new(
+            CommandId::parse("view.display-status-bar").expect("a valid id"),
+            "Status Bar",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide the status bar, reflowing the content area"),
+        Command::new(
+            CommandId::parse("view.display-zoom-in").expect("a valid id"),
+            "Zoom In",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("enlarge the focused editor's text"),
+        Command::new(
+            CommandId::parse("view.display-zoom-out").expect("a valid id"),
+            "Zoom Out",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("shrink the focused editor's text"),
+        Command::new(
+            CommandId::parse("view.display-zoom-reset").expect("a valid id"),
+            "Reset Zoom",
+            "View",
+        )
+        .with_undo(Undo::None)
+        .described_as("put the focused editor's text back to its default size"),
+        Command::new(
+            CommandId::parse("build.cancel").expect("a valid id"),
+            "Cancel Build",
+            "Build",
+        )
+        .with_undo(Undo::None)
+        .described_as("ask the running build to stop"),
+        Command::new(
+            CommandId::parse("build.copy-output").expect("a valid id"),
+            "Copy Build Output",
+            "Build",
+        )
+        .with_undo(Undo::None)
+        .described_as("copy the build log to the clipboard"),
+        Command::new(
+            CommandId::parse("preview.start").expect("a valid id"),
+            "Start Preview",
+            "Preview",
+        )
+        .with_undo(Undo::None)
+        .described_as("start the preview service and report when it is ready"),
+        Command::new(
+            CommandId::parse("preview.stop").expect("a valid id"),
+            "Stop Preview",
+            "Preview",
+        )
+        .with_undo(Undo::None)
+        .described_as("stop the preview service"),
+        Command::new(
+            CommandId::parse("preview.rebuild").expect("a valid id"),
+            "Rebuild Preview UI",
+            "Preview",
+        )
+        .with_undo(Undo::None)
+        .described_as("mount or update the preview from the startup page's library document"),
+        Command::new(
+            CommandId::parse("vcs.refresh").expect("a valid id"),
+            "Refresh Version Control",
+            "Version Control",
+        )
+        .with_undo(Undo::None)
+        .described_as("re-read the repository state now"),
+        Command::new(
+            CommandId::parse("terminal.start").expect("a valid id"),
+            "Start Terminal",
+            "Terminal",
+        )
+        .with_undo(Undo::None)
+        .described_as("start a shell session in the project directory"),
+        Command::new(
+            CommandId::parse("terminal.stop").expect("a valid id"),
+            "Stop Terminal",
+            "Terminal",
+        )
+        .with_undo(Undo::None)
+        .described_as("ask the running shell session to stop"),
+        Command::new(
+            CommandId::parse("test.run").expect("a valid id"),
+            "Run Tests",
+            "Test",
+        )
+        .with_undo(Undo::None)
+        .described_as("discover and run the project's tests"),
+        Command::new(
+            CommandId::parse("test.run-failed").expect("a valid id"),
+            "Rerun Failed Tests",
+            "Test",
+        )
+        .with_undo(Undo::None)
+        .described_as("run exactly the tests that failed last time"),
+        Command::new(
+            CommandId::parse("test.run-current-file").expect("a valid id"),
+            "Run Tests in Current File",
+            "Test",
+        )
+        .with_undo(Undo::None)
+        .described_as("run the tests whose module path belongs to the focused document"),
+        Command::new(
+            CommandId::parse("test.run-stop").expect("a valid id"),
+            "Stop Tests",
+            "Test",
+        )
+        .with_undo(Undo::None)
+        .described_as("ask the running test run to stop"),
+        Command::new(
+            CommandId::parse("help.shortcuts").expect("a valid id"),
+            "Keyboard Shortcuts",
+            "Help",
+        )
+        .with_undo(Undo::None)
+        .described_as("open the shortcut reference in an editor tab"),
+        Command::new(
+            CommandId::parse("help.commands").expect("a valid id"),
+            "Command Reference",
+            "Help",
+        )
+        .with_undo(Undo::None)
+        .described_as("open the command reference in an editor tab"),
+        Command::new(
+            CommandId::parse("help.controls").expect("a valid id"),
+            "Widget Reference",
+            "Help",
+        )
+        .with_undo(Undo::None)
+        .described_as("open the widget reference in an editor tab"),
+        Command::new(
+            CommandId::parse("project.check").expect("a valid id"),
+            "Check Project",
+            "Project",
+        )
+        .with_undo(Undo::None)
+        .described_as("report the project file's format, identity and references"),
+        Command::new(
+            CommandId::parse("project.trust").expect("a valid id"),
+            "Trust Project",
+            "Project",
+        )
+        .with_undo(Undo::None)
+        .described_as("record that this session may write the open project"),
+        Command::new(
+            CommandId::parse("project.clean-resources").expect("a valid id"),
+            "Clean Unused Resources",
+            "Project",
+        )
+        .with_undo(Undo::None)
+        .with_effect(EffectClass::FileWrite)
+        .needing_trust()
+        .described_as("list declared resources no page references and remove the declarations after confirmation"),
+        Command::new(
+            CommandId::parse("project.rescan").expect("a valid id"),
+            "Rescan Project",
+            "Project",
+        )
+        .with_undo(Undo::None)
+        .described_as("re-read the project structure into the Project panel"),
+        Command::new(
+            CommandId::parse("project.migration").expect("a valid id"),
+            "Migration Preview",
+            "Project",
+        )
+        .with_undo(Undo::None)
+        .described_as("report the format version and the steps writing would migrate"),
+        Command::new(
+            CommandId::parse("project.check-references").expect("a valid id"),
+            "Check References",
+            "Project",
+        )
+        .with_undo(Undo::None)
+        .described_as("list every project reference and whether it resolves"),
+        Command::new(
+            CommandId::parse("debug.start").expect("a valid id"),
+            "Start Debugging",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("start a session with the selected node as its breakpoint anchor"),
+        Command::new(
+            CommandId::parse("debug.continue").expect("a valid id"),
+            "Continue",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("continue to the next breakpoint or the end"),
+        Command::new(
+            CommandId::parse("debug.step").expect("a valid id"),
+            "Step Over",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("step over one line in the session"),
+        Command::new(
+            CommandId::parse("debug.step-in").expect("a valid id"),
+            "Step Into",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("step into the call on the current line"),
+        Command::new(
+            CommandId::parse("debug.step-out").expect("a valid id"),
+            "Step Out",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("step out of the current frame"),
+        Command::new(
+            CommandId::parse("debug.pause").expect("a valid id"),
+            "Pause",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("pause the running debuggee"),
+        Command::new(
+            CommandId::parse("debug.stop").expect("a valid id"),
+            "Stop Debugging",
+            "Debug",
+        )
+        .with_undo(Undo::None)
+        .described_as("end the session and terminate the adapter"),
+        Command::new(
+            CommandId::parse("run.start").expect("a valid id"),
+            "Run Application",
+            "Run",
+        )
+        .with_undo(Undo::None)
+        .described_as("start the configured program in the project directory"),
+        Command::new(
+            CommandId::parse("run.stop").expect("a valid id"),
+            "Stop Application",
+            "Run",
+        )
+        .with_undo(Undo::None)
+        .described_as("ask the running program to stop"),
+        Command::new(
+            CommandId::parse("run.clear").expect("a valid id"),
+            "Clear Run Output",
+            "Run",
+        )
+        .with_undo(Undo::None)
+        .described_as("clear the application output panel"),
+        Command::new(
+            CommandId::parse("run.copy-output").expect("a valid id"),
+            "Copy Run Output",
+            "Run",
+        )
+        .with_undo(Undo::None)
+        .described_as("copy the application output to the clipboard"),
         Command::new(
             CommandId::parse("view.welcome").expect("a valid id"),
             "Welcome",
@@ -858,16 +1746,53 @@ pub fn built_in() -> Registry {
         .blocked_while("build")
         .needing_trust()
         .described_as("build the project for its target, one at a time"),
+        Command::new(
+            CommandId::parse("build.check").expect("a valid id"),
+            "Check",
+            "Build",
+        )
+        .with_effect(EffectClass::Command)
+        .with_task("build")
+        .blocked_while("build")
+        .needing_trust()
+        .described_as("type-check the project without producing a binary"),
+        Command::new(
+            CommandId::parse("build.rebuild").expect("a valid id"),
+            "Rebuild",
+            "Build",
+        )
+        .with_effect(EffectClass::Command)
+        .with_task("build")
+        .blocked_while("build")
+        .needing_trust()
+        .described_as("remove this package's artifacts, then build again"),
+        Command::new(
+            CommandId::parse("build.clean").expect("a valid id"),
+            "Clean",
+            "Build",
+        )
+        .with_effect(EffectClass::Command)
+        .with_task("build")
+        .blocked_while("build")
+        .needing_trust()
+        .described_as("remove this package's artifacts without building"),
+        Command::new(
+            CommandId::parse("build.copy-command").expect("a valid id"),
+            "Copy Build Command",
+            "Build",
+        )
+        .with_undo(Undo::None)
+        .described_as("copy the cargo command the last build actually ran"),
+        Command::new(
+            CommandId::parse("build.locate-first-error").expect("a valid id"),
+            "Go to First Error",
+            "Build",
+        )
+        .with_undo(Undo::None)
+        .described_as("open the first source location the build output names"),
         // The commands the default keymap binds and the menu names as planned. Registering them is
         // the same claim every command here makes — that it is described once — and the audit
         // (T05.08) checks that the menu tree and the keymap only ever name ids registered here.
-        Command::new(
-            CommandId::parse("file.save-as").expect("a valid id"),
-            "Save As",
-            "File",
-        )
-        .with_undo(Undo::None)
-        .described_as("write the document to another file"),
         Command::new(
             CommandId::parse("view.palette").expect("a valid id"),
             "Command Palette",
@@ -880,18 +1805,6 @@ pub fn built_in() -> Registry {
             "View",
         )
         .described_as("show the keyboard shortcuts"),
-        Command::new(
-            CommandId::parse("panel.close").expect("a valid id"),
-            "Close Panel",
-            "View",
-        )
-        .described_as("hide the panel with the keyboard"),
-        Command::new(
-            CommandId::parse("tree.activate").expect("a valid id"),
-            "Activate",
-            "View",
-        )
-        .described_as("open the selected tree item"),
     ];
     for command in commands {
         registry.register(command).expect("ids are unique");
@@ -1083,7 +1996,11 @@ mod tests {
     fn why_not_answers_with_the_refusal_or_nothing() {
         let registry = registry();
         let context = Context::in_area("welcome");
-        assert!(registry.why_not(&Call::to("file.save"), &context).is_none());
+        assert!(
+            registry
+                .why_not(&Call::to("file.close"), &context)
+                .is_none()
+        );
         assert!(
             registry
                 .why_not(&Call::to("build.run"), &context)

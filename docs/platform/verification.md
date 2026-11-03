@@ -73,18 +73,18 @@
 
 ## 2. 输出 profile 与设备（T00.03 的 15 格 + F18 多目标与部署）
 
-[支持矩阵](../plan/support-matrix.md) 的 15 格在 3.1.0 重钉后：macOS 五格取得构建记录并有有界真实窗口运行；
-Windows 五格取得 xwin 交叉构建记录；Linux 未在本机复跑。构建通过不等于运行，因此没有任何
-profile 格写成 `certified`：
+[支持矩阵](../plan/support-matrix.md) 的 15 格在 4.0.0 上重估：macOS 与 Linux x86_64 各五格取得
+`--lib` 构建记录，两个宿主各完成一次有界真实窗口运行；Windows 五格被上游 RW-101 阻断。
+构建通过不等于运行，因此没有任何 profile 格写成 `certified`：
 
 > **3.1.0 边界：** 下面 B1–B3 的 Linux 记录仍指向 2.8.11，不冒充 3.1.0 证据；B4–B7 已按
 > 3.1.0 重跑；3.0.0 的 Windows embedded `ToOwned` 缺口已由 3.1.0 关闭。
 
 | # | 格 | 需要什么 | 状态 |
 |---|---|---|---|
-| B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ✅ `build-verified`：本机 `cargo build --bin rustage` 与 `--features linux-native` 原生会话（[log-20261019-1 §5.7、§11](../log/log-20261019-1.md)）；生成物本身未链接，故不写 `certified` |
-| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接 | ✅ `build-verified`：固定依赖 2.8.11 以 `--no-default-features --features tablet|mobile --lib` 在 Linux x86_64 真实构建通过（[log-20261020-3](../log/log-20261020-3.md)）；未运行 |
-| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建 | ⏳ 部分：2.8.11 的 mini rlib 真实构建通过；embedded 以同一命令失败（`WidgetKind` 变体被 `widgets_unstripped` 门控，而新构造器用 `not(alloc_frugal)` 门控），已记上游缺陷（[feedback-20261020](../rw-feedback/feedback-20261020.md)） |
+| B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ✅ `build-verified`：4.0.0 的 `--features desktop --lib` 与宿主 `cargo build --features linux-native --bin rustage` 均通过，并以 `--workbench-gui --exit-after-ms 3000` 建立真实窗口会话（[log-20261103-1](../log/log-20261103-1.md)）；生成物本身未链接，故不写 `certified` |
+| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接 | ✅ `build-verified`：4.0.0 以 `--no-default-features --features tablet|mobile --lib` 在 Linux x86_64 真实构建通过（[log-20261103-1](../log/log-20261103-1.md)）；未运行 |
+| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建 | ✅ `build-verified`：4.0.0 的 mini 与 embedded `--lib` 在 Linux x86_64 均构建通过（[log-20261103-1](../log/log-20261103-1.md)）；无目标设备，未运行 |
 | B4 | macos × desktop | macOS 机器 | ✅ `build-verified`：3.1.0 的 desktop rlib 与 `cargo build --bin rustage` 通过；有界真实窗口会话已运行（[log-20261029-1](../log/archived/log-20261029-11.md)） |
 | B5 | macos × tablet / mobile | macOS 上的 profile 构建（运行仍需目标 SDK/设备） | ✅ `build-verified`：3.1.0 的 tablet/mobile rlib 构建通过；未运行（[log-20261029-1](../log/archived/log-20261029-11.md)） |
 | B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ✅ `build-verified`：3.1.0 的 mini/embedded rlib 构建通过；无目标设备，未运行（[log-20261029-1](../log/archived/log-20261029-11.md)） |

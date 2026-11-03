@@ -58,7 +58,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use rust_widgets::core::ObjectId;
+use rust_widgets::core::{Color, ObjectId, Size};
+use rust_widgets::render::SvgPaintBackend;
 use rust_widgets::view::{Node, View, ViewEngine};
 use rust_widgets::widget::capability::CapabilityValue;
 
@@ -143,7 +144,12 @@ pub struct Document {
     /// The root's widget kind.
     pub root: String,
     /// The root's children, in order.
-    pub nodes: Vec<DocumentNode>,
+    ///
+    /// Shared and copied on write. An edit batch builds a candidate document, hands one copy to the
+    /// session and keeps the other for the caller, so a plain `Vec` would copy every node twice per
+    /// batch; with a shared vector both clones are a refcount bump and the one copy happens when the
+    /// first edit actually writes (blue21 O-6). A batch that changes nothing touches no node at all.
+    pub nodes: std::sync::Arc<Vec<DocumentNode>>,
 }
 
 impl Document {
@@ -151,13 +157,13 @@ impl Document {
     pub fn new(root: impl Into<String>) -> Self {
         Self {
             root: root.into(),
-            nodes: Vec::new(),
+            nodes: std::sync::Arc::new(Vec::new()),
         }
     }
 
     /// The same document with one more child.
     pub fn with(mut self, node: DocumentNode) -> Self {
-        self.nodes.push(node);
+        std::sync::Arc::make_mut(&mut self.nodes).push(node);
         self
     }
 
@@ -202,7 +208,7 @@ impl Document {
                 edit.render()
             ));
         };
-        let Some(node) = self.nodes.get_mut(position) else {
+        let Some(node) = std::sync::Arc::make_mut(&mut self.nodes).get_mut(position) else {
             return Application::Unsupported(format!(
                 "{} names node {raw_node}, which is not in the document",
                 edit.render()
@@ -219,7 +225,7 @@ impl Document {
 impl View for Document {
     fn build(&self) -> Node {
         let mut root = Node::new(self.root.as_str()).key("root");
-        for node in &self.nodes {
+        for node in self.nodes.iter() {
             let mut child = Node::new(node.kind.as_str())
                 .key(node.node.get().to_string())
                 .prop("text", CapabilityValue::String(node.text.clone()));
@@ -438,6 +444,12 @@ pub struct Preview {
     /// `update` installs the new declaration even when it reports `root_replaced`, so without this
     /// rollback every later update would keep comparing against the failed tree.
     mounted: Option<Rc<Document>>,
+    /// The library JSON declaration last mounted or updated successfully.
+    ///
+    /// `Some` means the session runs the same document `designer::generate` consumes
+    /// ([`Self::mount_json`]); `None` means it runs the host model. A failed JSON update restores
+    /// this text, the way [`Self::mounted`] restores the host model.
+    mounted_json: Option<String>,
     /// Every control id this session created, including ones a later update removed.
     ///
     /// Tracked because `ViewEngine` has no `Drop` that unregisters its controls: without this list,
@@ -460,6 +472,37 @@ impl Preview {
     /// A snapshot of the mounted tree's identity map, or `None` when nothing is mounted.
     pub fn view_index(&self) -> Option<rust_widgets::view::TreeIndex> {
         self.engine.as_ref().map(ViewEngine::tree_index)
+    }
+
+    /// Paints the mounted tree into an SVG frame, for a headless thumbnail or an offline preview
+    /// (blue22 H-34).
+    ///
+    /// The picture comes from the library's real paint traversal, not from a host-side drawing of
+    /// the declaration, so a frame is what the same controls draw when a window shows them. A
+    /// session with nothing mounted, an empty size, or a root without a `Draw` is refused with the
+    /// reason rather than answering an empty document.
+    pub fn paint_svg(&self, size: Size) -> Result<String, String> {
+        let index = self
+            .view_index()
+            .ok_or_else(|| "no view is mounted, so there is no frame to paint".to_owned())?;
+        let root = index.root().ok_or_else(|| {
+            "the mounted view has no root, so there is no frame to paint".to_owned()
+        })?;
+        if size.width == 0 || size.height == 0 {
+            return Err(format!(
+                "a {}x{} frame has no area",
+                size.width, size.height
+            ));
+        }
+        let mut backend = SvgPaintBackend::new(size);
+        let painted =
+            rust_widgets::widget::runtime::paint_tree_into(root, size, Color::WHITE, &mut backend);
+        if !painted {
+            return Err(format!(
+                "root control {root} has no drawable, so no frame was painted"
+            ));
+        }
+        Ok(backend.finish())
     }
 
     /// Mounts `document`, creating one live engine for the session.
@@ -506,7 +549,8 @@ impl Preview {
         self.view_generation = engine.generation();
         self.engine = Some(engine);
         self.mounted = Some(Rc::new(document.clone()));
-        for node in &document.nodes {
+        self.mounted_json = None;
+        for node in document.nodes.iter() {
             self.install(node.node)?;
         }
         self.release_controls(removed);
@@ -514,6 +558,133 @@ impl Preview {
             widgets_created: report.widgets_created,
             issues: report.errors.len(),
             generation: self.view_generation,
+        })
+    }
+
+    /// Mounts a library JSON document — the same document `designer::generate` consumes.
+    ///
+    /// This is the seam that shares one declaration between preview and generation: the tree comes
+    /// from the library's own `json_to_view_tree`, so a keyed node is the same `Node` the generator
+    /// saw, and a later [`Self::update_json`] keeps the control it already created (focus, scroll
+    /// and selection with it). The host [`Document`] path stays for the scripted T14 model.
+    ///
+    /// Like [`Self::mount_view`], a root that creates no control is refused rather than reported
+    /// as a mounted view.
+    pub fn mount_json(
+        &mut self,
+        json: &str,
+        create: &dyn Fn(&Node) -> Option<ObjectId>,
+    ) -> Result<MountReport, String> {
+        if self.state != State::Running {
+            return Err(format!(
+                "the service is {}, so no view can be mounted",
+                self.state.name()
+            ));
+        }
+        let tree = rust_widgets::json::json_to_view_tree(json)?;
+        self.release_engine();
+        self.instances.clear();
+        self.instance_slots.clear();
+        self.updates = 0;
+
+        let created = RefCell::new(Vec::new());
+        let tracked = |node: &Node| {
+            let id = create(node);
+            if let Some(id) = id.filter(|&id| id != 0) {
+                created.borrow_mut().push(id);
+            }
+            id
+        };
+        let mut engine = ViewEngine::new();
+        let report = engine.mount_tree_shared(Rc::new(tree.root), &tracked);
+        let created = created.into_inner();
+        if report.widgets_created == 0 {
+            for id in created {
+                rust_widgets::widget::runtime::unregister(id);
+            }
+            return Err("the preview view could not be mounted: no control was created".to_owned());
+        }
+        self.view_ids.extend(created);
+        self.view_generation = engine.generation();
+        self.engine = Some(engine);
+        self.mounted = None;
+        self.mounted_json = Some(json.to_owned());
+        Ok(MountReport {
+            widgets_created: report.widgets_created,
+            issues: report.errors.len(),
+            generation: self.view_generation,
+        })
+    }
+
+    /// Applies an edited library JSON document to the mounted view.
+    ///
+    /// The engine matches nodes by the document's `id`, so an unchanged node keeps its control: an
+    /// edit that changes only a property patches, and a control that disappeared is reported in
+    /// `removed` and unregistered. A batch that could not create a control restores the last good
+    /// document on the same engine, so the session stays usable.
+    pub fn update_json(
+        &mut self,
+        json: &str,
+        create: &dyn Fn(&Node) -> Option<ObjectId>,
+    ) -> Result<UpdateReport, String> {
+        if self.state != State::Running {
+            return Err(format!(
+                "the service is {}, so no view can be updated",
+                self.state.name()
+            ));
+        }
+        if self.engine.is_none() {
+            return Err("no view is mounted, so there is nothing to update".to_owned());
+        }
+        let tree = rust_widgets::json::json_to_view_tree(json)?;
+        let previous = self.mounted_json.clone();
+
+        let created = RefCell::new(Vec::new());
+        let failures = Cell::new(0usize);
+        let tracked = |node: &Node| match create(node).filter(|&id| id != 0) {
+            Some(id) => {
+                created.borrow_mut().push(id);
+                Some(id)
+            }
+            None => {
+                failures.set(failures.get() + 1);
+                None
+            }
+        };
+        let diff = self
+            .engine
+            .as_mut()
+            .expect("the engine was checked above")
+            .update_tree_shared(Rc::new(tree.root), &tracked);
+        self.view_ids.extend(created.into_inner());
+        let removed = diff.removed.clone();
+        if failures.get() > 0 {
+            // The engine installed the failed declaration; put the last good one back so a later
+            // update still compares against it. Mounting it is authoritative, which is exactly
+            // what "restore the previous view" means.
+            if let Some(previous) = previous {
+                let _ = self.mount_json(&previous, create);
+            }
+            return Err(format!(
+                "{} control(s) could not be created; the mounted tree was only partly updated",
+                failures.get()
+            ));
+        }
+
+        self.updates = self.updates.saturating_add(1);
+        self.mounted_json = Some(json.to_owned());
+        self.view_generation = self
+            .engine
+            .as_ref()
+            .expect("the engine was checked above")
+            .generation();
+        self.release_controls(removed);
+        Ok(UpdateReport {
+            patches: diff.patch_count(),
+            replaced_subtrees: diff.replaced_subtrees,
+            positional_matches: diff.positional_matches,
+            generation: self.view_generation,
+            updates: self.updates,
         })
     }
 
@@ -589,12 +760,13 @@ impl Preview {
 
         self.updates = self.updates.saturating_add(1);
         self.mounted = Some(Rc::new(document.clone()));
+        self.mounted_json = None;
         self.view_generation = self
             .engine
             .as_ref()
             .expect("the engine was checked above")
             .generation();
-        for node in &document.nodes {
+        for node in document.nodes.iter() {
             self.install(node.node)?;
         }
         self.release_controls(removed);
@@ -639,6 +811,13 @@ impl Preview {
         }
         if self.engine.is_none() {
             return Err("no view is mounted, so no edit can be applied".to_owned());
+        }
+        // An empty batch cannot change anything, and the clone below is the whole document. Answer
+        // before paying for it; the classified edits are the only reason this method copies.
+        if update.edits.is_empty() {
+            return Ok(Decision::Noop {
+                reason: "the batch carried no live edit".to_owned(),
+            });
         }
 
         let rebuilding: Vec<&Edit> = update
@@ -843,7 +1022,7 @@ impl Preview {
         self.instances.clear();
         self.instance_slots.clear();
         self.mounted = Some(Rc::new(document.clone()));
-        for node in &document.nodes {
+        for node in document.nodes.iter() {
             self.install(node.node)?;
         }
         self.release_controls(removed);
@@ -853,6 +1032,7 @@ impl Preview {
     /// Unregisters every control this session created and drops the engine.
     fn release_engine(&mut self) {
         self.mounted = None;
+        self.mounted_json = None;
         if let Some(engine) = self.engine.take() {
             for id in std::mem::take(&mut self.view_ids) {
                 rust_widgets::widget::runtime::unregister(id);
@@ -1065,6 +1245,44 @@ mod tests {
         Document::new("group_box").with(DocumentNode::new(node(1), "line_edit", "hello"))
     }
 
+    /// A page's translated document: the shape `generate::document::to_library_document` writes.
+    const PAGE_JSON: &str = r#"{
+      "window": {
+        "id": "1",
+        "title": "Session",
+        "children": [ { "label": { "id": "2", "text": "Hello" } } ]
+      }
+    }"#;
+
+    const PAGE_EDITED: &str = r#"{
+      "window": {
+        "id": "1",
+        "title": "Session",
+        "children": [ { "label": { "id": "2", "text": "Goodbye" } } ]
+      }
+    }"#;
+
+    #[test]
+    fn cloning_a_document_shares_its_nodes_until_an_edit_writes() {
+        let document = document("alpha");
+        let copy = document.clone();
+        assert!(
+            std::sync::Arc::ptr_eq(&document.nodes, &copy.nodes),
+            "a clone must not copy every node"
+        );
+        let mut edited = copy;
+        edited.apply_live(
+            &Edit::Property("1:text=beta".to_owned()),
+            &[(1u64, 0usize)].into_iter().collect(),
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&document.nodes, &edited.nodes),
+            "the first write must copy on write"
+        );
+        assert_eq!(document.nodes[0].text, "alpha");
+        assert_eq!(edited.nodes[0].text, "beta");
+    }
+
     fn cleanup(mut preview: Preview) {
         preview.stop().expect("a stop");
         preview.finish_stop().expect("a finish");
@@ -1229,6 +1447,24 @@ mod tests {
         let index = preview.view_index().expect("an index");
         let root = index.root().expect("a root");
         assert!(runtime::is_mounted(root));
+
+        cleanup(preview);
+    }
+
+    #[test]
+    fn a_mounted_tree_paints_an_svg_frame_headlessly() {
+        let mut preview = running();
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        preview
+            .mount_view(&document("alpha"), &make)
+            .expect("a mount");
+
+        let svg = preview
+            .paint_svg(rust_widgets::core::Size::new(320, 200))
+            .expect("a frame");
+        assert!(svg.starts_with("<svg"), "{svg}");
+        assert!(svg.contains("320") && svg.contains("200"), "{svg}");
 
         cleanup(preview);
     }
@@ -1585,6 +1821,68 @@ mod tests {
         assert!(gap.contains("ViewEngine"));
         assert!(state_keep::SCROLL_GAP.contains("patch preservation"));
 
+        cleanup(preview);
+    }
+    #[test]
+    fn a_page_document_mounts_through_the_library_converter() {
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let mut preview = running();
+        let report = preview
+            .mount_json(PAGE_JSON, &make)
+            .expect("the page mounts");
+        assert_eq!(report.widgets_created, 2, "window + label: {report:?}");
+        assert_eq!(report.issues, 0);
+        assert!(preview.has_live_engine());
+        cleanup(preview);
+    }
+
+    #[test]
+    fn a_json_edit_keeps_the_control_the_document_keys() {
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let mut preview = running();
+        preview
+            .mount_json(PAGE_JSON, &make)
+            .expect("the page mounts");
+        let before = preview.control_ids();
+        let report = preview
+            .update_json(PAGE_EDITED, &make)
+            .expect("the edit applies");
+        assert_eq!(report.patches, 1, "only the text changed: {report:?}");
+        assert_eq!(report.replaced_subtrees, 0);
+        assert_eq!(
+            preview.control_ids(),
+            before,
+            "a keyed node keeps its control across the edit"
+        );
+        cleanup(preview);
+    }
+
+    #[test]
+    fn an_unchanged_json_reload_touches_nothing() {
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let mut preview = running();
+        preview
+            .mount_json(PAGE_JSON, &make)
+            .expect("the page mounts");
+        let report = preview.update_json(PAGE_JSON, &make).expect("the reload");
+        assert_eq!(report.patches, 0, "{report:?}");
+        assert_eq!(report.updates, 1);
+        cleanup(preview);
+    }
+
+    #[test]
+    fn a_malformed_page_document_is_refused_rather_than_mounted_empty() {
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let mut preview = running();
+        let error = preview
+            .mount_json("{\"window\": ", &make)
+            .expect_err("a malformed document");
+        assert!(!error.is_empty());
+        assert!(!preview.has_live_engine(), "nothing was mounted");
         cleanup(preview);
     }
 }

@@ -552,7 +552,7 @@ fn incremental_change(old: &str, new: &str) -> Option<crate::app::language::prot
 }
 
 /// The language id an editor would send for a path's extension.
-fn language_id(path: &str) -> &'static str {
+pub(super) fn language_id(path: &str) -> &'static str {
     match path.rsplit('.').next().unwrap_or_default() {
         "rs" => "rust",
         "json" => "json",

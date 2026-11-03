@@ -88,6 +88,11 @@ pub(super) struct WorkbenchLayout {
     /// cannot disagree with [`crate::app::shell::groups::Groups`] about whether the editor is
     /// split.
     groups: u32,
+    /// Whether the toolbar row takes vertical space. A hidden toolbar must not leave its height
+    /// reserved, so the flag is part of the layout rather than only a widget visibility switch.
+    toolbar: bool,
+    /// Whether the status bar takes vertical space, for the same reason.
+    status: bool,
 }
 
 impl WorkbenchLayout {
@@ -96,7 +101,21 @@ impl WorkbenchLayout {
         Self {
             placements: Vec::new(),
             groups: groups.max(1),
+            toolbar: true,
+            status: true,
         }
+    }
+
+    /// Shows or hides the toolbar's row.
+    pub(super) fn showing_toolbar(mut self, showing: bool) -> Self {
+        self.toolbar = showing;
+        self
+    }
+
+    /// Shows or hides the status bar's row.
+    pub(super) fn showing_status(mut self, showing: bool) -> Self {
+        self.status = showing;
+        self
     }
 
     /// Registers `id` at `area`. Registering the same widget twice keeps the last place, which
@@ -124,10 +143,21 @@ impl WorkbenchLayout {
             .saturating_sub(if left_width > 0 { GAP } else { 0 })
             .saturating_sub(if right_width > 0 { GAP } else { 0 });
         let toolbar_y = rect.y + MENU_HEIGHT as i32 + GAP as i32;
-        let content_top = toolbar_y + TOOLBAR_HEIGHT as i32 + GAP as i32;
-        let status_y = rect.y + height.saturating_sub(STATUS_HEIGHT) as i32;
+        let content_top = if self.toolbar {
+            toolbar_y + TOOLBAR_HEIGHT as i32 + GAP as i32
+        } else {
+            toolbar_y
+        };
+        let (status_y, bottom_margin) = if self.status {
+            (
+                rect.y + height.saturating_sub(STATUS_HEIGHT) as i32,
+                GAP as i32,
+            )
+        } else {
+            (rect.y + height as i32, 0)
+        };
         let bottom_height = (height / 7).clamp(90, 150);
-        let bottom_y = status_y - GAP as i32 - bottom_height as i32;
+        let bottom_y = status_y - bottom_margin - bottom_height as i32;
         let content_height = (bottom_y - GAP as i32 - content_top).max(0) as u32;
 
         // The region shapes are still the workbench's own (this chrome is not a document subtree),
@@ -162,6 +192,11 @@ impl WorkbenchLayout {
 
         let mut out = Vec::with_capacity(self.placements.len());
         for (id, area) in &self.placements {
+            if (!self.toolbar && matches!(area, Area::Toolbar { .. }))
+                || (!self.status && matches!(area, Area::Status))
+            {
+                continue;
+            }
             let placed = match *area {
                 Area::Menu => Rect::new(rect.x, rect.y, width, MENU_HEIGHT),
                 Area::Toolbar { index, count } => {
@@ -374,6 +409,38 @@ mod tests {
             out.insert(id, rect);
         });
         out
+    }
+
+    #[test]
+    fn hiding_the_chrome_gives_its_rows_back_to_the_content() {
+        fn single(show_toolbar: bool, show_status: bool) -> BTreeMap<u64, Rect> {
+            let mut layout = WorkbenchLayout::new(1)
+                .showing_toolbar(show_toolbar)
+                .showing_status(show_status);
+            layout
+                .place(1, Area::Menu)
+                .place(2, Area::Toolbar { index: 0, count: 1 })
+                .place(3, Area::Editor { group: 0 })
+                .place(4, Area::Status);
+            let mut out = BTreeMap::new();
+            layout.update(Rect::new(0, 0, 1200, 800), &mut |id, rect| {
+                out.insert(id, rect);
+            });
+            out
+        }
+
+        let shown = single(true, true);
+        let hidden = single(false, false);
+        assert!(!hidden.contains_key(&2), "a hidden toolbar is not placed");
+        assert!(
+            !hidden.contains_key(&4),
+            "a hidden status bar is not placed"
+        );
+        assert!(hidden[&3].y < shown[&3].y, "the editor starts higher");
+        assert!(
+            hidden[&3].height > shown[&3].height,
+            "the editor takes the freed rows"
+        );
     }
 
     #[test]

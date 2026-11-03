@@ -455,7 +455,7 @@ impl Load {
             preview.mount_view(document, &create)?;
 
             let mut next = document.clone();
-            if let Some(node) = next.nodes.first_mut() {
+            if let Some(node) = std::sync::Arc::make_mut(&mut next.nodes).first_mut() {
                 node.text = format!("{viewport} cycle {}", step + 1);
             }
             preview.update_view(&next, &create)?;

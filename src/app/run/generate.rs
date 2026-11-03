@@ -17,7 +17,7 @@ use super::*;
 /// and [`crate::app::generate::document::to_library_document`] is the one translation between them.
 /// Without this branch the design model could never reach the generator, which is the J01/J06 seam
 /// (principle #26: a translation with no consumer is not an integration).
-fn read_document(path: &str) -> Result<String, String> {
+pub(super) fn read_document(path: &str) -> Result<String, String> {
     use crate::project::record::json;
 
     let text = read(path)?;
@@ -42,6 +42,15 @@ fn read_document(path: &str) -> Result<String, String> {
     // directory.
     let root = root_of(std::path::Path::new(path)).map_err(|refusal| refusal.message())?;
     let page = PageDocument::parse(&root, path, &text).map_err(|error| error.message())?;
+    let unconsumed = page.unconsumed_by_generator();
+    if !unconsumed.is_empty() {
+        return Err(format!(
+            "{} carries {} which the generator does not consume; generation was refused rather \
+             than dropping them",
+            page.path().display(),
+            unconsumed.join(", ")
+        ));
+    }
     let root_id = page.page().root();
     crate::app::generate::document::to_library_document(root_id, page.nodes())
 }

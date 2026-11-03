@@ -243,6 +243,82 @@ impl Collection {
         collection
     }
 
+    /// Rebuilds a collection from parts a document read, refusing one that is not a collection.
+    ///
+    /// The next identities continue after the greatest id in the file, so a later [`Self::add_row`]
+    /// or [`Self::add_column`] cannot reuse an identity the document already gave out. Every rule
+    /// [`Self::validate`] checks applies, plus the role rules: a badge has a label, a reference
+    /// names a row in this collection, a row has at most one cell per column, a header is not blank,
+    /// and `origin` agrees with whether a source contract is present.
+    pub fn restore(
+        control: NodeId,
+        origin: Origin,
+        columns: Vec<Column>,
+        rows: Vec<Row>,
+        source: Option<SourceContract>,
+    ) -> Result<Self, String> {
+        let next_column = columns
+            .iter()
+            .map(|column| column.id.get())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let next_row = rows.iter().map(|row| row.id.get()).max().unwrap_or(0) + 1;
+        let collection = Self {
+            control,
+            origin,
+            columns,
+            rows,
+            source,
+            next_row,
+            next_column,
+        };
+        collection.validate()?;
+        for column in &collection.columns {
+            if column.header.trim().is_empty() {
+                return Err(format!("column {} has an empty header", column.id.get()));
+            }
+            match &column.role {
+                CellRole::Badge(label) if label.trim().is_empty() => {
+                    return Err(format!("column {} has an empty badge", column.id.get()));
+                }
+                CellRole::Reference(row) if collection.row(*row).is_none() => {
+                    return Err(format!(
+                        "column {} references unknown row {}",
+                        column.id.get(),
+                        row.get()
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for row in &collection.rows {
+            let mut seen = BTreeSet::new();
+            for cell in &row.cells {
+                if !seen.insert(cell.column) {
+                    return Err(format!(
+                        "row {} has two cells for column {}",
+                        row.id.get(),
+                        cell.column.get()
+                    ));
+                }
+            }
+        }
+        match (collection.origin, &collection.source) {
+            (Origin::Source, None) => Err("a source collection needs a source contract".to_owned()),
+            (Origin::Sample, Some(_)) => {
+                Err("a sample collection cannot carry a source contract".to_owned())
+            }
+            (Origin::Source, Some(source)) => {
+                if source.adapter.trim().is_empty() {
+                    return Err("the source adapter is empty".to_owned());
+                }
+                Ok(collection)
+            }
+            (Origin::Sample, None) => Ok(collection),
+        }
+    }
+
     /// Adds a column and answers its identity.
     pub fn add_column(&mut self, header: &str, role: CellRole) -> ColumnId {
         let id = ColumnId(self.next_column);
@@ -576,5 +652,51 @@ mod tests {
     #[test]
     fn a_well_formed_collection_validates() {
         assert!(sample().validate().is_ok());
+    }
+
+    #[test]
+    fn restore_continues_after_the_greatest_identity_and_checks_the_roles() {
+        use super::{Cell, CellRole, Column, ColumnId, Origin, Row, RowId};
+        let columns = vec![
+            Column {
+                id: ColumnId::from_raw(4),
+                header: "Name".to_owned(),
+                role: CellRole::Text,
+            },
+            Column {
+                id: ColumnId::from_raw(9),
+                header: "Next".to_owned(),
+                role: CellRole::Reference(RowId::from_raw(7)),
+            },
+        ];
+        let rows = vec![Row {
+            id: RowId::from_raw(7),
+            cells: vec![Cell {
+                column: ColumnId::from_raw(4),
+                value: "Write".to_owned(),
+            }],
+        }];
+        let mut collection = super::Collection::restore(
+            crate::contracts::identity::NodeId::from_raw(2),
+            Origin::Sample,
+            columns,
+            rows,
+            None,
+        )
+        .expect("a valid collection");
+        assert_eq!(collection.add_row(), RowId::from_raw(8));
+        assert_eq!(
+            collection.add_column("Extra", CellRole::Text),
+            ColumnId::from_raw(10)
+        );
+
+        let broken = super::Collection::restore(
+            crate::contracts::identity::NodeId::from_raw(2),
+            Origin::Source,
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        assert!(broken.unwrap_err().contains("needs a source contract"));
     }
 }

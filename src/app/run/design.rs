@@ -169,6 +169,38 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
                 }
                 Ok(lines)
             }
+            // The completeness check the palette runs before it claims a control is fully
+            // described: what the manifest answered for properties, events, commands and child
+            // rules, and which controls answered nothing. A manifest that could not be read or a
+            // dangling child/alias target is a hard failure; "no commands" alone is not.
+            "audit" => {
+                let lines = catalog.audit();
+                let problems = catalog.audit_problems();
+                if problems.is_empty() {
+                    let mut lines = lines;
+                    lines.push("audit: clean".to_owned());
+                    Ok(lines)
+                } else {
+                    for line in &lines {
+                        println!("{line}");
+                    }
+                    for problem in &problems {
+                        println!("problem: {problem}");
+                    }
+                    return report(format!("{} catalog audit problem(s)", problems.len()));
+                }
+            }
+            // H-31: the icon picker's list, from the contract's own icon tokens rather than a
+            // hand-maintained copy.
+            "icons" => {
+                let names: Vec<&str> = rust_widgets::widget::IconName::ALL
+                    .iter()
+                    .map(|icon| icon.as_str())
+                    .collect();
+                let mut notes = vec![format!("icons: {} token(s)", names.len())];
+                notes.extend(names.iter().map(|name| format!("  icon: {name}")));
+                Ok(notes)
+            }
             "profile" | "show" => Ok(Vec::new()),
             "limit" => match argument.split_once(':') {
                 Some((id, note)) => {
@@ -211,6 +243,18 @@ pub(super) fn catalog(options: &crate::cli::CatalogOptions) -> bool {
                             .iter()
                             .map(|event| format!("  event {}", event.render())),
                     );
+                    notes.extend(
+                        descriptor
+                            .commands
+                            .iter()
+                            .map(|command| format!("  command {}", command.render())),
+                    );
+                    if descriptor.is_container() {
+                        notes.push(format!("  children: {}", descriptor.children.join(", ")));
+                    }
+                    if !descriptor.alias_of.is_empty() {
+                        notes.push(format!("  alias of: {}", descriptor.alias_of));
+                    }
                     if let Some(reason) = descriptor.support.reason() {
                         notes.push(format!("  support: {reason}"));
                     }

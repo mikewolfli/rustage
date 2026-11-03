@@ -361,14 +361,13 @@ mod tests {
         let context = Context::in_area("design");
         let recents = Recents::new(5);
 
-        let hits = search(&registry, &context, "save", &recents);
-        let ids: Vec<&str> = hits.iter().map(|entry| entry.id()).collect();
-        assert!(ids.contains(&"file.save"), "{ids:?}");
-        assert!(ids.contains(&"file.save-all"), "{ids:?}");
-        assert!(!ids.contains(&"edit.undo"), "{ids:?}");
-
         let hits = search(&registry, &context, "undo", &recents);
-        assert_eq!(hits[0].id(), "edit.undo");
+        let ids: Vec<&str> = hits.iter().map(|entry| entry.id()).collect();
+        assert!(ids.contains(&"edit.undo"), "{ids:?}");
+        assert!(!ids.contains(&"edit.redo"), "{ids:?}");
+
+        let hits = search(&registry, &context, "redo", &recents);
+        assert_eq!(hits[0].id(), "edit.redo");
     }
 
     #[test]
@@ -385,13 +384,13 @@ mod tests {
         assert!(build.reason().unwrap().contains("not trusted"), "{build:?}");
         assert!(build.render().contains("not trusted"));
 
-        // file.save is always available and carries no reason.
-        let save = search(&registry, &context, "file.save", &Recents::new(5))
+        // edit.undo is always available and carries no reason.
+        let undo = search(&registry, &context, "edit.undo", &Recents::new(5))
             .into_iter()
-            .find(|entry| entry.id() == "file.save")
-            .expect("file.save is a hit");
-        assert!(save.is_enabled());
-        assert!(save.reason().is_none());
+            .find(|entry| entry.id() == "edit.undo")
+            .expect("edit.undo is a hit");
+        assert!(undo.is_enabled());
+        assert!(undo.reason().is_none());
     }
 
     #[test]
@@ -482,7 +481,7 @@ mod tests {
         );
 
         assert!(
-            help_for(&registry, "file.save")
+            help_for(&registry, "edit.undo")
                 .unwrap()
                 .params()
                 .is_empty()

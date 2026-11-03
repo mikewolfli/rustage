@@ -1264,7 +1264,7 @@ pub fn apply(plan: &Plan, document: &mut DocumentStore) -> Outcome {
             inverse: None,
         };
     }
-    let Some(set) = plan.set.clone() else {
+    let Some(set) = plan.set.as_ref() else {
         return Outcome {
             applied: false,
             from,
@@ -1403,7 +1403,7 @@ pub fn store_of(
         ops,
     )
     .ok_or(BatchRefusal::NothingToDo)?;
-    let outcome = store.apply(set);
+    let outcome = store.apply(&set);
     if let Some(rejection) = outcome.rejection() {
         return Err(BatchRefusal::NotAModel {
             reason: format!("the file's nodes were refused: {}", rejection.message()),

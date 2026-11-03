@@ -54,7 +54,7 @@
 
 | 任务ID | 名称 | 判定 | 缺口描述 | 证据(文件:行) |
 |---|---|---|---|---|
-| T05.02 | §3 菜单树 | 部分 | 机制完整（唯一 ID、problems 校验），但注册命令仅约 13 个、GUI 菜单仅 File/View/Layout/Editor 4 组，远低于 §3.2 约 70 组叶命令总账 | ⚙ `src/app/commands/command.rs:798-900`；⚙ `src/app/run/workbench_gui.rs:1525-1552`；`src/app/commands/menu.rs:222-270` |
+| T05.02 | §3 菜单树 | 部分 | 机制与“注册即能跑”已闭环（136 条注册命令 ↔ 136 个处理器，视图/面板组覆盖 §2.2 全部 42 条 ID），仍低于 §3.2 约 70 组叶命令总账 | ⚙ `src/app/commands/command.rs`；⚙ `src/app/run/workbench_gui.rs`；`src/app/commands/menu.rs`； log §51–§100 |
 | T11.04 | 设计令牌与主题 | 部分 | roadmap 声明主题读写复用 `ThemeManager::load/save_theme`，全仓无 ThemeManager 引用；`design_tokens.rs` 自研内存 TokenSet，无主题文件读写 | `src/app/style/design_tokens.rs:160-251`；上游 `rust-widgets/src/theme/manager.rs:455` |
 | T11.03 | CSS 检查器 | 部分 | roadmap 声明检查器消费 `css_trace`，全仓无 css_trace 引用，`css_view.rs` 自研解析/特异性计算 | `src/app/style/css_view.rs:50-122`；上游 `rust-widgets/src/style/mod.rs:54` |
 | T13.02 | 类型化绑定 | 部分 | roadmap 声明复用 `Binding<T>`/`BindingPipeline`/`bind_widget_property`，全仓无引用，自研 Conversion/Graph；`report.rs` 已如实登记 not consumed；验收由自研测试达成 | `src/app/quality/report.rs:538-539`；`src/app/data/binding.rs:1-30,651-808` |
@@ -244,6 +244,29 @@ SPDX 头 350/351。主要缺口集中在**静默丢弃 Result 的可诊断性**�
 
 ### 合规亮点（无需改动，避免误改）
 
+**2026-11-03 复核（log §79/§81）：O 表当前状态**
+
+（上面的 O 表保留最初的扫描记录；若与本节不一致，以本节为当前事实。）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| O-1 | 已关闭 | `nodes` 为 `BTreeMap`，`nodes()` 一次遍历（`workbench_scene.rs:106,703`） |
+| O-2 | 已关闭 | 快照只在版本号变化时重建（`workbench_gui.rs:3041`） |
+| O-3 | 已关闭 | `Arc<[CanvasNode]>`，无逐帧深拷贝（`workbench_gui.rs:801-805`） |
+| O-4 | 已收窄 | 行号缓存 + 选择变化不重建；§80 去掉了整表克隆与逐行缩进分配；逐行改文本等上游 setter |
+| O-5 | 已关闭 | 字体 `OnceLock`，标签只在重建时算（`workbench_gui.rs:3118`） |
+| O-6 | 部分关闭 | `Document.nodes: Arc<Vec<_>>` 已 COW（`preview_service.rs:152`）；宿主 `build()` 仍整树重建，JSON 路径已走库 diff |
+| O-7 | 已关闭 | `instance_slots` 映射替代线性查找（`preview_service.rs:1099-1111`） |
+| O-8 | 已关闭 | `apply_live` 接收 `index: &BTreeMap<u64, usize>`（`preview_service.rs:177-181`） |
+| O-9 | 已关闭 | `release_controls` 回收被替换的 control id（`preview_service.rs:931-940`） |
+| O-10 | 已关闭 | `DocumentStore::apply` 改为借用 `&ChangeSet`（`store.rs`），`batch::apply` 不再 `plan.set.clone()`；inverse 仍从 ops 派生 |
+| O-11 | 已关闭 | staged 表现存 `Staged::Set(index)`/`Cleared`，不再克隆全值（`batch.rs:839`） |
+| O-12 | 已关闭 | 一次 `keys()` + `HashMap`（`state_keep.rs:228-247`） |
+| O-13 | 已关闭 | `check_unique` 用 `BTreeSet`（`format.rs:2498-2509`） |
+| O-14 | 已关闭 | `check_generated_sources` 预建 `HashSet`（`format.rs:2613-2636`） |
+| O-15 / O-17 | 不适用 | 已有结论：O-15 只在测试路径；O-17 是 CLI 边界的有意同步（log 早期条目） |
+| O-16 | 受上游限制 | `NodeProperties::with` 需要 owned `PropertyName`，`common()` 每节点克隆一次；宿主无法在不改库 API 的前提下消除 |
+
 - `src/app/canvas/scene.rs:163,380-382`：SceneIndex 用 `OnceLock` 按 generation 惰性缓存，符合 #23。
 - `src/contracts/store.rs:139-176`：`DocumentStore::apply` 经 WorkingSet 只落 touched 节点，编辑成本与改动范围成正比。
 - `src/host/readiness.rs:1517-1522`：进程探针为启动一次性；`workbench_gui.rs:3016` 50ms 菜单轮询开销可忽略。
@@ -330,3 +353,55 @@ SPDX 头 350/351。主要缺口集中在**静默丢弃 Result 的可诊断性**�
   与 `src/project/document/{history,closing,conflict,recovery,buffer}.rs` 的逐行效率审计、`format.rs` encode_* 函数群逐行、
   实际运行时验证（本轮未运行任何构建/测试/程序）。
 - 所有结论为静态阅读所得；标注 ⚙ 的条目已由主审计对源码原文二次核实。
+
+---
+
+## 复核结论（2026-11-03）
+
+> 基线：rust-widgets **4.0.0（`1a30785`）**；Linux x86_64 / rustc 1.98.1。
+> 证据：[log-20261103-1.md](../log/log-20261103-1.md)、[support-matrix.md](support-matrix.md)、
+> [feedback-20261103.md](../rw-feedback/feedback-20261103.md)。
+> 本节只记录**当前状态**，不修改上面的历史扫描结论。
+
+### 已关闭
+
+| 原条目 | 当前证据 |
+|---|---|
+| task T11.03 CSS 检查器 | `src/app/style/css_view.rs:551-575` 消费上游 `style::css_trace::trace_cascade`。 |
+| task T11.04 设计令牌/主题 | `src/app/style/design_tokens.rs:249-348` 使用 `ThemeManager::load_theme_named`/`save_theme`。 |
+| task T13.02 类型化绑定 | `src/app/data/binding.rs:202-250` 使用 `rust_widgets::data_binding::BindingPipeline`。 |
+| task T01.02 剪贴板 | `src/host/clipboard.rs` 用上游 `platform::clipboard::ClipboardContent` 区分文本/非文本/空/不可用；富内容写路径按路线图属 T05.06。 |
+| task T23.11 MCP 接缝 | `src/app/ai/mcp.rs` + `src/app/run/ai.rs` 的 `mcp-server`/`mcp-start`/`tool-mcp` 操作。 |
+| task T23.12 双 agent 治理 | `src/app/ai/workflow.rs:528-586` 的 `Handoff` 绑定候选摘要与修订，含冲突拒绝与材料清理清单。 |
+| task T24.07 入门 | `src/app/run/workbench_gui.rs:3187,3217,3242` 的 `open_onboarding`。 |
+| task T22.07 扩展文档 | `docs/extension-development.md` 已存在。 |
+| task T24.10 宿主 i18n 工具 | `src/app/locale/tools.rs` 的键提取、伪本地化与 audit。 |
+| language L-1..L-5 | `language/en.json` / `language/zh-Hans.json`（各 240 键）；`workbench_gui.rs:209,999-1064` 用上游 `translate`/`pump_hot_reload`，菜单/工具栏/面板名走键。 |
+| widgets W-2a 命令面板 | `workbench_gui.rs` 已挂载上游 `CommandPalette`（`workbench_palette.rs` 仅保留模型）。 |
+| widgets W-2f SceneIndex | 仍保留，但上游 4.0.0 的 `TreeIndex::build` 仍是 `pub(crate)`（`src/view/identity.rs:211`），不是宿主可单方面关闭的项。 |
+| issues I-1/I-2/I-3 静默失败 | join/stop/terminate 均改为记录 `Level::Warn`（`host/subprocess.rs:733-743`、`host/lsp.rs:308-343`、`host/pty.rs:269`、`app/run/gui_smoke.rs:383`）。 |
+| issues I-8/I-13/I-14/I-16 | 死门面已有消费者；GUI 注册/显示失败走 `warn_failure`；SBOM 失败改为 `map_err`；`src/main.rs` 已有 SPDX 头。 |
+| issues I-9/I-15/I-18 | LSP `method` 已消费；`ptsname` 已加锁并写 SAFETY；`run/mod.rs` 1918 行、`cli/command/mod.rs` 1820 行，均低于 2000 行。 |
+| optimized O-1..O-5 | `CanvasState.nodes` 已是 `BTreeMap`；画布快照按 revision 复用并共享 `Arc<[CanvasNode]>`；字体用 `OnceLock`；Outline 按 content revision 增量重建。 |
+| optimized O-7..O-9/O-12..O-14 | 实例槽位、批内索引、被移除 id 回收、一次 `keys()` 建映射、`BTreeSet` 判重、预建索引均已落地。 |
+| optimized O-15/O-17 | O-15 的 `key_of` 只在测试/未来面板路径；O-17 本来就是“CLI 边界保持同步、进 GUI 再走工作线程”的设计，不需要改。 |
+| optimized O-16 | `Editor::set` 已改为收 `&PropertyName`，多选应用不再逐节点克隆属性名。 |
+| optimized O-6 | `Document.nodes` 改为分享向量（`Arc<Vec<DocumentNode>>`）的写时复制：一次活体编辑批的两次 `Document` 克隆都变成引用计数递增，真正的节点拷贝只在第一次写入时发生一次；全部编辑都不改变文档的批次一次深拷贝也不做（`cloning_a_document_shares_its_nodes_until_an_edit_writes` 断言 `Arc::ptr_eq`）。空批次早退保留。见 log §50。 |
+| blue22 H-33 原则镜像 | 新增两个宿主测试：目录的每个属性/事件/方法/子项必须等于 manifest；每个 kind 必须由同一个工厂构造（`widget_catalog.rs` 测试）。 |
+| §2.2 面板装配 | 默认会话 `42 required, 14 shown, 26 hidden, 0 unavailable, 0 missing, 2 deferred`；带 `--project` 时 `project` 显示、`layout` 可切换。42 个必需面板全部接线，`missing` 归零；剩余 `deferred` 是 roadmap 本就标为未来扩展的 `panel.profiler` / `panel.memory`。`source` 见 log §42/§44，`layout` 见 log §48。 |
+| 4.0.0 suites 控件 | 宿主启用 `webview`/`finance`/`media-playback` 三组后，控件目录 242 → **261 kind**（新增 19：K 线/量/深度/盘口/报价/指标、视频/Lottie/Rive/音频/相机/章节、媒体播放/进度/字幕、Web 引擎/查找/历史）；属性/方法/事件/能力逐项实测见 feedback-20261103 §RW-106/107；`maps`/`project`/`devtools` 因上游 RW-105 暂不启用。 |
+
+### 仍开放
+
+| 条目 | 现状与原因 |
+|---|---|
+| task T05.02 菜单总账 | `src/app/commands/menu.rs::built_in` 现为 File/Edit/View/Navigate/Design/Build/Run/Preview/Version Control/Terminal/Test/Help/Project/Debug 十四组；GUI 额外挂 Quit、Layout、Editor 与面板开关。**2026-11-03 已收口到“注册即能跑”**（log §51–§100）：`HANDLED_COMMANDS` 与注册表集合相等（136 条，有测试），`edit.undo`/`edit.redo` 接库 `CodeEditor` 历史、`build.run` 复用 Build 面板的同一提交，视图/布局/编辑区动作、`view.panel-show`、视图/显示组的工具栏/状态栏/缩放、视图/工作区组的载入/锁定/专注/全屏、画布缩放/网格/标尺、运行启停、构建取消/复制输出、预览启停、VCS 刷新、终端启停、运行测试、运行输出清除/复制、帮助参考、工程校验/扫描/迁移预览/引用检查、调试启停/继续/单步、选择折叠/多光标、七种视图模式、项目路径复制/显示、面板隐藏/恢复、预览重建、编辑文本/选择、跳转到行、快速打开文件、文件/工作区符号跳转、在当前文件管理器中定位当前文件、代码定义/声明/类型定义/实现/引用与前进/后退、结构选择扩大/缩小、折叠/展开与大纲/面包屑、关闭已保存文档、构建检查/重建/复制实际命令/定位首个错误、测试失败重跑/停止、重新打开关闭的文档、编辑区组菜单与移动标签页、调试暂停/单步进入/跳出、内联提示/书签、文件保存/全部保存/另存为/保存副本与工程信任、当前文件测试、未引用资源清理、操作历史/关闭工程/复制节点 ID、编辑菜单的剪贴板/查找组与导航/设计组都走注册表；面板菜单的动作串可带 `?panel=panel.*` 参数，候选值就是 §2.2 的 42 条账目。`file.save*`/`panel.close`/`tree.activate` 因无实现而注销、解绑键盘、只在菜单账目里保留 `Planned` 任务号。§3.2 剩余叶组仍需逐组实现（真实功能，不能用 `Planned` 冒充）。 |
+| widgets W-2f / TreeIndex | 上游仍未公开 `TreeIndex::build`；宿主 `SceneIndex` 的适配器注释保留。 |
+
+
+### 结论
+
+- 控件复用与 i18n 的结构性偏差已关闭；本轮新增的目录 `audit`/`icons` 与
+  `commands`/`children`/`constraints` 暴露使“属性/方法/事件/能力”可逐项核对。
+- §2.2 的 42 个面板已全部接线（`missing` 归零）；
+- 最大剩余面只剩 **T05.02 的命令总账**：它依赖真实命令实现，不属于可以机械补齐的条目。

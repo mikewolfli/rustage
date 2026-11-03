@@ -16,7 +16,12 @@ use super::*;
 #[derive(Debug, PartialEq, Eq)]
 pub struct PreviewOptions {
     /// The operations: `start:<session>`, `ready`, `spawn:<pid>`, `install:<node>`, `rebuild:<node>`,
-    /// `stop`, `finish-stop`, `clean`, `state`, `show`.
+    /// `mount:<root>:<node>:<kind>:<text>`, `update:<node>:<kind>:<text>`,
+    /// `mount-page:<page-document>`, `update-page:<page-document>`, `unwired`,
+    /// `paint:<path>:<width>x<height>`, `stop`, `finish-stop`, `clean`, `state`, `show`.
+    ///
+    /// `mount-page`/`update-page` mount the page's translated library document — the same one
+    /// `--generate` consumes — so a preview and a generated program run one declaration.
     pub ops: Vec<String>,
 }
 

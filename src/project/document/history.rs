@@ -653,7 +653,7 @@ impl History {
                 reason: "the entry holds no operations to undo".to_owned(),
             };
         };
-        let outcome = document.apply(inverse);
+        let outcome = document.apply(&inverse);
         let applied = outcome.is_applied();
         if applied {
             self.next -= 1;
@@ -695,7 +695,7 @@ impl History {
                 applied = false;
                 break;
             };
-            let outcome = document.apply(rebased);
+            let outcome = document.apply(&rebased);
             ended = outcome.revision();
             if let Some(refused) = outcome.rejection() {
                 applied = false;
@@ -1468,7 +1468,7 @@ mod tests {
         )
         .expect("a change set");
         let from = store.revision();
-        let outcome = store.apply(set.clone());
+        let outcome = store.apply(&set);
         assert!(outcome.is_applied(), "{outcome:?}");
         let to = store.revision();
         let edit = model_edit_of(View::Canvas, "add a label", set, from, to);

@@ -1,6 +1,69 @@
 {
   "language": "en",
   "translations": {
+    "cmd.build.cancel.category": {
+      "message": "Build"
+    },
+    "cmd.build.cancel.description": {
+      "message": "ask the running build to stop"
+    },
+    "cmd.build.cancel.title": {
+      "message": "Cancel Build"
+    },
+    "cmd.build.check.category": {
+      "message": "Build"
+    },
+    "cmd.build.check.description": {
+      "message": "type-check the project without producing a binary"
+    },
+    "cmd.build.check.title": {
+      "message": "Check"
+    },
+    "cmd.build.clean.category": {
+      "message": "Build"
+    },
+    "cmd.build.clean.description": {
+      "message": "remove this package's artifacts without building"
+    },
+    "cmd.build.clean.title": {
+      "message": "Clean"
+    },
+    "cmd.build.copy-command.category": {
+      "message": "Build"
+    },
+    "cmd.build.copy-command.description": {
+      "message": "copy the cargo command the last build actually ran"
+    },
+    "cmd.build.copy-command.title": {
+      "message": "Copy Build Command"
+    },
+    "cmd.build.copy-output.category": {
+      "message": "Build"
+    },
+    "cmd.build.copy-output.description": {
+      "message": "copy the build log to the clipboard"
+    },
+    "cmd.build.copy-output.title": {
+      "message": "Copy Build Output"
+    },
+    "cmd.build.locate-first-error.category": {
+      "message": "Build"
+    },
+    "cmd.build.locate-first-error.description": {
+      "message": "open the first source location the build output names"
+    },
+    "cmd.build.locate-first-error.title": {
+      "message": "Go to First Error"
+    },
+    "cmd.build.rebuild.category": {
+      "message": "Build"
+    },
+    "cmd.build.rebuild.description": {
+      "message": "remove this package's artifacts, then build again"
+    },
+    "cmd.build.rebuild.title": {
+      "message": "Rebuild"
+    },
     "cmd.build.run.category": {
       "message": "Build"
     },
@@ -9,6 +72,258 @@
     },
     "cmd.build.run.title": {
       "message": "Run"
+    },
+    "cmd.code.bookmark-toggle.category": {
+      "message": "Code"
+    },
+    "cmd.code.bookmark-toggle.description": {
+      "message": "add or remove a bookmark on the caret line"
+    },
+    "cmd.code.bookmark-toggle.title": {
+      "message": "Toggle Bookmark"
+    },
+    "cmd.code.breadcrumbs.category": {
+      "message": "Code"
+    },
+    "cmd.code.breadcrumbs.description": {
+      "message": "name the symbols containing the caret"
+    },
+    "cmd.code.breadcrumbs.title": {
+      "message": "Show Breadcrumbs"
+    },
+    "cmd.code.fold-all.category": {
+      "message": "Code"
+    },
+    "cmd.code.fold-all.description": {
+      "message": "fold every multi-line block in the document"
+    },
+    "cmd.code.fold-all.title": {
+      "message": "Fold All"
+    },
+    "cmd.code.fold.category": {
+      "message": "Code"
+    },
+    "cmd.code.fold.description": {
+      "message": "fold the block at the caret"
+    },
+    "cmd.code.fold.title": {
+      "message": "Fold Block"
+    },
+    "cmd.code.inlay-hints.category": {
+      "message": "Code"
+    },
+    "cmd.code.inlay-hints.description": {
+      "message": "show or hide inlay hints without discarding them"
+    },
+    "cmd.code.inlay-hints.title": {
+      "message": "Toggle Inlay Hints"
+    },
+    "cmd.code.outline.category": {
+      "message": "Code"
+    },
+    "cmd.code.outline.description": {
+      "message": "show the source outline panel"
+    },
+    "cmd.code.outline.title": {
+      "message": "Show Outline"
+    },
+    "cmd.code.unfold-all.category": {
+      "message": "Code"
+    },
+    "cmd.code.unfold-all.description": {
+      "message": "unfold every collapsed region"
+    },
+    "cmd.code.unfold-all.title": {
+      "message": "Unfold All"
+    },
+    "cmd.code.unfold.category": {
+      "message": "Code"
+    },
+    "cmd.code.unfold.description": {
+      "message": "unfold the region at the caret"
+    },
+    "cmd.code.unfold.title": {
+      "message": "Unfold Block"
+    },
+    "cmd.debug.continue.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.continue.description": {
+      "message": "continue to the next breakpoint or the end"
+    },
+    "cmd.debug.continue.title": {
+      "message": "Continue"
+    },
+    "cmd.debug.pause.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.pause.description": {
+      "message": "pause the running debuggee"
+    },
+    "cmd.debug.pause.title": {
+      "message": "Pause"
+    },
+    "cmd.debug.start.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.start.description": {
+      "message": "start a session with the selected node as its breakpoint anchor"
+    },
+    "cmd.debug.start.title": {
+      "message": "Start Debugging"
+    },
+    "cmd.debug.step-in.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.step-in.description": {
+      "message": "step into the call on the current line"
+    },
+    "cmd.debug.step-in.title": {
+      "message": "Step Into"
+    },
+    "cmd.debug.step-out.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.step-out.description": {
+      "message": "step out of the current frame"
+    },
+    "cmd.debug.step-out.title": {
+      "message": "Step Out"
+    },
+    "cmd.debug.step.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.step.description": {
+      "message": "step over one line in the session"
+    },
+    "cmd.debug.step.title": {
+      "message": "Step Over"
+    },
+    "cmd.debug.stop.category": {
+      "message": "Debug"
+    },
+    "cmd.debug.stop.description": {
+      "message": "end the session and terminate the adapter"
+    },
+    "cmd.debug.stop.title": {
+      "message": "Stop Debugging"
+    },
+    "cmd.design.actual-size.category": {
+      "message": "Design"
+    },
+    "cmd.design.actual-size.description": {
+      "message": "show the design surface at one screen pixel per design pixel"
+    },
+    "cmd.design.actual-size.title": {
+      "message": "Actual Size"
+    },
+    "cmd.design.fit.category": {
+      "message": "Design"
+    },
+    "cmd.design.fit.description": {
+      "message": "scale the design surface to fit its control"
+    },
+    "cmd.design.fit.title": {
+      "message": "Fit Canvas"
+    },
+    "cmd.design.grid.category": {
+      "message": "Design"
+    },
+    "cmd.design.grid.description": {
+      "message": "show or hide the design grid"
+    },
+    "cmd.design.grid.title": {
+      "message": "Show Grid"
+    },
+    "cmd.design.rulers.category": {
+      "message": "Design"
+    },
+    "cmd.design.rulers.description": {
+      "message": "show or hide the rulers along the design surface's edges"
+    },
+    "cmd.design.rulers.title": {
+      "message": "Show Rulers"
+    },
+    "cmd.edit.copy-node-id.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.copy-node-id.description": {
+      "message": "copy the selected design node's stable id"
+    },
+    "cmd.edit.copy-node-id.title": {
+      "message": "Copy Node ID"
+    },
+    "cmd.edit.copy.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.copy.description": {
+      "message": "copy the editor selection to the clipboard"
+    },
+    "cmd.edit.copy.title": {
+      "message": "Copy"
+    },
+    "cmd.edit.cut.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.cut.description": {
+      "message": "move the editor selection to the clipboard"
+    },
+    "cmd.edit.cut.title": {
+      "message": "Cut"
+    },
+    "cmd.edit.find-next.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.find-next.description": {
+      "message": "go to the next match of the current search"
+    },
+    "cmd.edit.find-next.title": {
+      "message": "Find Next"
+    },
+    "cmd.edit.find-previous.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.find-previous.description": {
+      "message": "go to the previous match of the current search"
+    },
+    "cmd.edit.find-previous.title": {
+      "message": "Find Previous"
+    },
+    "cmd.edit.find-selection.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.find-selection.description": {
+      "message": "search for the selected text in the focused editor"
+    },
+    "cmd.edit.find-selection.title": {
+      "message": "Find in Selection"
+    },
+    "cmd.edit.find.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.find.description": {
+      "message": "open the find bar in the focused editor"
+    },
+    "cmd.edit.find.title": {
+      "message": "Find"
+    },
+    "cmd.edit.history-view.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.history-view.description": {
+      "message": "show the commands this window executed, newest first"
+    },
+    "cmd.edit.history-view.title": {
+      "message": "Operation History"
+    },
+    "cmd.edit.paste.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.paste.description": {
+      "message": "paste the clipboard at the caret"
+    },
+    "cmd.edit.paste.title": {
+      "message": "Paste"
     },
     "cmd.edit.redo.category": {
       "message": "Edit"
@@ -19,6 +334,168 @@
     "cmd.edit.redo.title": {
       "message": "Redo"
     },
+    "cmd.edit.replace.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.replace.description": {
+      "message": "open the find bar with its replacement field"
+    },
+    "cmd.edit.replace.title": {
+      "message": "Replace"
+    },
+    "cmd.edit.select-all.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-all.description": {
+      "message": "select the whole document in the focused editor"
+    },
+    "cmd.edit.select-all.title": {
+      "message": "Select All"
+    },
+    "cmd.edit.select-clear.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-clear.description": {
+      "message": "collapse the editor selection to the caret"
+    },
+    "cmd.edit.select-clear.title": {
+      "message": "Clear Selection"
+    },
+    "cmd.edit.select-cursor-above.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-cursor-above.description": {
+      "message": "add a cursor one line above the primary caret"
+    },
+    "cmd.edit.select-cursor-above.title": {
+      "message": "Add Cursor Above"
+    },
+    "cmd.edit.select-cursor-below.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-cursor-below.description": {
+      "message": "add a cursor one line below the primary caret"
+    },
+    "cmd.edit.select-cursor-below.title": {
+      "message": "Add Cursor Below"
+    },
+    "cmd.edit.select-expand.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-expand.description": {
+      "message": "widen the editor selection to the next structural unit"
+    },
+    "cmd.edit.select-expand.title": {
+      "message": "Expand Selection"
+    },
+    "cmd.edit.select-next-occurrence.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-next-occurrence.description": {
+      "message": "add a cursor at the next occurrence of the selection"
+    },
+    "cmd.edit.select-next-occurrence.title": {
+      "message": "Select Next Occurrence"
+    },
+    "cmd.edit.select-occurrences.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-occurrences.description": {
+      "message": "add a cursor at every occurrence of the selection"
+    },
+    "cmd.edit.select-occurrences.title": {
+      "message": "Select All Occurrences"
+    },
+    "cmd.edit.select-shrink.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.select-shrink.description": {
+      "message": "restore the selection before the last expansion"
+    },
+    "cmd.edit.select-shrink.title": {
+      "message": "Shrink Selection"
+    },
+    "cmd.edit.text-comment.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-comment.description": {
+      "message": "toggle the line comment on the selected lines"
+    },
+    "cmd.edit.text-comment.title": {
+      "message": "Toggle Comment"
+    },
+    "cmd.edit.text-delete.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-delete.description": {
+      "message": "delete the selected lines"
+    },
+    "cmd.edit.text-delete.title": {
+      "message": "Delete Lines"
+    },
+    "cmd.edit.text-duplicate.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-duplicate.description": {
+      "message": "duplicate the selected lines"
+    },
+    "cmd.edit.text-duplicate.title": {
+      "message": "Duplicate Lines"
+    },
+    "cmd.edit.text-indent.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-indent.description": {
+      "message": "indent the selected lines by one level"
+    },
+    "cmd.edit.text-indent.title": {
+      "message": "Indent"
+    },
+    "cmd.edit.text-join.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-join.description": {
+      "message": "join the selected lines into one"
+    },
+    "cmd.edit.text-join.title": {
+      "message": "Join Lines"
+    },
+    "cmd.edit.text-move-down.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-move-down.description": {
+      "message": "move the selected lines down"
+    },
+    "cmd.edit.text-move-down.title": {
+      "message": "Move Lines Down"
+    },
+    "cmd.edit.text-move-up.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-move-up.description": {
+      "message": "move the selected lines up"
+    },
+    "cmd.edit.text-move-up.title": {
+      "message": "Move Lines Up"
+    },
+    "cmd.edit.text-outdent.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-outdent.description": {
+      "message": "remove one level of indentation from the selected lines"
+    },
+    "cmd.edit.text-outdent.title": {
+      "message": "Outdent"
+    },
+    "cmd.edit.text-sort.category": {
+      "message": "Edit"
+    },
+    "cmd.edit.text-sort.description": {
+      "message": "sort the selected lines in ascending order"
+    },
+    "cmd.edit.text-sort.title": {
+      "message": "Sort Lines"
+    },
     "cmd.edit.undo.category": {
       "message": "Edit"
     },
@@ -27,6 +504,33 @@
     },
     "cmd.edit.undo.title": {
       "message": "Undo"
+    },
+    "cmd.file.close-others.category": {
+      "message": "File"
+    },
+    "cmd.file.close-others.description": {
+      "message": "close every other document in the focused editor group"
+    },
+    "cmd.file.close-others.title": {
+      "message": "Close Others"
+    },
+    "cmd.file.close-project.category": {
+      "message": "File"
+    },
+    "cmd.file.close-project.description": {
+      "message": "close the open project after its documents have no unsaved changes"
+    },
+    "cmd.file.close-project.title": {
+      "message": "Close Project"
+    },
+    "cmd.file.close-saved.category": {
+      "message": "File"
+    },
+    "cmd.file.close-saved.description": {
+      "message": "close every document that has no unsaved changes"
+    },
+    "cmd.file.close-saved.title": {
+      "message": "Close Saved"
     },
     "cmd.file.close.category": {
       "message": "File"
@@ -40,11 +544,47 @@
     "cmd.file.close.title": {
       "message": "Close"
     },
+    "cmd.file.copy-path.category": {
+      "message": "File"
+    },
+    "cmd.file.copy-path.description": {
+      "message": "copy the open project's root path to the clipboard"
+    },
+    "cmd.file.copy-path.title": {
+      "message": "Copy Project Path"
+    },
+    "cmd.file.exit.category": {
+      "message": "File"
+    },
+    "cmd.file.exit.description": {
+      "message": "close the window and end the session"
+    },
+    "cmd.file.exit.title": {
+      "message": "Exit"
+    },
+    "cmd.file.open-reopen.category": {
+      "message": "File"
+    },
+    "cmd.file.open-reopen.description": {
+      "message": "reopen the most recently closed document"
+    },
+    "cmd.file.open-reopen.title": {
+      "message": "Reopen Closed Document"
+    },
+    "cmd.file.reveal.category": {
+      "message": "File"
+    },
+    "cmd.file.reveal.description": {
+      "message": "hand the project root to the system's file manager"
+    },
+    "cmd.file.reveal.title": {
+      "message": "Reveal Project"
+    },
     "cmd.file.save-all.category": {
       "message": "File"
     },
     "cmd.file.save-all.description": {
-      "message": "write every document with unsaved changes"
+      "message": "write every open document that came from disk"
     },
     "cmd.file.save-all.title": {
       "message": "Save All"
@@ -53,19 +593,55 @@
       "message": "File"
     },
     "cmd.file.save-as.description": {
-      "message": "write the document to another file"
+      "message": "write the focused document under a new project path"
     },
     "cmd.file.save-as.title": {
       "message": "Save As"
+    },
+    "cmd.file.save-copy.category": {
+      "message": "File"
+    },
+    "cmd.file.save-copy.description": {
+      "message": "write a copy without changing the active document"
+    },
+    "cmd.file.save-copy.title": {
+      "message": "Save Copy"
     },
     "cmd.file.save.category": {
       "message": "File"
     },
     "cmd.file.save.description": {
-      "message": "write the current document back to disk"
+      "message": "write the focused document back to the file it was opened from"
     },
     "cmd.file.save.title": {
       "message": "Save"
+    },
+    "cmd.help.commands.category": {
+      "message": "Help"
+    },
+    "cmd.help.commands.description": {
+      "message": "open the command reference in an editor tab"
+    },
+    "cmd.help.commands.title": {
+      "message": "Command Reference"
+    },
+    "cmd.help.controls.category": {
+      "message": "Help"
+    },
+    "cmd.help.controls.description": {
+      "message": "open the widget reference in an editor tab"
+    },
+    "cmd.help.controls.title": {
+      "message": "Widget Reference"
+    },
+    "cmd.help.shortcuts.category": {
+      "message": "Help"
+    },
+    "cmd.help.shortcuts.description": {
+      "message": "open the shortcut reference in an editor tab"
+    },
+    "cmd.help.shortcuts.title": {
+      "message": "Keyboard Shortcuts"
     },
     "cmd.keys.show.category": {
       "message": "View"
@@ -76,23 +652,500 @@
     "cmd.keys.show.title": {
       "message": "Keyboard Shortcuts"
     },
-    "cmd.panel.close.category": {
+    "cmd.nav.code-back.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-back.description": {
+      "message": "return to the previous jump location"
+    },
+    "cmd.nav.code-back.title": {
+      "message": "Go Back"
+    },
+    "cmd.nav.code-declaration.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-declaration.description": {
+      "message": "move to where the symbol under the caret is declared"
+    },
+    "cmd.nav.code-declaration.title": {
+      "message": "Go to Declaration"
+    },
+    "cmd.nav.code-definition.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-definition.description": {
+      "message": "move to where the symbol under the caret is defined"
+    },
+    "cmd.nav.code-definition.title": {
+      "message": "Go to Definition"
+    },
+    "cmd.nav.code-forward.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-forward.description": {
+      "message": "move to the next jump location"
+    },
+    "cmd.nav.code-forward.title": {
+      "message": "Go Forward"
+    },
+    "cmd.nav.code-implementation.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-implementation.description": {
+      "message": "move to the implementation of the symbol under the caret"
+    },
+    "cmd.nav.code-implementation.title": {
+      "message": "Go to Implementation"
+    },
+    "cmd.nav.code-references.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-references.description": {
+      "message": "list every reference to the symbol under the caret"
+    },
+    "cmd.nav.code-references.title": {
+      "message": "Find References"
+    },
+    "cmd.nav.code-type-definition.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.code-type-definition.description": {
+      "message": "move to the definition of the symbol's type"
+    },
+    "cmd.nav.code-type-definition.title": {
+      "message": "Go to Type Definition"
+    },
+    "cmd.nav.design-child.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.design-child.description": {
+      "message": "select the selected design node's first child"
+    },
+    "cmd.nav.design-child.title": {
+      "message": "Select First Child"
+    },
+    "cmd.nav.design-next-sibling.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.design-next-sibling.description": {
+      "message": "select the selected design node's next sibling in tree order"
+    },
+    "cmd.nav.design-next-sibling.title": {
+      "message": "Select Next Sibling"
+    },
+    "cmd.nav.design-parent.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.design-parent.description": {
+      "message": "select the selected design node's parent"
+    },
+    "cmd.nav.design-parent.title": {
+      "message": "Select Parent"
+    },
+    "cmd.nav.design-previous-sibling.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.design-previous-sibling.description": {
+      "message": "select the selected design node's previous sibling in tree order"
+    },
+    "cmd.nav.design-previous-sibling.title": {
+      "message": "Select Previous Sibling"
+    },
+    "cmd.nav.file-symbol.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.file-symbol.description": {
+      "message": "jump to a symbol in the focused editor's document"
+    },
+    "cmd.nav.file-symbol.title": {
+      "message": "Go to Symbol in File"
+    },
+    "cmd.nav.goto-line.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.goto-line.description": {
+      "message": "move the caret to a line (and column) in the focused editor"
+    },
+    "cmd.nav.goto-line.title": {
+      "message": "Go to Line"
+    },
+    "cmd.nav.open-file.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.open-file.description": {
+      "message": "open a project file by exact path or fuzzy query"
+    },
+    "cmd.nav.open-file.title": {
+      "message": "Open File"
+    },
+    "cmd.nav.reveal-current-file.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.reveal-current-file.description": {
+      "message": "hand the focused editor's document to the system's file manager"
+    },
+    "cmd.nav.reveal-current-file.title": {
+      "message": "Reveal Current File"
+    },
+    "cmd.nav.workspace-symbol.category": {
+      "message": "Navigate"
+    },
+    "cmd.nav.workspace-symbol.description": {
+      "message": "search the project's symbols through the language server"
+    },
+    "cmd.nav.workspace-symbol.title": {
+      "message": "Go to Symbol in Workspace"
+    },
+    "cmd.preview.rebuild.category": {
+      "message": "Preview"
+    },
+    "cmd.preview.rebuild.description": {
+      "message": "mount or update the preview from the startup page's library document"
+    },
+    "cmd.preview.rebuild.title": {
+      "message": "Rebuild Preview UI"
+    },
+    "cmd.preview.start.category": {
+      "message": "Preview"
+    },
+    "cmd.preview.start.description": {
+      "message": "start the preview service and report when it is ready"
+    },
+    "cmd.preview.start.title": {
+      "message": "Start Preview"
+    },
+    "cmd.preview.stop.category": {
+      "message": "Preview"
+    },
+    "cmd.preview.stop.description": {
+      "message": "stop the preview service"
+    },
+    "cmd.preview.stop.title": {
+      "message": "Stop Preview"
+    },
+    "cmd.project.check-references.category": {
+      "message": "Project"
+    },
+    "cmd.project.check-references.description": {
+      "message": "list every project reference and whether it resolves"
+    },
+    "cmd.project.check-references.title": {
+      "message": "Check References"
+    },
+    "cmd.project.check.category": {
+      "message": "Project"
+    },
+    "cmd.project.check.description": {
+      "message": "report the project file's format, identity and references"
+    },
+    "cmd.project.check.title": {
+      "message": "Check Project"
+    },
+    "cmd.project.clean-resources.category": {
+      "message": "Project"
+    },
+    "cmd.project.clean-resources.description": {
+      "message": "list declared resources no page references and remove the declarations after confirmation"
+    },
+    "cmd.project.clean-resources.title": {
+      "message": "Clean Unused Resources"
+    },
+    "cmd.project.migration.category": {
+      "message": "Project"
+    },
+    "cmd.project.migration.description": {
+      "message": "report the format version and the steps writing would migrate"
+    },
+    "cmd.project.migration.title": {
+      "message": "Migration Preview"
+    },
+    "cmd.project.rescan.category": {
+      "message": "Project"
+    },
+    "cmd.project.rescan.description": {
+      "message": "re-read the project structure into the Project panel"
+    },
+    "cmd.project.rescan.title": {
+      "message": "Rescan Project"
+    },
+    "cmd.project.trust.category": {
+      "message": "Project"
+    },
+    "cmd.project.trust.description": {
+      "message": "record that this session may write the open project"
+    },
+    "cmd.project.trust.title": {
+      "message": "Trust Project"
+    },
+    "cmd.run.clear.category": {
+      "message": "Run"
+    },
+    "cmd.run.clear.description": {
+      "message": "clear the application output panel"
+    },
+    "cmd.run.clear.title": {
+      "message": "Clear Run Output"
+    },
+    "cmd.run.copy-output.category": {
+      "message": "Run"
+    },
+    "cmd.run.copy-output.description": {
+      "message": "copy the application output to the clipboard"
+    },
+    "cmd.run.copy-output.title": {
+      "message": "Copy Run Output"
+    },
+    "cmd.run.start.category": {
+      "message": "Run"
+    },
+    "cmd.run.start.description": {
+      "message": "start the configured program in the project directory"
+    },
+    "cmd.run.start.title": {
+      "message": "Run Application"
+    },
+    "cmd.run.stop.category": {
+      "message": "Run"
+    },
+    "cmd.run.stop.description": {
+      "message": "ask the running program to stop"
+    },
+    "cmd.run.stop.title": {
+      "message": "Stop Application"
+    },
+    "cmd.terminal.start.category": {
+      "message": "Terminal"
+    },
+    "cmd.terminal.start.description": {
+      "message": "start a shell session in the project directory"
+    },
+    "cmd.terminal.start.title": {
+      "message": "Start Terminal"
+    },
+    "cmd.terminal.stop.category": {
+      "message": "Terminal"
+    },
+    "cmd.terminal.stop.description": {
+      "message": "ask the running shell session to stop"
+    },
+    "cmd.terminal.stop.title": {
+      "message": "Stop Terminal"
+    },
+    "cmd.test.run-current-file.category": {
+      "message": "Test"
+    },
+    "cmd.test.run-current-file.description": {
+      "message": "run the tests whose module path belongs to the focused document"
+    },
+    "cmd.test.run-current-file.title": {
+      "message": "Run Tests in Current File"
+    },
+    "cmd.test.run-failed.category": {
+      "message": "Test"
+    },
+    "cmd.test.run-failed.description": {
+      "message": "run exactly the tests that failed last time"
+    },
+    "cmd.test.run-failed.title": {
+      "message": "Rerun Failed Tests"
+    },
+    "cmd.test.run-stop.category": {
+      "message": "Test"
+    },
+    "cmd.test.run-stop.description": {
+      "message": "ask the running test run to stop"
+    },
+    "cmd.test.run-stop.title": {
+      "message": "Stop Tests"
+    },
+    "cmd.test.run.category": {
+      "message": "Test"
+    },
+    "cmd.test.run.description": {
+      "message": "discover and run the project's tests"
+    },
+    "cmd.test.run.title": {
+      "message": "Run Tests"
+    },
+    "cmd.vcs.refresh.category": {
+      "message": "Version Control"
+    },
+    "cmd.vcs.refresh.description": {
+      "message": "re-read the repository state now"
+    },
+    "cmd.vcs.refresh.title": {
+      "message": "Refresh Version Control"
+    },
+    "cmd.view.display-status-bar.category": {
       "message": "View"
     },
-    "cmd.panel.close.description": {
-      "message": "hide the panel with the keyboard"
+    "cmd.view.display-status-bar.description": {
+      "message": "show or hide the status bar, reflowing the content area"
     },
-    "cmd.panel.close.title": {
-      "message": "Close Panel"
+    "cmd.view.display-status-bar.title": {
+      "message": "Status Bar"
     },
-    "cmd.tree.activate.category": {
+    "cmd.view.display-toolbar.category": {
       "message": "View"
     },
-    "cmd.tree.activate.description": {
-      "message": "open the selected tree item"
+    "cmd.view.display-toolbar.description": {
+      "message": "show or hide the toolbar, reflowing the editor area"
     },
-    "cmd.tree.activate.title": {
-      "message": "Activate"
+    "cmd.view.display-toolbar.title": {
+      "message": "Toolbar"
+    },
+    "cmd.view.display-zoom-in.category": {
+      "message": "View"
+    },
+    "cmd.view.display-zoom-in.description": {
+      "message": "enlarge the focused editor's text"
+    },
+    "cmd.view.display-zoom-in.title": {
+      "message": "Zoom In"
+    },
+    "cmd.view.display-zoom-out.category": {
+      "message": "View"
+    },
+    "cmd.view.display-zoom-out.description": {
+      "message": "shrink the focused editor's text"
+    },
+    "cmd.view.display-zoom-out.title": {
+      "message": "Zoom Out"
+    },
+    "cmd.view.display-zoom-reset.category": {
+      "message": "View"
+    },
+    "cmd.view.display-zoom-reset.description": {
+      "message": "put the focused editor's text back to its default size"
+    },
+    "cmd.view.display-zoom-reset.title": {
+      "message": "Reset Zoom"
+    },
+    "cmd.view.layout-fullscreen.category": {
+      "message": "View"
+    },
+    "cmd.view.layout-fullscreen.description": {
+      "message": "ask the platform window to enter or leave full screen"
+    },
+    "cmd.view.layout-fullscreen.title": {
+      "message": "Full Screen"
+    },
+    "cmd.view.layout-load.category": {
+      "message": "View"
+    },
+    "cmd.view.layout-load.description": {
+      "message": "apply the saved layout file without restarting"
+    },
+    "cmd.view.layout-load.title": {
+      "message": "Load Layout"
+    },
+    "cmd.view.layout-lock.category": {
+      "message": "View"
+    },
+    "cmd.view.layout-lock.description": {
+      "message": "lock or unlock the layout against save, load and reset"
+    },
+    "cmd.view.layout-lock.title": {
+      "message": "Lock Layout"
+    },
+    "cmd.view.layout-zen.category": {
+      "message": "View"
+    },
+    "cmd.view.layout-zen.description": {
+      "message": "hide every docked panel and the window chrome, and restore them on exit"
+    },
+    "cmd.view.layout-zen.title": {
+      "message": "Zen Mode"
+    },
+    "cmd.view.merge-group.category": {
+      "message": "View"
+    },
+    "cmd.view.merge-group.description": {
+      "message": "move the focused group's views into a neighbour and close it"
+    },
+    "cmd.view.merge-group.title": {
+      "message": "Merge Editor Group"
+    },
+    "cmd.view.mode-code.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-code.description": {
+      "message": "switch the workbench to the code mode"
+    },
+    "cmd.view.mode-code.title": {
+      "message": "Code Mode"
+    },
+    "cmd.view.mode-debug.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-debug.description": {
+      "message": "switch the workbench to the debug mode"
+    },
+    "cmd.view.mode-debug.title": {
+      "message": "Debug Mode"
+    },
+    "cmd.view.mode-design.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-design.description": {
+      "message": "switch the workbench to the design mode"
+    },
+    "cmd.view.mode-design.title": {
+      "message": "Design Mode"
+    },
+    "cmd.view.mode-project.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-project.description": {
+      "message": "switch the workbench to the project mode"
+    },
+    "cmd.view.mode-project.title": {
+      "message": "Project Mode"
+    },
+    "cmd.view.mode-release.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-release.description": {
+      "message": "switch the workbench to the release mode"
+    },
+    "cmd.view.mode-release.title": {
+      "message": "Release Mode"
+    },
+    "cmd.view.mode-test.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-test.description": {
+      "message": "switch the workbench to the test mode"
+    },
+    "cmd.view.mode-test.title": {
+      "message": "Test Mode"
+    },
+    "cmd.view.mode-welcome.category": {
+      "message": "View"
+    },
+    "cmd.view.mode-welcome.description": {
+      "message": "switch the workbench to the welcome mode"
+    },
+    "cmd.view.mode-welcome.title": {
+      "message": "Welcome Mode"
+    },
+    "cmd.view.move-tab.category": {
+      "message": "View"
+    },
+    "cmd.view.move-tab.description": {
+      "message": "move the focused group's active tab into the next editor group"
+    },
+    "cmd.view.move-tab.title": {
+      "message": "Move Tab to Next Group"
+    },
+    "cmd.view.next-group.category": {
+      "message": "View"
+    },
+    "cmd.view.next-group.description": {
+      "message": "move the keyboard focus to the next editor group"
+    },
+    "cmd.view.next-group.title": {
+      "message": "Next Editor Group"
     },
     "cmd.view.palette.category": {
       "message": "View"
@@ -102,6 +1155,81 @@
     },
     "cmd.view.palette.title": {
       "message": "Command Palette"
+    },
+    "cmd.view.panel-hide-current.category": {
+      "message": "View"
+    },
+    "cmd.view.panel-hide-current.description": {
+      "message": "hide the panel that holds the keyboard focus"
+    },
+    "cmd.view.panel-hide-current.title": {
+      "message": "Hide Current Panel"
+    },
+    "cmd.view.panel-restore.category": {
+      "message": "View"
+    },
+    "cmd.view.panel-restore.description": {
+      "message": "show the panel hidden most recently"
+    },
+    "cmd.view.panel-restore.title": {
+      "message": "Restore Closed Panel"
+    },
+    "cmd.view.panel-show.category": {
+      "message": "View"
+    },
+    "cmd.view.panel-show.description": {
+      "message": "show a panel, hiding the panel sharing its dock slot"
+    },
+    "cmd.view.panel-show.param.panel.help": {
+      "message": "the §2.2 panel to show"
+    },
+    "cmd.view.panel-show.title": {
+      "message": "Show Panel"
+    },
+    "cmd.view.previous-group.category": {
+      "message": "View"
+    },
+    "cmd.view.previous-group.description": {
+      "message": "move the keyboard focus to the previous editor group"
+    },
+    "cmd.view.previous-group.title": {
+      "message": "Previous Editor Group"
+    },
+    "cmd.view.reset-layout.category": {
+      "message": "View"
+    },
+    "cmd.view.reset-layout.description": {
+      "message": "restore the layout the window started with"
+    },
+    "cmd.view.reset-layout.title": {
+      "message": "Reset Layout"
+    },
+    "cmd.view.save-layout.category": {
+      "message": "View"
+    },
+    "cmd.view.save-layout.description": {
+      "message": "write the panels and editor groups to the layout file"
+    },
+    "cmd.view.save-layout.title": {
+      "message": "Save Layout"
+    },
+    "cmd.view.split-down.category": {
+      "message": "View"
+    },
+    "cmd.view.split-down.description": {
+      "message": "split the focused editor group into stacked panes"
+    },
+    "cmd.view.split-down.title": {
+      "message": "Split Editor Down"
+    },
+    "cmd.view.split.category": {
+      "message": "View"
+    },
+    "cmd.view.split.description": {
+      "message": "split the focused editor group and show the document in the new group"
+    },
+    "cmd.view.split.title": {
+      "message": "Split Editor"
     },
     "cmd.view.welcome.category": {
       "message": "View"
@@ -133,17 +1261,95 @@
     "diag.command.unknown": {
       "message": "there is no command {id}"
     },
+    "menu.build.item.build.cancel": {
+      "message": "Cancel"
+    },
+    "menu.build.item.build.check": {
+      "message": "Check"
+    },
+    "menu.build.item.build.clean": {
+      "message": "Clean"
+    },
+    "menu.build.item.build.copy-command": {
+      "message": "Copy Build Command"
+    },
+    "menu.build.item.build.copy-output": {
+      "message": "Copy Output"
+    },
+    "menu.build.item.build.locate-first-error": {
+      "message": "Go to First Error"
+    },
+    "menu.build.item.build.rebuild": {
+      "message": "Rebuild"
+    },
     "menu.build.item.build.run": {
       "message": "Run"
     },
     "menu.build.title": {
       "message": "Build"
     },
+    "menu.debug.item.debug.continue": {
+      "message": "Continue"
+    },
+    "menu.debug.item.debug.pause": {
+      "message": "Pause"
+    },
+    "menu.debug.item.debug.start": {
+      "message": "Start Debugging"
+    },
+    "menu.debug.item.debug.step": {
+      "message": "Step Over"
+    },
+    "menu.debug.item.debug.step-in": {
+      "message": "Step Into"
+    },
+    "menu.debug.item.debug.step-out": {
+      "message": "Step Out"
+    },
+    "menu.debug.item.debug.stop": {
+      "message": "Stop Debugging"
+    },
+    "menu.debug.title": {
+      "message": "Debug"
+    },
+    "menu.design.item.design.actual-size": {
+      "message": "Actual Size"
+    },
+    "menu.design.item.design.fit": {
+      "message": "Fit Canvas"
+    },
+    "menu.design.item.design.grid": {
+      "message": "Show Grid"
+    },
+    "menu.design.item.design.rulers": {
+      "message": "Show Rulers"
+    },
+    "menu.design.title": {
+      "message": "Design"
+    },
     "menu.edit.item.edit.copy": {
       "message": "Copy"
     },
+    "menu.edit.item.edit.copy-node-id": {
+      "message": "Copy Node ID"
+    },
     "menu.edit.item.edit.cut": {
       "message": "Cut"
+    },
+    "menu.edit.item.edit.find": {
+      "message": "Find"
+    },
+    "menu.edit.item.edit.find-next": {
+      "message": "Find Next"
+    },
+    "menu.edit.item.edit.find-previous": {
+      "message": "Find Previous"
+    },
+    "menu.edit.item.edit.find-selection": {
+      "message": "Find in Selection"
+    },
+    "menu.edit.item.edit.history-view": {
+      "message": "Operation History"
     },
     "menu.edit.item.edit.paste": {
       "message": "Paste"
@@ -151,8 +1357,65 @@
     "menu.edit.item.edit.redo": {
       "message": "Redo"
     },
+    "menu.edit.item.edit.replace": {
+      "message": "Replace"
+    },
+    "menu.edit.item.edit.select-all": {
+      "message": "Select All"
+    },
+    "menu.edit.item.edit.select-clear": {
+      "message": "Clear Selection"
+    },
+    "menu.edit.item.edit.select-cursor-above": {
+      "message": "Add Cursor Above"
+    },
+    "menu.edit.item.edit.select-cursor-below": {
+      "message": "Add Cursor Below"
+    },
+    "menu.edit.item.edit.select-expand": {
+      "message": "Expand Selection"
+    },
+    "menu.edit.item.edit.select-next-occurrence": {
+      "message": "Select Next Occurrence"
+    },
+    "menu.edit.item.edit.select-occurrences": {
+      "message": "Select All Occurrences"
+    },
+    "menu.edit.item.edit.select-shrink": {
+      "message": "Shrink Selection"
+    },
     "menu.edit.item.edit.undo": {
       "message": "Undo"
+    },
+    "menu.edit.submenu.text.item.edit.text-comment": {
+      "message": "Toggle Comment"
+    },
+    "menu.edit.submenu.text.item.edit.text-delete": {
+      "message": "Delete Lines"
+    },
+    "menu.edit.submenu.text.item.edit.text-duplicate": {
+      "message": "Duplicate Lines"
+    },
+    "menu.edit.submenu.text.item.edit.text-indent": {
+      "message": "Indent"
+    },
+    "menu.edit.submenu.text.item.edit.text-join": {
+      "message": "Join Lines"
+    },
+    "menu.edit.submenu.text.item.edit.text-move-down": {
+      "message": "Move Lines Down"
+    },
+    "menu.edit.submenu.text.item.edit.text-move-up": {
+      "message": "Move Lines Up"
+    },
+    "menu.edit.submenu.text.item.edit.text-outdent": {
+      "message": "Outdent"
+    },
+    "menu.edit.submenu.text.item.edit.text-sort": {
+      "message": "Sort Lines"
+    },
+    "menu.edit.submenu.text.title": {
+      "message": "Text"
     },
     "menu.edit.title": {
       "message": "Edit"
@@ -160,11 +1423,29 @@
     "menu.file.item.file.close": {
       "message": "Close"
     },
+    "menu.file.item.file.close-others": {
+      "message": "Close Others"
+    },
+    "menu.file.item.file.close-project": {
+      "message": "Close Project"
+    },
+    "menu.file.item.file.close-saved": {
+      "message": "Close Saved"
+    },
+    "menu.file.item.file.copy-path": {
+      "message": "Copy Project Path"
+    },
     "menu.file.item.file.new-project": {
       "message": "New Project"
     },
     "menu.file.item.file.open-project": {
       "message": "Open Project"
+    },
+    "menu.file.item.file.open-reopen": {
+      "message": "Reopen Closed Document"
+    },
+    "menu.file.item.file.reveal": {
+      "message": "Reveal Project"
     },
     "menu.file.item.file.save": {
       "message": "Save"
@@ -175,8 +1456,179 @@
     "menu.file.item.file.save-as": {
       "message": "Save As"
     },
+    "menu.file.item.file.save-copy": {
+      "message": "Save Copy"
+    },
     "menu.file.title": {
       "message": "File"
+    },
+    "menu.help.item.help.commands": {
+      "message": "Command Reference"
+    },
+    "menu.help.item.help.controls": {
+      "message": "Widget Reference"
+    },
+    "menu.help.item.help.shortcuts": {
+      "message": "Keyboard Shortcuts"
+    },
+    "menu.help.title": {
+      "message": "Help"
+    },
+    "menu.navigate.item.nav.design-child": {
+      "message": "Select First Child"
+    },
+    "menu.navigate.item.nav.design-next-sibling": {
+      "message": "Select Next Sibling"
+    },
+    "menu.navigate.item.nav.design-parent": {
+      "message": "Select Parent"
+    },
+    "menu.navigate.item.nav.design-previous-sibling": {
+      "message": "Select Previous Sibling"
+    },
+    "menu.navigate.item.nav.file-symbol": {
+      "message": "Go to Symbol in File"
+    },
+    "menu.navigate.item.nav.goto-line": {
+      "message": "Go to Line"
+    },
+    "menu.navigate.item.nav.open-file": {
+      "message": "Open File"
+    },
+    "menu.navigate.item.nav.reveal-current-file": {
+      "message": "Reveal Current File"
+    },
+    "menu.navigate.item.nav.workspace-symbol": {
+      "message": "Go to Symbol in Workspace"
+    },
+    "menu.navigate.submenu.code.item.code.bookmark-toggle": {
+      "message": "Toggle Bookmark"
+    },
+    "menu.navigate.submenu.code.item.code.breadcrumbs": {
+      "message": "Show Breadcrumbs"
+    },
+    "menu.navigate.submenu.code.item.code.fold": {
+      "message": "Fold Block"
+    },
+    "menu.navigate.submenu.code.item.code.fold-all": {
+      "message": "Fold All"
+    },
+    "menu.navigate.submenu.code.item.code.inlay-hints": {
+      "message": "Toggle Inlay Hints"
+    },
+    "menu.navigate.submenu.code.item.code.outline": {
+      "message": "Show Outline"
+    },
+    "menu.navigate.submenu.code.item.code.unfold": {
+      "message": "Unfold Block"
+    },
+    "menu.navigate.submenu.code.item.code.unfold-all": {
+      "message": "Unfold All"
+    },
+    "menu.navigate.submenu.code.item.nav.code-back": {
+      "message": "Go Back"
+    },
+    "menu.navigate.submenu.code.item.nav.code-declaration": {
+      "message": "Go to Declaration"
+    },
+    "menu.navigate.submenu.code.item.nav.code-definition": {
+      "message": "Go to Definition"
+    },
+    "menu.navigate.submenu.code.item.nav.code-forward": {
+      "message": "Go Forward"
+    },
+    "menu.navigate.submenu.code.item.nav.code-implementation": {
+      "message": "Go to Implementation"
+    },
+    "menu.navigate.submenu.code.item.nav.code-references": {
+      "message": "Find References"
+    },
+    "menu.navigate.submenu.code.item.nav.code-type-definition": {
+      "message": "Go to Type Definition"
+    },
+    "menu.navigate.submenu.code.title": {
+      "message": "Code"
+    },
+    "menu.navigate.title": {
+      "message": "Navigate"
+    },
+    "menu.preview.item.preview.rebuild": {
+      "message": "Rebuild Preview UI"
+    },
+    "menu.preview.item.preview.start": {
+      "message": "Start Preview"
+    },
+    "menu.preview.item.preview.stop": {
+      "message": "Stop Preview"
+    },
+    "menu.preview.title": {
+      "message": "Preview"
+    },
+    "menu.project.item.project.check": {
+      "message": "Check Project"
+    },
+    "menu.project.item.project.check-references": {
+      "message": "Check References"
+    },
+    "menu.project.item.project.clean-resources": {
+      "message": "Clean Unused Resources"
+    },
+    "menu.project.item.project.migration": {
+      "message": "Migration Preview"
+    },
+    "menu.project.item.project.rescan": {
+      "message": "Rescan Project"
+    },
+    "menu.project.item.project.trust": {
+      "message": "Trust Project"
+    },
+    "menu.project.title": {
+      "message": "Project"
+    },
+    "menu.run.item.run.clear": {
+      "message": "Clear Output"
+    },
+    "menu.run.item.run.copy-output": {
+      "message": "Copy Output"
+    },
+    "menu.run.item.run.start": {
+      "message": "Run Application"
+    },
+    "menu.run.item.run.stop": {
+      "message": "Stop Application"
+    },
+    "menu.run.title": {
+      "message": "Run"
+    },
+    "menu.terminal.item.terminal.start": {
+      "message": "Start Terminal"
+    },
+    "menu.terminal.item.terminal.stop": {
+      "message": "Stop Terminal"
+    },
+    "menu.terminal.title": {
+      "message": "Terminal"
+    },
+    "menu.test.item.test.run": {
+      "message": "Run Tests"
+    },
+    "menu.test.item.test.run-current-file": {
+      "message": "Run Tests in Current File"
+    },
+    "menu.test.item.test.run-failed": {
+      "message": "Rerun Failed Tests"
+    },
+    "menu.test.item.test.run-stop": {
+      "message": "Stop Tests"
+    },
+    "menu.test.title": {
+      "message": "Test"
+    },
+    "menu.vcs.item.vcs.refresh": {
+      "message": "Refresh Version Control"
+    },
+    "menu.vcs.title": {
+      "message": "Version Control"
     },
     "menu.view.item.keys.show": {
       "message": "Keyboard Shortcuts"
@@ -187,11 +1639,77 @@
     "menu.view.item.tree.activate": {
       "message": "Activate Tree Item"
     },
+    "menu.view.item.view.display-status-bar": {
+      "message": "Status Bar"
+    },
+    "menu.view.item.view.display-toolbar": {
+      "message": "Toolbar"
+    },
+    "menu.view.item.view.display-zoom-in": {
+      "message": "Zoom In"
+    },
+    "menu.view.item.view.display-zoom-out": {
+      "message": "Zoom Out"
+    },
+    "menu.view.item.view.display-zoom-reset": {
+      "message": "Reset Zoom"
+    },
     "menu.view.item.view.palette": {
       "message": "Command Palette"
     },
+    "menu.view.item.view.panel-hide-current": {
+      "message": "Hide Current Panel"
+    },
+    "menu.view.item.view.panel-restore": {
+      "message": "Restore Closed Panel"
+    },
     "menu.view.item.view.welcome": {
       "message": "Welcome"
+    },
+    "menu.view.submenu.editor.item.view.merge-group": {
+      "message": "Merge Editor Group"
+    },
+    "menu.view.submenu.editor.item.view.move-tab": {
+      "message": "Move Tab to Next Group"
+    },
+    "menu.view.submenu.editor.item.view.next-group": {
+      "message": "Next Editor Group"
+    },
+    "menu.view.submenu.editor.item.view.previous-group": {
+      "message": "Previous Editor Group"
+    },
+    "menu.view.submenu.editor.item.view.split": {
+      "message": "Split Editor"
+    },
+    "menu.view.submenu.editor.item.view.split-down": {
+      "message": "Split Editor Down"
+    },
+    "menu.view.submenu.editor.title": {
+      "message": "Editor"
+    },
+    "menu.view.submenu.modes.item.view.mode-code": {
+      "message": "Code"
+    },
+    "menu.view.submenu.modes.item.view.mode-debug": {
+      "message": "Debug"
+    },
+    "menu.view.submenu.modes.item.view.mode-design": {
+      "message": "Design"
+    },
+    "menu.view.submenu.modes.item.view.mode-project": {
+      "message": "Project"
+    },
+    "menu.view.submenu.modes.item.view.mode-release": {
+      "message": "Release"
+    },
+    "menu.view.submenu.modes.item.view.mode-test": {
+      "message": "Test"
+    },
+    "menu.view.submenu.modes.item.view.mode-welcome": {
+      "message": "Welcome"
+    },
+    "menu.view.submenu.modes.title": {
+      "message": "Modes"
     },
     "menu.view.submenu.panels.item.panel.inspector": {
       "message": "Inspector"
@@ -219,6 +1737,9 @@
     },
     "shell.version": {
       "message": "rustage {version}"
+    },
+    "ui.ai.no-journal": {
+      "message": "no AI session journal is configured; start with --ai-journal <path>"
     },
     "ui.assets.note": {
       "message": "Sample assets · thumbnails cached"
@@ -262,6 +1783,9 @@
     "ui.button.stop": {
       "message": "Stop"
     },
+    "ui.button.switch-theme": {
+      "message": "Switch"
+    },
     "ui.button.theme": {
       "message": "Theme"
     },
@@ -271,71 +1795,59 @@
     "ui.button.values": {
       "message": "Values"
     },
-    "ui.button.switch-theme": {
-      "message": "Switch"
+    "ui.components.no-page": {
+      "message": "the project declares no page"
     },
-    "ui.canvas": {
-      "message": "Design canvas"
+    "ui.components.no-project": {
+      "message": "no project is open; components belong to a page document"
+    },
+    "ui.components.unreadable": {
+      "message": "the project document could not be read; no page is known"
+    },
+    "ui.components.unreadable-at": {
+      "message": "the page could not be read: {reason}"
+    },
+    "ui.context.build.cancel": {
+      "message": "Cancel build"
+    },
+    "ui.context.build.check": {
+      "message": "Check"
+    },
+    "ui.context.build.clean": {
+      "message": "Clean"
+    },
+    "ui.context.build.copy-all": {
+      "message": "Copy build log"
+    },
+    "ui.context.build.first-error": {
+      "message": "Go to First Error"
+    },
+    "ui.context.build.rebuild": {
+      "message": "Rebuild"
+    },
+    "ui.context.build.run": {
+      "message": "Build"
     },
     "ui.context.clear": {
       "message": "Clear field"
     },
-    "ui.context.inspect": {
-      "message": "Inspect values"
-    },
-    "ui.context.reset": {
-      "message": "Reset property"
-    },
-    "ui.context.select-parent": {
-      "message": "Select Parent"
-    },
-    "ui.context.select-child": {
-      "message": "Select First Child"
-    },
-    "ui.context.rename": {
-      "message": "Rename"
-    },
-    "ui.context.wrap-container": {
-      "message": "Wrap in Container"
-    },
-    "ui.context.move-out": {
-      "message": "Move Out of Container"
-    },
     "ui.context.copy-node": {
       "message": "Copy Node"
-    },
-    "ui.context.move-into": {
-      "message": "Move Into Container Above"
-    },
-    "ui.context.paste-node": {
-      "message": "Paste"
     },
     "ui.context.delete": {
       "message": "Delete"
     },
-    "ui.context.favorite": {
-      "message": "Toggle Favorite"
+    "ui.context.diagnostic.clear": {
+      "message": "Clear messages"
+    },
+    "ui.context.diagnostic.copy": {
+      "message": "Copy message"
+    },
+    "ui.context.diagnostic.copy-all": {
+      "message": "Copy all messages"
     },
     "ui.context.duplicate": {
       "message": "Duplicate"
-    },
-    "ui.context.toggle-hide": {
-      "message": "Hide or show"
-    },
-    "ui.context.toggle-lock": {
-      "message": "Lock or unlock"
-    },
-    "ui.context.raise": {
-      "message": "Bring to Front"
-    },
-    "ui.context.raise-one": {
-      "message": "Bring Forward"
-    },
-    "ui.context.lower-one": {
-      "message": "Send Backward"
-    },
-    "ui.context.send-to-back": {
-      "message": "Send to Back"
     },
     "ui.context.editor.close": {
       "message": "Close tab"
@@ -346,20 +1858,98 @@
     "ui.context.editor.close-right": {
       "message": "Close tabs to the right"
     },
-    "ui.context.editor.split": {
-      "message": "Split editor"
-    },
     "ui.context.editor.next-group": {
       "message": "Next editor group"
     },
-    "ui.context.diagnostic.copy": {
-      "message": "Copy message"
+    "ui.context.editor.split": {
+      "message": "Split editor"
     },
-    "ui.context.diagnostic.copy-all": {
-      "message": "Copy all messages"
+    "ui.context.favorite": {
+      "message": "Toggle Favorite"
     },
-    "ui.context.diagnostic.clear": {
-      "message": "Clear messages"
+    "ui.context.inspect": {
+      "message": "Inspect values"
+    },
+    "ui.context.lower-one": {
+      "message": "Send Backward"
+    },
+    "ui.context.move-into": {
+      "message": "Move Into Container Above"
+    },
+    "ui.context.move-out": {
+      "message": "Move Out of Container"
+    },
+    "ui.context.notification.dismiss": {
+      "message": "Dismiss notification"
+    },
+    "ui.context.paste-node": {
+      "message": "Paste"
+    },
+    "ui.context.preview.start": {
+      "message": "Start preview"
+    },
+    "ui.context.preview.stop": {
+      "message": "Stop preview"
+    },
+    "ui.context.raise": {
+      "message": "Bring to Front"
+    },
+    "ui.context.raise-one": {
+      "message": "Bring Forward"
+    },
+    "ui.context.rename": {
+      "message": "Rename"
+    },
+    "ui.context.reset": {
+      "message": "Reset property"
+    },
+    "ui.context.run.clear": {
+      "message": "Clear output"
+    },
+    "ui.context.run.copy-all": {
+      "message": "Copy all output"
+    },
+    "ui.context.run.start": {
+      "message": "Run program"
+    },
+    "ui.context.run.stop": {
+      "message": "Stop program"
+    },
+    "ui.context.select-child": {
+      "message": "Select First Child"
+    },
+    "ui.context.select-parent": {
+      "message": "Select Parent"
+    },
+    "ui.context.send-to-back": {
+      "message": "Send to Back"
+    },
+    "ui.context.terminal.start": {
+      "message": "Start terminal"
+    },
+    "ui.context.terminal.stop": {
+      "message": "Stop terminal"
+    },
+    "ui.context.tests.run": {
+      "message": "Run tests"
+    },
+    "ui.context.tests.run-failed": {
+      "message": "Rerun Failed Tests"
+    },
+    "ui.context.tests.stop": {
+      "message": "Stop Tests"
+    },
+    "ui.context.toggle-hide": {
+      "message": "Hide or show"
+    },
+    "ui.context.toggle-lock": {
+      "message": "Lock or unlock"
+    },
+    "ui.context.vcs.refresh": {
+      "message": "Refresh version control"
+    },
+    "ui.context.wrap-container": {
+      "message": "Wrap in Container"
     },
     "ui.data.dataset": {
       "message": "dataset"
@@ -367,14 +1957,119 @@
     "ui.data.diagnostic": {
       "message": "diagnostic"
     },
+    "ui.debug.no-session": {
+      "message": "no debug session; start one in the Debug panel"
+    },
+    "ui.dialog.clean-resources-label": {
+      "message": "Type delete to remove the listed declarations"
+    },
+    "ui.dialog.clean-resources-title": {
+      "message": "Clean Unused Resources"
+    },
+    "ui.dialog.file-symbol-label": {
+      "message": "Symbol name"
+    },
+    "ui.dialog.file-symbol-title": {
+      "message": "Go to Symbol in File"
+    },
+    "ui.dialog.goto-label": {
+      "message": "Line or line:column"
+    },
+    "ui.dialog.goto-title": {
+      "message": "Go to Line"
+    },
+    "ui.dialog.open-label": {
+      "message": "Path or fuzzy query"
+    },
+    "ui.dialog.open-title": {
+      "message": "Open File"
+    },
+    "ui.dialog.rename-label": {
+      "message": "Name"
+    },
+    "ui.dialog.rename-title": {
+      "message": "Rename Node"
+    },
+    "ui.dialog.save-as-label": {
+      "message": "Project path"
+    },
+    "ui.dialog.save-as-title": {
+      "message": "Save As"
+    },
+    "ui.dialog.save-copy-label": {
+      "message": "Project path"
+    },
+    "ui.dialog.save-copy-title": {
+      "message": "Save Copy"
+    },
+    "ui.dialog.workspace-symbol-label": {
+      "message": "Symbol name"
+    },
+    "ui.dialog.workspace-symbol-title": {
+      "message": "Go to Symbol in Workspace"
+    },
+    "ui.environment.backend": {
+      "message": "Backend"
+    },
+    "ui.environment.dependency": {
+      "message": "Dependency"
+    },
+    "ui.environment.language": {
+      "message": "Interface language"
+    },
+    "ui.environment.platform": {
+      "message": "Platform"
+    },
+    "ui.error.build-command-unavailable": {
+      "message": "no build command has been recorded yet"
+    },
     "ui.error.contracts": {
       "message": "contracts: {reason}"
     },
     "ui.error.contracts-differ": {
       "message": "contracts differ: {reason}"
     },
+    "ui.error.copy-refused": {
+      "message": "not copied: {reason}"
+    },
+    "ui.error.document-not-closed": {
+      "message": "the active document could not be closed"
+    },
+    "ui.error.file-not-opened": {
+      "message": "could not open the file: {reason}"
+    },
+    "ui.error.file-reveal-refused": {
+      "message": "could not reveal the current file: {reason}"
+    },
+    "ui.error.first-error-not-found": {
+      "message": "the build output names no source location"
+    },
+    "ui.error.goto-refused": {
+      "message": "could not go to the line: {reason}"
+    },
     "ui.error.inspect-refused": {
       "message": "inspect refused: {reason}"
+    },
+    "ui.error.navigation-failed": {
+      "message": "code navigation failed: {reason}"
+    },
+    "ui.error.navigation-no-server": {
+      "message": "no language server is configured; start the workbench with --lsp <program>"
+    },
+    "ui.error.navigation-not-found": {
+      "message": "the service reported no location for the caret"
+    },
+    "ui.error.no-current-document": {
+      "message": "the focused editor has no document to reveal"
+    },
+    "ui.error.no-failed-tests": {
+      "message": "the last run recorded no failed tests"
+    },
+    "ui.error.no-node-selected": {
+      "message": "no design node is selected"
+    },
+    "ui.error.no-other-group": {
+      "message": "there is only one editor group, so the tab has nowhere to move"
     },
     "ui.error.not-added": {
       "message": "not added: {reason}"
@@ -394,47 +2089,92 @@
     "ui.error.not-duplicated": {
       "message": "not duplicated: {reason}"
     },
-    "ui.error.not-wrapped": {
-      "message": "not wrapped: {reason}"
-    },
-    "ui.error.rename-refused": {
-      "message": "not renamed: {reason}"
-    },
-    "ui.error.copy-refused": {
-      "message": "not copied: {reason}"
-    },
-    "ui.error.paste-refused": {
-      "message": "not pasted: {reason}"
-    },
-    "ui.error.not-moved-into": {
-      "message": "not moved into a container: {reason}"
-    },
-    "ui.error.nothing-to-paste": {
-      "message": "there is no copied node to paste"
-    },
-    "ui.dialog.rename-title": {
-      "message": "Rename Node"
-    },
-    "ui.dialog.rename-label": {
-      "message": "Name"
-    },
-    "ui.error.not-moved-out": {
-      "message": "not moved out: {reason}"
-    },
     "ui.error.not-fired": {
       "message": "not fired: {reason}"
     },
     "ui.error.not-moved": {
       "message": "not moved: {reason}"
     },
+    "ui.error.not-moved-into": {
+      "message": "not moved into a container: {reason}"
+    },
+    "ui.error.not-moved-out": {
+      "message": "not moved out: {reason}"
+    },
     "ui.error.not-opened": {
       "message": "not opened: {reason}"
+    },
+    "ui.error.not-saved": {
+      "message": "not saved: {reason}"
     },
     "ui.error.not-unbound": {
       "message": "not unbound: {reason}"
     },
+    "ui.error.not-wrapped": {
+      "message": "not wrapped: {reason}"
+    },
+    "ui.error.nothing-to-paste": {
+      "message": "there is no copied node to paste"
+    },
+    "ui.error.nothing-to-reopen": {
+      "message": "there is no closed document to reopen"
+    },
+    "ui.error.paste-refused": {
+      "message": "not pasted: {reason}"
+    },
+    "ui.error.project-close-dirty": {
+      "message": "{count} document(s) in the project have unsaved changes; save or close them first"
+    },
+    "ui.error.project-not-trusted": {
+      "message": "the project is not trusted for writing; choose Project > Trust Project first"
+    },
+    "ui.error.project-trust-refused": {
+      "message": "the project was not trusted: {reason}"
+    },
+    "ui.error.rename-refused": {
+      "message": "not renamed: {reason}"
+    },
+    "ui.error.resources-clean-refused": {
+      "message": "resources were not cleaned: {reason}"
+    },
+    "ui.error.reveal-refused": {
+      "message": "could not reveal the project: {reason}"
+    },
+    "ui.error.save-conflict": {
+      "message": "the file changed on disk since it was opened, so it was not overwritten"
+    },
+    "ui.error.save-failed": {
+      "message": "some documents were not saved: {reason}"
+    },
+    "ui.error.save-no-baseline": {
+      "message": "this document was not opened from disk, so there is nothing to save back to"
+    },
+    "ui.error.save-outside-root": {
+      "message": "the document is outside the project root"
+    },
+    "ui.error.save-target-empty": {
+      "message": "a save target cannot be empty"
+    },
+    "ui.error.save-target-exists": {
+      "message": "the target already exists; Save As and Save Copy do not overwrite"
+    },
     "ui.error.schema-unavailable": {
       "message": "schema unavailable: {reason}"
+    },
+    "ui.error.symbol-no-server": {
+      "message": "no language server is configured; start the workbench with --lsp <program>"
+    },
+    "ui.error.symbol-not-found": {
+      "message": "no symbol matches {query}"
+    },
+    "ui.error.symbol-not-jumped": {
+      "message": "{reason}"
+    },
+    "ui.error.tab-not-moved": {
+      "message": "the tab was not moved: {reason}"
+    },
+    "ui.error.tests-current-unavailable": {
+      "message": "the focused document has no module path that names only its tests"
     },
     "ui.error.theme-refused": {
       "message": "theme refused: {reason}"
@@ -444,6 +2184,24 @@
     },
     "ui.error.widget-not-inserted": {
       "message": "not inserted: {reason}"
+    },
+    "ui.extensions.none": {
+      "message": "no extension is installed"
+    },
+    "ui.help.commands": {
+      "message": "Command reference"
+    },
+    "ui.help.controls": {
+      "message": "Control catalogue"
+    },
+    "ui.help.controls-unavailable": {
+      "message": "The widget catalogue is not available in this build."
+    },
+    "ui.help.shortcuts": {
+      "message": "Keyboard shortcuts"
+    },
+    "ui.help.welcome": {
+      "message": "Welcome and getting started"
     },
     "ui.inspector.accepted": {
       "message": "accepted"
@@ -466,14 +2224,53 @@
     "ui.inspector.theme": {
       "message": "theme"
     },
+    "ui.items.no-page": {
+      "message": "the project declares no page"
+    },
+    "ui.items.no-project": {
+      "message": "no project is open; collection content belongs to a page document"
+    },
+    "ui.items.unreadable": {
+      "message": "the project document could not be read; no page is known"
+    },
+    "ui.items.unreadable-at": {
+      "message": "the page could not be read: {reason}"
+    },
+    "ui.layout.no-page": {
+      "message": "the project declares no page"
+    },
+    "ui.layout.no-project": {
+      "message": "no project is open; a container declaration belongs to a page document"
+    },
+    "ui.layout.unreadable": {
+      "message": "the project document could not be read; no page is known"
+    },
+    "ui.layout.unreadable-at": {
+      "message": "the page could not be read: {reason}"
+    },
     "ui.menu.editor": {
       "message": "Editor"
+    },
+    "ui.menu.fullscreen": {
+      "message": "Full screen"
     },
     "ui.menu.layout": {
       "message": "Layout"
     },
+    "ui.menu.load-layout": {
+      "message": "Load layout"
+    },
+    "ui.menu.lock-layout": {
+      "message": "Lock layout"
+    },
+    "ui.menu.merge-group": {
+      "message": "Merge group"
+    },
     "ui.menu.next-group": {
       "message": "Next group"
+    },
+    "ui.menu.previous-group": {
+      "message": "Previous group"
     },
     "ui.menu.quit": {
       "message": "Quit"
@@ -484,8 +2281,14 @@
     "ui.menu.save-layout": {
       "message": "Save layout"
     },
+    "ui.menu.split-down": {
+      "message": "Split down"
+    },
     "ui.menu.split-right": {
       "message": "Split right"
+    },
+    "ui.menu.zen": {
+      "message": "Zen mode"
     },
     "ui.note.data": {
       "message": "data v{version} · effects {effects} · runtime: none"
@@ -499,23 +2302,77 @@
     "ui.note.pages": {
       "message": "{count} page(s) · current {current} · revision {revision}"
     },
-    "ui.panel.data": {
-      "message": "Data & State"
+    "ui.notifications.counts": {
+      "message": "{errors} error(s), {warnings} warning(s), {information} information"
+    },
+    "ui.notifications.none": {
+      "message": "no open notification"
+    },
+    "ui.panel.actions": {
+      "message": "Actions"
+    },
+    "ui.panel.ai": {
+      "message": "AI session"
+    },
+    "ui.panel.application": {
+      "message": "Application structure"
     },
     "ui.panel.assets": {
       "message": "Assets"
     },
+    "ui.panel.breakpoints": {
+      "message": "Breakpoints"
+    },
+    "ui.panel.build": {
+      "message": "Build output"
+    },
+    "ui.panel.components": {
+      "message": "Components"
+    },
+    "ui.panel.data": {
+      "message": "Data & state"
+    },
     "ui.panel.debug": {
       "message": "Debug"
+    },
+    "ui.panel.dependencies": {
+      "message": "Dependencies"
+    },
+    "ui.panel.environments": {
+      "message": "Environments"
     },
     "ui.panel.events": {
       "message": "Events"
     },
+    "ui.panel.extensions": {
+      "message": "Extensions"
+    },
+    "ui.panel.help": {
+      "message": "Help"
+    },
+    "ui.panel.history": {
+      "message": "History"
+    },
+    "ui.panel.hot": {
+      "message": "Hot update"
+    },
+    "ui.panel.inspection": {
+      "message": "Inspection"
+    },
     "ui.panel.inspector": {
       "message": "Inspector"
     },
+    "ui.panel.items": {
+      "message": "Collection contents"
+    },
+    "ui.panel.layout": {
+      "message": "Layout inspector"
+    },
     "ui.panel.messages": {
       "message": "Messages"
+    },
+    "ui.panel.notifications": {
+      "message": "Notifications"
     },
     "ui.panel.outline": {
       "message": "Outline"
@@ -523,11 +2380,53 @@
     "ui.panel.pages": {
       "message": "Pages"
     },
+    "ui.panel.preview": {
+      "message": "Preview"
+    },
     "ui.panel.problems": {
       "message": "Problems"
     },
+    "ui.panel.project": {
+      "message": "Project"
+    },
+    "ui.panel.run": {
+      "message": "Application output"
+    },
+    "ui.panel.search": {
+      "message": "Search"
+    },
+    "ui.panel.source-outline": {
+      "message": "Source outline"
+    },
+    "ui.panel.stack": {
+      "message": "Call stack"
+    },
+    "ui.panel.states": {
+      "message": "States and transitions"
+    },
+    "ui.panel.targets": {
+      "message": "Targets"
+    },
+    "ui.panel.tasks": {
+      "message": "Background tasks"
+    },
+    "ui.panel.terminal": {
+      "message": "Terminal"
+    },
+    "ui.panel.tests": {
+      "message": "Tests"
+    },
     "ui.panel.theme": {
       "message": "Theme"
+    },
+    "ui.panel.timeline": {
+      "message": "Transition preview"
+    },
+    "ui.panel.variables": {
+      "message": "Variables"
+    },
+    "ui.panel.vcs": {
+      "message": "Version control"
     },
     "ui.panel.widgets": {
       "message": "Widgets"
@@ -544,20 +2443,131 @@
     "ui.placeholder.page-name": {
       "message": "page name"
     },
+    "ui.placeholder.program": {
+      "message": "program to run"
+    },
+    "ui.placeholder.search": {
+      "message": "search open documents"
+    },
+    "ui.placeholder.source-filter": {
+      "message": "filter symbols"
+    },
+    "ui.placeholder.terminal": {
+      "message": "type a command and press Return"
+    },
     "ui.placeholder.theme-name": {
       "message": "theme name (dark)"
     },
     "ui.placeholder.widget-search": {
       "message": "search controls"
     },
+    "ui.project.none": {
+      "message": "no project is open; start with --project <dir>"
+    },
+    "ui.project.unreadable": {
+      "message": "the project's format version is not one this build interprets"
+    },
+    "ui.search.no-match": {
+      "message": "no match in the open documents"
+    },
+    "ui.source.jumped": {
+      "message": "moved to line {line}"
+    },
+    "ui.source.no-document": {
+      "message": "the editor shows no document to outline"
+    },
+    "ui.source.no-editor": {
+      "message": "the editor surface did not accept the jump"
+    },
+    "ui.states.no-page": {
+      "message": "the project declares no page"
+    },
+    "ui.states.no-project": {
+      "message": "no project is open; the state machine belongs to a page document"
+    },
+    "ui.states.unreadable": {
+      "message": "the project document could not be read; no page is known"
+    },
+    "ui.states.unreadable-at": {
+      "message": "the page could not be read: {reason}"
+    },
+    "ui.status.already-bottom": {
+      "message": "{name} is already at the back"
+    },
+    "ui.status.already-top": {
+      "message": "{name} is already on top"
+    },
+    "ui.status.bookmark-added": {
+      "message": "bookmark added"
+    },
+    "ui.status.bookmark-removed": {
+      "message": "bookmark removed"
+    },
     "ui.status.bound": {
       "message": "bound {event} -> {handler} on node {node} (revision {revision})"
+    },
+    "ui.status.breadcrumbs": {
+      "message": "{path}"
+    },
+    "ui.status.build-cancelling": {
+      "message": "build cancellation requested"
+    },
+    "ui.status.build-command-copied": {
+      "message": "copied the build command: {command}"
+    },
+    "ui.status.build-no-project": {
+      "message": "no project is open; there is no manifest to build"
+    },
+    "ui.status.building": {
+      "message": "build submitted"
+    },
+    "ui.status.clear-running": {
+      "message": "output cannot be cleared while the program is running"
+    },
+    "ui.status.clipboard-empty": {
+      "message": "the clipboard has no text, or the editor is read-only"
     },
     "ui.status.closing": {
       "message": "closing"
     },
+    "ui.status.command-no-handler": {
+      "message": "{command}: no handler in this build"
+    },
+    "ui.status.command-not-implemented": {
+      "message": "{command}: not implemented in this build (planned: {task})"
+    },
+    "ui.status.command-palette": {
+      "message": "command palette"
+    },
+    "ui.status.copied": {
+      "message": "copied the selection"
+    },
+    "ui.status.cursor-added": {
+      "message": "the selection now has another cursor"
+    },
+    "ui.status.cut": {
+      "message": "cut the selection"
+    },
+    "ui.status.data-applied": {
+      "message": "{field} = {value} (data v{version})"
+    },
+    "ui.status.debug-ran": {
+      "message": "debug: {command}"
+    },
+    "ui.status.debug-unavailable": {
+      "message": "debug: {command} unavailable"
+    },
     "ui.status.deleted": {
       "message": "deleted {name}: {report}"
+    },
+    "ui.status.document-closed": {
+      "message": "closed {document}"
+    },
+    "ui.status.duplicated": {
+      "message": "duplicated {name} as node {node}"
+    },
+    "ui.status.editor-split": {
+      "message": "editor split"
     },
     "ui.status.favorite-added": {
       "message": "{name} added to favorites"
@@ -565,50 +2575,74 @@
     "ui.status.favorite-removed": {
       "message": "{name} removed from favorites"
     },
-    "ui.status.duplicated": {
-      "message": "duplicated {name} as node {node}"
+    "ui.status.file-opened": {
+      "message": "opened {path}"
     },
-    "ui.status.wrapped": {
-      "message": "wrapped {name} in container {node}"
+    "ui.status.file-symbol-jumped": {
+      "message": "moved to {name} at line {line}"
     },
-    "ui.status.moved-out": {
-      "message": "moved {name} out of {parent}"
+    "ui.status.find-open": {
+      "message": "find bar opened"
     },
-    "ui.status.renamed": {
-      "message": "renamed to {name}"
-    },
-    "ui.status.node-copied": {
-      "message": "copied {name} ({count} node(s))"
-    },
-    "ui.status.node-pasted": {
-      "message": "pasted {count} node(s) as {node}"
-    },
-    "ui.status.moved-into": {
-      "message": "moved {name} into {parent}"
-    },
-    "ui.status.rename-cancelled": {
-      "message": "rename cancelled"
-    },
-    "ui.status.command-palette": {
-      "message": "command palette"
-    },
-    "ui.status.data-applied": {
-      "message": "{field} = {value} (data v{version})"
-    },
-    "ui.status.editor-split": {
-      "message": "editor split"
+    "ui.status.first-error-opened": {
+      "message": "moved to the first error at {path}:{line}"
     },
     "ui.status.focus-group": {
       "message": "focus group {group}"
     },
+    "ui.status.folded": {
+      "message": "folded the block at the caret"
+    },
+    "ui.status.folded-many": {
+      "message": "folded {count} block(s)"
+    },
+    "ui.status.found": {
+      "message": "moved to the match"
+    },
+    "ui.status.goto-cancelled": {
+      "message": "go-to-line cancelled"
+    },
+    "ui.status.goto-done": {
+      "message": "moved to line {line}, column {column}"
+    },
+    "ui.status.group-merged": {
+      "message": "merged {moved} view(s) into the neighbouring group"
+    },
+    "ui.status.group-not-merged": {
+      "message": "the group was not merged: {reason}"
+    },
     "ui.status.hidden": {
       "message": "hidden {id}"
+    },
+    "ui.status.hidden-node": {
+      "message": "{name} hidden"
+    },
+    "ui.status.history-empty": {
+      "message": "no command has run in this window yet"
+    },
+    "ui.status.history-shown": {
+      "message": "{count} command(s) listed newest first"
+    },
+    "ui.status.inlay-hints-hidden": {
+      "message": "inlay hints hidden"
+    },
+    "ui.status.inlay-hints-shown": {
+      "message": "inlay hints shown"
     },
     "ui.status.inspected": {
       "message": "inspected node; design v{version}, effects {effects}"
     },
     "ui.status.inspector-cleared": {
       "message": "field cleared; the valid {name} is {value}"
+    },
+    "ui.status.layout-loaded": {
+      "message": "loaded layout from {path}"
+    },
+    "ui.status.layout-locked": {
+      "message": "the layout is locked"
+    },
+    "ui.status.layout-not-loaded": {
+      "message": "layout not loaded: {reason}"
     },
     "ui.status.layout-not-saved": {
       "message": "layout not saved: {reason}"
@@ -619,23 +2653,143 @@
     "ui.status.layout-saved": {
       "message": "saved layout to {path}"
     },
+    "ui.status.layout-unlocked": {
+      "message": "the layout is unlocked"
+    },
+    "ui.status.locked": {
+      "message": "{name} locked"
+    },
+    "ui.status.migration-previewed": {
+      "message": "migration preview written to Messages"
+    },
+    "ui.status.mode-changed": {
+      "message": "mode {mode}"
+    },
+    "ui.status.moved-back": {
+      "message": "moved back to {path}:{line}"
+    },
+    "ui.status.moved-down": {
+      "message": "{name} moved backward"
+    },
+    "ui.status.moved-forward": {
+      "message": "moved forward to {path}:{line}"
+    },
+    "ui.status.moved-into": {
+      "message": "moved {name} into {parent}"
+    },
+    "ui.status.moved-out": {
+      "message": "moved {name} out of {parent}"
+    },
+    "ui.status.moved-up": {
+      "message": "{name} moved forward"
+    },
     "ui.status.navigation-declared": {
       "message": "declared navigation {from} -> {to} (revision {revision})"
+    },
+    "ui.status.navigation-done": {
+      "message": "moved to {path}:{line}"
+    },
+    "ui.status.navigation-many": {
+      "message": "{count} locations; moved to the first at {path}:{line}"
+    },
+    "ui.status.no-child": {
+      "message": "{name} has no child"
+    },
+    "ui.status.no-closed-panels": {
+      "message": "no panel has been hidden yet"
+    },
+    "ui.status.no-cursor-line": {
+      "message": "there is no line in that direction"
     },
     "ui.status.no-document": {
       "message": "no document"
     },
+    "ui.status.no-editor": {
+      "message": "the focused group has no editor surface"
+    },
+    "ui.status.no-focused-panel": {
+      "message": "no panel holds the keyboard focus"
+    },
     "ui.status.no-layout-path": {
       "message": "no --layout path was given"
+    },
+    "ui.status.no-match": {
+      "message": "no match to move to"
+    },
+    "ui.status.no-next-location": {
+      "message": "no next jump location"
     },
     "ui.status.no-panel": {
       "message": "no panel {id}"
     },
+    "ui.status.no-parent": {
+      "message": "node {node} has no parent"
+    },
+    "ui.status.no-previous-location": {
+      "message": "no previous jump location"
+    },
     "ui.status.no-problems": {
       "message": "no problems"
     },
+    "ui.status.no-sibling": {
+      "message": "{name} has no sibling in that direction"
+    },
+    "ui.status.node-copied": {
+      "message": "copied {name} ({count} node(s))"
+    },
+    "ui.status.node-id-copied": {
+      "message": "copied node id {id}"
+    },
+    "ui.status.node-pasted": {
+      "message": "pasted {count} node(s) as {node}"
+    },
+    "ui.status.not-running": {
+      "message": "no program is running"
+    },
+    "ui.status.nothing-selected": {
+      "message": "nothing is selected"
+    },
+    "ui.status.nothing-to-close": {
+      "message": "there is no active document to close"
+    },
+    "ui.status.nothing-to-expand": {
+      "message": "there is no larger structural unit"
+    },
+    "ui.status.nothing-to-fold": {
+      "message": "there is no block to fold at the caret"
+    },
+    "ui.status.nothing-to-move": {
+      "message": "there is no tab to move"
+    },
+    "ui.status.nothing-to-redo": {
+      "message": "there is nothing to redo"
+    },
+    "ui.status.nothing-to-shrink": {
+      "message": "there is no previous selection to restore"
+    },
+    "ui.status.nothing-to-undo": {
+      "message": "there is nothing to undo"
+    },
+    "ui.status.nothing-to-unfold": {
+      "message": "there is no folded region at the caret"
+    },
     "ui.status.now-on": {
       "message": "now on {page}"
+    },
+    "ui.status.occurrences-selected": {
+      "message": "{count} occurrence(s) now have a cursor"
+    },
+    "ui.status.open-cancelled": {
+      "message": "open cancelled"
+    },
+    "ui.status.others-closed": {
+      "message": "closed {count} other document(s)"
+    },
+    "ui.status.output-cleared": {
+      "message": "output cleared"
+    },
+    "ui.status.output-copied": {
+      "message": "output copied"
     },
     "ui.status.page-declared": {
       "message": "declared page {name} (revision {revision})"
@@ -646,14 +2800,155 @@
     "ui.status.palette-could-not-focus": {
       "message": "the command palette could not take the keyboard"
     },
+    "ui.status.panel-not-named": {
+      "message": "a panel must be named to show one"
+    },
+    "ui.status.pasted": {
+      "message": "pasted the clipboard"
+    },
+    "ui.status.path-copied": {
+      "message": "copied {path}"
+    },
+    "ui.status.preview-mounted": {
+      "message": "preview mounted: {widgets} control(s), {issues} issue(s)"
+    },
+    "ui.status.preview-rebuild-failed": {
+      "message": "preview not rebuilt: {reason}"
+    },
+    "ui.status.preview-started": {
+      "message": "preview started"
+    },
+    "ui.status.preview-stopped": {
+      "message": "preview stopped"
+    },
+    "ui.status.preview-updated": {
+      "message": "preview updated: {patches} patch(es), {updates} update(s)"
+    },
+    "ui.status.project-checked": {
+      "message": "project checked: {rows} row(s) written to Messages"
+    },
+    "ui.status.project-closed": {
+      "message": "the project is closed"
+    },
+    "ui.status.project-not-readable": {
+      "message": "the project file is not in a format this build reads"
+    },
+    "ui.status.project-rescanned": {
+      "message": "project structure re-read"
+    },
+    "ui.status.project-trusted": {
+      "message": "the project is trusted for this session"
+    },
+    "ui.status.raised": {
+      "message": "{name} raised"
+    },
     "ui.status.ready": {
       "message": "ready"
+    },
+    "ui.status.redone": {
+      "message": "put back the newest change"
+    },
+    "ui.status.references-checked": {
+      "message": "{count} reference row(s) written to Messages"
+    },
+    "ui.status.rename-cancelled": {
+      "message": "rename cancelled"
+    },
+    "ui.status.renamed": {
+      "message": "renamed to {name}"
+    },
+    "ui.status.reopened": {
+      "message": "reopened {document}"
+    },
+    "ui.status.replace-open": {
+      "message": "replace bar opened"
     },
     "ui.status.reset-nodes": {
       "message": "reset {count} node(s) to the structural title"
     },
+    "ui.status.resources-clean-cancelled": {
+      "message": "resource cleanup cancelled; nothing changed"
+    },
+    "ui.status.resources-clean-candidates": {
+      "message": "{count} unreferenced resource declaration(s) listed"
+    },
+    "ui.status.resources-clean-none": {
+      "message": "every declared resource is referenced by a page"
+    },
+    "ui.status.resources-cleaned": {
+      "message": "removed {count} unused resource declaration(s); files were left on disk"
+    },
+    "ui.status.revealed": {
+      "message": "handed {path} to the file manager"
+    },
+    "ui.status.running": {
+      "message": "program started"
+    },
+    "ui.status.save-cancelled": {
+      "message": "the save was cancelled"
+    },
+    "ui.status.saved": {
+      "message": "saved {path}"
+    },
+    "ui.status.saved-all": {
+      "message": "saved {count} document(s)"
+    },
+    "ui.status.saved-as": {
+      "message": "saved {path} and made it the active document"
+    },
+    "ui.status.saved-closed": {
+      "message": "closed {count} saved document(s)"
+    },
+    "ui.status.saved-copy": {
+      "message": "saved a copy at {path}"
+    },
+    "ui.status.selected-all": {
+      "message": "selected the whole document"
+    },
+    "ui.status.selection-cleared": {
+      "message": "selection cleared"
+    },
+    "ui.status.selection-expanded": {
+      "message": "selection expanded"
+    },
+    "ui.status.selection-shrunk": {
+      "message": "selection shrunk"
+    },
+    "ui.status.sent-to-back": {
+      "message": "{name} sent to back"
+    },
     "ui.status.shown": {
       "message": "shown {id}"
+    },
+    "ui.status.shown-node": {
+      "message": "{name} shown"
+    },
+    "ui.status.stop-requested": {
+      "message": "stop requested"
+    },
+    "ui.status.symbol-cancelled": {
+      "message": "the symbol jump was cancelled"
+    },
+    "ui.status.tab-moved": {
+      "message": "moved the tab to the next editor group"
+    },
+    "ui.status.terminal-started": {
+      "message": "terminal started"
+    },
+    "ui.status.tests-busy": {
+      "message": "a test run is already going"
+    },
+    "ui.status.tests-not-running": {
+      "message": "no test run is in progress"
+    },
+    "ui.status.tests-started": {
+      "message": "test run started"
+    },
+    "ui.status.tests-stopped": {
+      "message": "test run stop requested"
+    },
+    "ui.status.text-changed": {
+      "message": "{command} applied"
     },
     "ui.status.theme-applied": {
       "message": "{message}"
@@ -661,53 +2956,98 @@
     "ui.status.unbound": {
       "message": "unbound {event} on node {node} (revision {revision})"
     },
+    "ui.status.undone": {
+      "message": "undid the newest change"
+    },
+    "ui.status.unfolded": {
+      "message": "unfolded the region at the caret"
+    },
+    "ui.status.unfolded-many": {
+      "message": "unfolded {count} region(s)"
+    },
     "ui.status.unknown-action": {
       "message": "unknown action {action}"
-    },
-    "ui.status.widget-inserted": {
-      "message": "inserted {name} as node {node}"
-    },
-    "ui.status.no-parent": {
-      "message": "node {node} has no parent"
-    },
-    "ui.status.no-child": {
-      "message": "{name} has no children"
-    },
-    "ui.status.locked": {
-      "message": "{name} locked"
     },
     "ui.status.unlocked": {
       "message": "{name} unlocked"
     },
-    "ui.status.hidden-node": {
-      "message": "{name} hidden"
+    "ui.status.vcs-refreshed": {
+      "message": "version control re-read"
     },
-    "ui.status.shown-node": {
-      "message": "{name} shown"
+    "ui.status.widget-inserted": {
+      "message": "inserted {name} as node {node}"
     },
-    "ui.status.raised": {
-      "message": "{name} raised"
+    "ui.status.workspace-symbol-jumped": {
+      "message": "moved to {name} at {path}:{line}"
     },
-    "ui.status.already-top": {
-      "message": "{name} is already on top"
+    "ui.status.wrapped": {
+      "message": "wrapped {name} in container {node}"
     },
-    "ui.status.already-bottom": {
-      "message": "{name} is already at the back"
+    "ui.status.zen-off": {
+      "message": "zen mode off"
     },
-    "ui.status.moved-up": {
-      "message": "{name} moved forward"
+    "ui.status.zen-on": {
+      "message": "zen mode on"
     },
-    "ui.status.moved-down": {
-      "message": "{name} moved backward"
+    "ui.status.zoom-actual": {
+      "message": "design shown at actual size"
     },
-    "ui.status.sent-to-back": {
-      "message": "{name} sent to back"
+    "ui.status.zoom-fit": {
+      "message": "design fitted to the canvas"
+    },
+    "ui.status.zoom-reset": {
+      "message": "editor zoom reset"
+    },
+    "ui.status.zoomed-in": {
+      "message": "editor zoomed in"
+    },
+    "ui.status.zoomed-out": {
+      "message": "editor zoomed out"
+    },
+    "ui.target.certification": {
+      "message": "Certification"
+    },
+    "ui.target.devices": {
+      "message": "Devices"
+    },
+    "ui.target.none": {
+      "message": "not detected"
+    },
+    "ui.target.profiles": {
+      "message": "Profiles"
+    },
+    "ui.target.sdk": {
+      "message": "SDK"
+    },
+    "ui.target.target": {
+      "message": "Targets"
+    },
+    "ui.target.toolchain": {
+      "message": "Toolchain"
+    },
+    "ui.target.verified": {
+      "message": "verified"
+    },
+    "ui.tasks.none": {
+      "message": "no background task has been submitted"
     },
     "ui.theme.curve": {
       "message": "Motion curve"
     },
     "ui.theme.metrics": {
       "message": "Metrics"
+    },
+    "ui.timeline.no-page": {
+      "message": "the project declares no page"
+    },
+    "ui.timeline.no-project": {
+      "message": "no project is open; transitions belong to a page document"
+    },
+    "ui.timeline.unreadable": {
+      "message": "the project document could not be read; no page is known"
+    },
+    "ui.timeline.unreadable-at": {
+      "message": "the page could not be read: {reason}"
     },
     "ui.toolbar.commands": {
       "message": "Commands"

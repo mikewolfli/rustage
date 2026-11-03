@@ -45,6 +45,16 @@ fn build() -> WidgetFactory {
 mod tests {
     use super::factory;
 
+    /// The controls the pinned revision ships in its optional suites, one per enabled group.
+    const SUITE_CONTROLS: [&str; 6] = [
+        "web_engine_view",
+        "candlestick_chart",
+        "volume_chart",
+        "media_player",
+        "video_player",
+        "lottie_widget",
+    ];
+
     #[test]
     fn the_host_factory_answers_the_suite_names_and_aliases() {
         let factory = factory();
@@ -73,5 +83,25 @@ mod tests {
     #[test]
     fn the_factory_is_built_once() {
         assert!(std::ptr::eq(factory(), factory()));
+    }
+
+    #[test]
+    fn the_enabled_suite_groups_are_installed_and_have_a_readable_manifest() {
+        let factory = factory();
+        for name in SUITE_CONTROLS {
+            assert!(
+                factory.capability(name).is_some(),
+                "the {name} suite control is installed"
+            );
+            let manifest = rust_widgets::widget::capability::designer_manifest(factory, name)
+                .unwrap_or_else(|error| {
+                    panic!("{name}'s designer manifest is readable: {error:?}")
+                });
+            assert_eq!(manifest.control, name);
+            assert!(
+                !manifest.properties.is_empty() && !manifest.events.is_empty(),
+                "{name} publishes properties and events"
+            );
+        }
     }
 }

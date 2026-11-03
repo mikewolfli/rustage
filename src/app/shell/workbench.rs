@@ -36,6 +36,8 @@ pub enum Mode {
     /// The welcome page: no project, or a project just opened.
     #[default]
     Welcome,
+    /// The project overview: structure, workspace and targets (roadmap §2.1).
+    Project,
     /// The design surface: the canvas and the property panels.
     Design,
     /// The code view and the text editors.
@@ -53,6 +55,7 @@ impl Mode {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Welcome => "welcome",
+            Self::Project => "project",
             Self::Design => "design",
             Self::Code => "code",
             Self::Debug => "debug",
@@ -67,8 +70,9 @@ impl Mode {
     }
 
     /// Every mode.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Welcome,
+        Self::Project,
         Self::Design,
         Self::Code,
         Self::Debug,

@@ -181,16 +181,29 @@ impl CanvasState {
     /// The Outline rows, pre-order, with hidden/locked markers.
     pub(super) fn rows(&self) -> Vec<String> {
         let mut out = Vec::new();
+        // One indentation string per depth rather than one per row: a document's depth is small
+        // and bounded, while its row count is not.
+        let mut indents: Vec<String> = Vec::new();
         for root in self.tree.roots() {
-            self.rows_into(*root, 0, &mut out);
+            self.rows_into(*root, 0, &mut indents, &mut out);
         }
         out
     }
 
-    fn rows_into(&self, node: NodeId, depth: usize, out: &mut Vec<String>) {
+    fn rows_into(
+        &self,
+        node: NodeId,
+        depth: usize,
+        indents: &mut Vec<String>,
+        out: &mut Vec<String>,
+    ) {
         let Some(entry) = self.tree.get(node) else {
             return;
         };
+        while indents.len() <= depth {
+            let prefix = "  ".repeat(indents.len());
+            indents.push(prefix);
+        }
         let marker = if self.scene.is_hidden(node) {
             " [hidden]"
         } else if self.scene.is_locked(node) {
@@ -198,9 +211,9 @@ impl CanvasState {
         } else {
             ""
         };
-        out.push(format!("{}{}{}", "  ".repeat(depth), entry.name, marker));
+        out.push(format!("{}{}{}", indents[depth], entry.name, marker));
         for child in &entry.children {
-            self.rows_into(*child, depth + 1, out);
+            self.rows_into(*child, depth + 1, indents, out);
         }
     }
 
@@ -590,6 +603,27 @@ impl CanvasState {
             .and_then(|entry| entry.children.first().copied())
     }
 
+    /// A node's sibling `delta` places away in tree order, or `None` at the end of the run.
+    ///
+    /// Siblings share a parent; a root's siblings are the tree's other roots. The Outline draws that
+    /// order, so "next" means the row below and "previous" the row above.
+    pub(super) fn sibling(&self, node: NodeId, delta: isize) -> Option<NodeId> {
+        let siblings: Vec<NodeId> = match self.parent(node) {
+            Some(parent) => self
+                .tree
+                .get(parent)
+                .map(|entry| entry.children.clone())
+                .unwrap_or_default(),
+            None => self.tree.roots().to_vec(),
+        };
+        let index = siblings.iter().position(|sibling| *sibling == node)?;
+        let target = index as isize + delta;
+        if target < 0 {
+            return None;
+        }
+        siblings.get(target as usize).copied()
+    }
+
     /// Renames a node after the Inspector accepted a new title.
     pub(super) fn rename(&mut self, node: NodeId, name: &str) -> Result<(), String> {
         self.tree
@@ -945,6 +979,16 @@ impl CanvasTransform {
         let scale = (rect.width as f32 / DESIGN_WIDTH as f32)
             .min(rect.height as f32 / DESIGN_HEIGHT as f32)
             .max(0.01);
+        Self::with_scale(rect, scale)
+    }
+
+    /// The transform for an explicit scale, still centring the design space in the control.
+    ///
+    /// A zoom the person asked for (`actual size`) keeps its scale even when the control is too
+    /// small for the whole design; the overflow is centred rather than clamped, so the centre stays
+    /// where it was.
+    pub(super) fn with_scale(rect: WidgetRect, scale: f32) -> Self {
+        let scale = scale.max(0.01);
         Self {
             scale,
             offset_x: rect.x + ((rect.width as f32 - DESIGN_WIDTH as f32 * scale) / 2.0) as i32,
@@ -969,6 +1013,31 @@ impl CanvasTransform {
             ((x - self.offset_x) as f64 / scale).round() as i32,
             ((y - self.offset_y) as f64 / scale).round() as i32,
         )
+    }
+}
+
+/// The design surface's view state: the zoom and the design aids (roadmap `design.tool.*`).
+///
+/// The scene owns node geometry in design space; this is how that space is shown. `zoom` is `None`
+/// for “fit the control” — the behaviour before any explicit zoom — and `Some(scale)` for a scale a
+/// person asked for.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub(super) struct CanvasView {
+    /// Widget pixels per design pixel, or `None` to fit the control.
+    pub zoom: Option<f32>,
+    /// Whether the design grid is drawn.
+    pub grid: bool,
+    /// Whether rulers are drawn along the top and left edges.
+    pub rulers: bool,
+}
+
+impl CanvasView {
+    /// The transform this view asks for on a control rect.
+    pub(super) fn transform(&self, rect: WidgetRect) -> CanvasTransform {
+        match self.zoom {
+            Some(scale) => CanvasTransform::with_scale(rect, scale),
+            None => CanvasTransform::new(rect),
+        }
     }
 }
 
@@ -1053,10 +1122,11 @@ impl Layout for CanvasLayout {
 
 #[cfg(test)]
 mod tests {
-    use super::CanvasState;
+    use super::{CanvasState, CanvasView};
     use crate::app::canvas::drag::Move;
     use crate::app::canvas::scene::Rect;
     use crate::contracts::identity::NodeId;
+    use rust_widgets::core::Rect as WidgetRect;
 
     #[test]
     fn a_drag_move_reparents_without_moving_the_scene_rectangle() {
@@ -1073,6 +1143,66 @@ mod tests {
         let panel = rows[1];
         let button = rows[2];
         assert!(state.move_node(Move::new(panel, Some(button), 0)).is_err());
+    }
+
+    #[test]
+    fn an_explicit_zoom_keeps_its_scale_and_fit_uses_the_control() {
+        let rect = WidgetRect::new(0, 0, 600, 400);
+        let fit = CanvasView::default().transform(rect);
+        assert!(
+            (fit.scale - 1.0).abs() < f32::EPSILON,
+            "a 600x400 control fits 1:1"
+        );
+
+        let actual = CanvasView {
+            zoom: Some(1.0),
+            ..CanvasView::default()
+        }
+        .transform(WidgetRect::new(0, 0, 300, 200));
+        assert!((actual.scale - 1.0).abs() < f32::EPSILON);
+        let placed = actual.place(Rect::new(0, 0, 100, 50));
+        assert_eq!((placed.width, placed.height), (100, 50));
+        // The design is centred in the smaller control, so the overflow is split evenly.
+        assert_eq!(actual.offset_x, -150);
+        assert_eq!(actual.offset_y, -100);
+    }
+
+    #[test]
+    fn the_outline_rows_indent_by_depth_and_mark_hidden_and_locked() {
+        let state = CanvasState::demo();
+        let rows = state.rows();
+        let nodes = state.row_nodes();
+        assert_eq!(rows.len(), nodes.len(), "one row per node");
+        assert_eq!(rows[0], "window");
+        assert!(rows[1].starts_with("  Demo"), "{rows:?}");
+        assert!(rows[2].starts_with("    button"), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.ends_with(" [hidden]")),
+            "the hidden marker survives: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.ends_with(" [locked]")),
+            "the locked marker survives: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn siblings_are_read_in_the_outlines_order_within_the_same_parent() {
+        let state = CanvasState::demo();
+        let rows = state.row_nodes();
+        let (root, panel, button, label, note, footer) =
+            (rows[0], rows[1], rows[2], rows[3], rows[4], rows[5]);
+        assert_eq!(state.parent(panel), Some(root));
+        assert_eq!(state.sibling(button, 1), Some(label));
+        assert_eq!(state.sibling(label, 1), Some(note));
+        assert_eq!(state.sibling(note, 1), None, "the last child has no next");
+        assert_eq!(state.sibling(button, -1), None, "the first has no previous");
+        assert_eq!(
+            state.sibling(panel, 1),
+            Some(footer),
+            "roots are siblings too"
+        );
+        assert_eq!(state.sibling(panel, -1), None);
     }
 
     #[test]
@@ -1269,7 +1399,7 @@ mod tests {
 
     #[test]
     fn the_first_child_is_the_row_under_the_parent_and_a_leaf_has_none() {
-        let mut state = CanvasState::demo();
+        let state = CanvasState::demo();
         let rows = state.row_nodes();
         assert_eq!(
             state.first_child(rows[1]),

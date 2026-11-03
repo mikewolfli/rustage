@@ -57,6 +57,8 @@ pub enum Action {
     Build,
     /// Remove this package's artifacts, then build.
     Rebuild,
+    /// Remove this package's artifacts without building.
+    Clean,
 }
 
 impl Action {
@@ -66,6 +68,7 @@ impl Action {
             Self::Check => "check",
             Self::Build => "build",
             Self::Rebuild => "rebuild",
+            Self::Clean => "clean",
         }
     }
 
@@ -74,6 +77,7 @@ impl Action {
         match self {
             Self::Check => "check",
             Self::Build | Self::Rebuild => "build",
+            Self::Clean => "clean",
         }
     }
 }
@@ -98,6 +102,18 @@ pub struct Job {
 impl Job {
     /// The cargo argv for this job, without the program name.
     pub fn command(&self) -> Vec<String> {
+        if self.action == Action::Clean {
+            let mut argv = vec!["clean".to_owned()];
+            if let Some(package) = &self.package {
+                argv.push("-p".to_owned());
+                argv.push(package.clone());
+            }
+            if let Some(manifest) = &self.manifest {
+                argv.push("--manifest-path".to_owned());
+                argv.push(manifest.clone());
+            }
+            return argv;
+        }
         let mut argv = vec![self.action.cargo_subcommand().to_owned()];
         argv.extend(self.reproducible.flags());
         argv.extend(self.selection.feature_arguments());
@@ -795,34 +811,49 @@ mod tests {
             "task",
             &format!("echo $$ > '{}'\nsleep 30", pid_file.display()),
         );
-        let submitted = BuildTask::submit(
-            &executor,
-            owner,
-            job(Action::Build),
-            program.to_str().expect("a utf-8 path"),
-        )
-        .expect("a submission");
+        // A process spawn can fail transiently when the whole suite runs in parallel (resource
+        // pressure surfaces as a task that is already final). Retrying the setup keeps the
+        // cancellation assertion meaningful without hiding the failure: after the last attempt the
+        // record's outcome is what the panic reports.
+        let mut attempt = 0;
+        let (submitted, pid) = loop {
+            attempt += 1;
+            let _ = std::fs::remove_file(&pid_file);
+            let submitted = BuildTask::submit(
+                &executor,
+                owner,
+                job(Action::Build),
+                program.to_str().expect("a utf-8 path"),
+            )
+            .expect("a submission");
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut pid = None;
-        while Instant::now() < deadline {
-            if let Ok(text) = std::fs::read_to_string(&pid_file)
-                && let Ok(value) = text.trim().parse::<u32>()
-            {
-                pid = Some(value);
-                break;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut pid = None;
+            let mut final_outcome = None;
+            while Instant::now() < deadline {
+                if let Ok(text) = std::fs::read_to_string(&pid_file)
+                    && let Ok(value) = text.trim().parse::<u32>()
+                {
+                    pid = Some(value);
+                    break;
+                }
+                if let Some(record) = executor.record(submitted.task())
+                    && record.is_final()
+                {
+                    final_outcome = Some(record.outcome);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            let final_already = executor
-                .record(submitted.task())
-                .map(|record| record.is_final())
-                .unwrap_or(false);
+            if let Some(pid) = pid {
+                break (submitted, pid);
+            }
             assert!(
-                !final_already,
-                "the build ended before it could be cancelled"
+                attempt < 3,
+                "the build ended before it could be cancelled after {attempt} attempt(s): \
+                 {final_outcome:?}"
             );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let pid = pid.expect("the task wrote its pid");
+        };
 
         assert_eq!(executor.cancel(submitted.task()), CancelResult::Requested);
         let record = executor

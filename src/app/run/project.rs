@@ -326,12 +326,49 @@ pub(super) fn edit(options: &crate::cli::EditOptions) -> bool {
         }
     };
     println!("edit: in memory; nothing is written to any file, and no question is asked");
+    if let Some(from) = page.migrated_from() {
+        println!(
+            "migrated from {from}; this build writes version 2, and the file that was read is kept \
+             by the save path that migrates it"
+        );
+    }
     println!(
         "model of {}: {} node(s), revision {}",
         page.path().display(),
         store.nodes().count(),
         store.revision()
     );
+    match page.states() {
+        Some(states) => {
+            println!(
+                "states: {} declared; initial {}; final {}",
+                states.declared().len(),
+                states.initial().unwrap_or("(none)"),
+                if states.finals().is_empty() {
+                    "(none)".to_owned()
+                } else {
+                    states.finals().join(", ")
+                }
+            );
+            for transition in states.transitions() {
+                println!(
+                    "  {} --{}--> {}{}",
+                    transition.from(),
+                    transition.on(),
+                    transition.to(),
+                    match transition.guard() {
+                        Some(guard) => format!(" [{guard}]"),
+                        None => String::new(),
+                    }
+                );
+            }
+        }
+        None => println!("states: none declared"),
+    }
+    let unconsumed = page.unconsumed_by_generator();
+    if !unconsumed.is_empty() {
+        println!("generator: not consumed: {}", unconsumed.join(", "));
+    }
 
     let Some(path) = options.batch.as_ref() else {
         for line in Fingerprint::of(&store).as_str().lines() {

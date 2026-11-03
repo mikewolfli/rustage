@@ -324,7 +324,7 @@ impl PropertyState {
                 .or_insert_with(|| (*initial).to_owned());
             if available && self.editor.value(*node, &self.name).is_none() {
                 let seed = self.seed_text(initial);
-                if let Err(reason) = self.editor.set(*node, self.name.clone(), &seed) {
+                if let Err(reason) = self.editor.set(*node, &self.name, &seed) {
                     crate::host::log::emit(
                         crate::host::log::Level::Warn,
                         "app::run::workbench-property",
@@ -566,11 +566,11 @@ impl PropertyState {
         if let Err(reason) = kind.parse(text) {
             // Record the refused text on the primary node so the panel can show what is pending
             // beside the reason; a refusal changes no valid value and no revision.
-            let _ = self.editor.set(self.nodes[0], self.name.clone(), text);
+            let _ = self.editor.set(self.nodes[0], &self.name, text);
             return Err(reason);
         }
         for node in &self.nodes {
-            self.editor.set(*node, self.name.clone(), text)?;
+            self.editor.set(*node, &self.name, text)?;
             self.edited.insert(*node);
         }
         self.revision += 1;
@@ -593,7 +593,7 @@ impl PropertyState {
             let Some(baseline) = self.baseline.get(node).cloned() else {
                 continue;
             };
-            match self.editor.set(*node, self.name.clone(), &baseline) {
+            match self.editor.set(*node, &self.name, &baseline) {
                 Ok(()) => {
                     self.edited.remove(node);
                     count += 1;

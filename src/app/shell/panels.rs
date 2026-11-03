@@ -344,7 +344,10 @@ impl Panels {
 pub fn built_in() -> Panels {
     let mut panels = Panels::new();
     let specs = [
-        PanelSpec::new("outline", "Outline", Dock::Left, 260).needing("document-tree"),
+        // The workbench's Outline is the scene's object tree (stable NodeIds, names, hidden/locked
+        // markers), so it is the F09 Object tree panel. The source outline (F07) is the separate
+        // `source` panel the window registers when a language server is configured.
+        PanelSpec::new("outline", "Outline", Dock::Left, 260),
         PanelSpec::new("inspector", "Inspector", Dock::Right, 320).needing("property-schema"),
         PanelSpec::new("messages", "Messages", Dock::Bottom, 160),
         PanelSpec::new("problems", "Problems", Dock::Bottom, 160).needing("diagnostics"),
@@ -400,73 +403,133 @@ impl RequiredPanel {
 /// The panels roadmap §2.2 lists, in its order. A panel with no host id is accounted for here and
 /// reported missing; it is never replaced by an empty stand-in.
 pub const REQUIRED_PANELS: [RequiredPanel; 42] = [
-    required("panel.project", "Project tree", "F02", None),
-    required("panel.objects", "Object tree", "F09", None),
+    required("panel.project", "Project tree", "F02", Some("project")),
+    required("panel.objects", "Object tree", "F09", Some("outline")),
     required("panel.widgets", "Widget library", "F09", Some("widgets")),
     required("panel.assets", "Asset library", "F12", Some("assets")),
-    required("panel.components", "Component library", "F12", None),
+    required(
+        "panel.components",
+        "Component library",
+        "F12",
+        Some("components"),
+    ),
     required(
         "panel.properties",
         "Property inspector",
         "F11",
         Some("inspector"),
     ),
-    required("panel.layout", "Layout inspector", "F10", None),
+    required("panel.layout", "Layout inspector", "F10", Some("layout")),
     required("panel.styles", "Style inspector", "F11", Some("theme")),
     required("panel.events", "Events and actions", "F13", Some("events")),
     required("panel.data", "Data and state", "F13", Some("data")),
     required("panel.pages", "Pages and navigation", "F13", Some("pages")),
-    required("panel.actions", "Application actions", "F26", None),
+    required(
+        "panel.actions",
+        "Application actions",
+        "F26",
+        Some("actions"),
+    ),
     required(
         "panel.application",
         "Application menu and tool area",
         "F26",
-        None,
+        Some("application"),
     ),
-    required("panel.items", "Collection contents", "F27", None),
-    required("panel.states", "States and transitions", "F13", None),
-    required("panel.timeline", "Transition preview", "F11", None),
-    required("panel.outline", "Source outline", "F07", Some("outline")),
-    required("panel.search", "Search results", "F08", None),
+    required("panel.items", "Collection contents", "F27", Some("items")),
+    required(
+        "panel.states",
+        "States and transitions",
+        "F13",
+        Some("states"),
+    ),
+    required(
+        "panel.timeline",
+        "Transition preview",
+        "F11",
+        Some("timeline"),
+    ),
+    required("panel.outline", "Source outline", "F07", Some("source")),
+    required("panel.search", "Search results", "F08", Some("search")),
     required("panel.problems", "Problems", "F21", Some("problems")),
-    required("panel.build", "Build output", "F16", None),
-    required("panel.run", "Application output", "F16", None),
-    required("panel.terminal", "Terminal", "F16", None),
-    required("panel.tasks", "Background tasks", "F01", None),
-    required("panel.preview", "Preview management", "F14", None),
-    required("panel.hot", "Hot update", "F17", None),
-    required("panel.targets", "Targets and deployment", "F18", None),
+    required("panel.build", "Build output", "F16", Some("build")),
+    required("panel.run", "Application output", "F16", Some("run")),
+    required("panel.terminal", "Terminal", "F16", Some("terminal")),
+    required("panel.tasks", "Background tasks", "F01", Some("tasks")),
+    required(
+        "panel.preview",
+        "Preview management",
+        "F14",
+        Some("preview"),
+    ),
+    required("panel.hot", "Hot update", "F17", Some("hot")),
+    required(
+        "panel.targets",
+        "Targets and deployment",
+        "F18",
+        Some("targets"),
+    ),
     required(
         "panel.dependencies",
         "Cargo members and dependencies",
         "F02",
-        None,
+        Some("dependencies"),
     ),
     required(
         "panel.environments",
         "Toolchains and environments",
         "F02;F28",
-        None,
+        Some("environments"),
     ),
-    required("panel.breakpoints", "Breakpoints", "F19", None),
-    required("panel.stack", "Call stack and threads", "F19", None),
-    required("panel.variables", "Variables and watches", "F19", None),
+    required(
+        "panel.breakpoints",
+        "Breakpoints",
+        "F19",
+        Some("breakpoints"),
+    ),
+    required(
+        "panel.stack",
+        "Call stack and threads",
+        "F19",
+        Some("stack"),
+    ),
+    required(
+        "panel.variables",
+        "Variables and watches",
+        "F19",
+        Some("variables"),
+    ),
     required("panel.debug", "Debug console", "F19", Some("debug")),
-    required("panel.vcs", "Version control", "F20", None),
-    required("panel.history", "File and project history", "F03/F20", None),
-    required("panel.tests", "Tests", "F21", None),
+    required("panel.vcs", "Version control", "F20", Some("vcs")),
+    required(
+        "panel.history",
+        "File and project history",
+        "F03/F20",
+        Some("history"),
+    ),
+    required("panel.tests", "Tests", "F21", Some("tests")),
     deferred("panel.profiler", "Profiler", "T21.09"),
     deferred("panel.memory", "Native debug inspection", "T19.09"),
-    required("panel.inspection", "Design inspection", "F21", None),
-    required("panel.extensions", "Extensions and tools", "F22", None),
-    required("panel.ai", "AI session", "F23", None),
+    required(
+        "panel.inspection",
+        "Design inspection",
+        "F21",
+        Some("inspection"),
+    ),
+    required(
+        "panel.extensions",
+        "Extensions and tools",
+        "F22",
+        Some("extensions"),
+    ),
+    required("panel.ai", "AI session", "F23", Some("ai")),
     required(
         "panel.notifications",
         "Notifications and recovery",
         "F01/F03",
-        None,
+        Some("notifications"),
     ),
-    required("panel.help", "Help and contracts", "F24", None),
+    required("panel.help", "Help and contracts", "F24", Some("help")),
 ];
 
 const fn required(
@@ -767,9 +830,9 @@ mod tests {
         assert!(ids.contains(&"outline"));
         assert!(ids.contains(&"inspector"));
 
-        // outline needs document-tree, whose backing service is not implemented: not shown.
+        // The Outline is the object tree and needs no service: shown.
         assert!(
-            !without
+            without
                 .visible(&services(&[]))
                 .iter()
                 .any(|spec| spec.id() == "outline")
@@ -781,17 +844,24 @@ mod tests {
                 .iter()
                 .any(|spec| spec.id() == "messages")
         );
-        // With the service, the panel appears.
+        // inspector needs property-schema: unavailable until the service exists (it is not in the
+        // first-run layout, so `available` is the question rather than `visible`).
+        assert!(
+            !without
+                .available(&services(&[]))
+                .iter()
+                .any(|spec| spec.id() == "inspector")
+        );
         assert!(
             without
-                .visible(&services(&["document-tree"]))
+                .available(&services(&["property-schema"]))
                 .iter()
-                .any(|spec| spec.id() == "outline")
+                .any(|spec| spec.id() == "inspector")
         );
 
         let report = without.render(&services(&[])).join("\n");
         assert!(
-            report.contains("is not shown because document-tree is not available"),
+            report.contains("is not shown because property-schema is not available"),
             "{report}"
         );
     }
@@ -826,7 +896,43 @@ mod tests {
                 assert!(
                     built_in().spec(host).is_some()
                         || [
-                            "pages", "events", "data", "debug", "widgets", "assets", "theme"
+                            "pages",
+                            "events",
+                            "data",
+                            "debug",
+                            "widgets",
+                            "assets",
+                            "theme",
+                            "help",
+                            "search",
+                            "environments",
+                            "targets",
+                            "inspection",
+                            "vcs",
+                            "project",
+                            "dependencies",
+                            "breakpoints",
+                            "stack",
+                            "variables",
+                            "actions",
+                            "notifications",
+                            "application",
+                            "history",
+                            "extensions",
+                            "tests",
+                            "tasks",
+                            "build",
+                            "run",
+                            "terminal",
+                            "preview",
+                            "hot",
+                            "states",
+                            "items",
+                            "components",
+                            "timeline",
+                            "ai",
+                            "source",
+                            "layout",
                         ]
                         .contains(&host),
                     "{} names an unknown host panel {host}",
@@ -854,8 +960,13 @@ mod tests {
         };
         assert_eq!(state("panel.widgets"), Some(PanelState::Missing));
         assert_eq!(state("panel.profiler"), Some(PanelState::Deferred));
-        // The outline is registered but its service is not available in this call.
-        assert_eq!(state("panel.outline"), Some(PanelState::Unavailable));
+        // The Outline is the object tree and is shown without a service. The source outline is the
+        // window's separate `source` panel, which this registry does not register at all; a ledger
+        // that only knows the built-ins must say missing rather than borrow the object tree for it.
+        assert_eq!(state("panel.objects"), Some(PanelState::Shown));
+        assert_eq!(state("panel.outline"), Some(PanelState::Missing));
+        // The Inspector needs property-schema, which this call does not provide.
+        assert_eq!(state("panel.properties"), Some(PanelState::Unavailable));
         let lines = panels.accounting_lines(&services(&[
             "document-tree",
             "property-schema",

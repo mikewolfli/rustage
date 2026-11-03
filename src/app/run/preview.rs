@@ -8,29 +8,29 @@
 
 use super::*;
 
-pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
-    use rust_widgets::core::{ObjectId, Rect};
-    use rust_widgets::widget::{Widget, WidgetFactory, runtime};
+use rust_widgets::core::{ObjectId, Rect};
+use rust_widgets::widget::{Widget, WidgetFactory, runtime};
 
+/// Builds real, registered controls, so a mounted preview is a live session rather than ids on
+/// paper. The library's factory is headless; it needs no window.
+pub(super) fn control_creator(
+    factory: &WidgetFactory,
+) -> impl Fn(&rust_widgets::view::Node) -> Option<ObjectId> + '_ {
+    move |node| {
+        let widget: Box<dyn Widget> = factory.create(
+            &node.widget,
+            Rect::new(0, 0, 200, 28),
+            node.key_str().unwrap_or("anon"),
+        )?;
+        runtime::register(widget)
+    }
+}
+
+pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
     use crate::app::preview::hot_update::Updater;
     use crate::app::preview::preview_service::{Document, DocumentNode, Preview};
     use crate::app::preview::state_keep::Capture;
     use crate::contracts::identity::NodeId;
-
-    /// Builds real, registered controls, so a mounted preview is a live session rather than ids on
-    /// paper. The library's factory is headless; it needs no window.
-    fn creator(
-        factory: &WidgetFactory,
-    ) -> impl Fn(&rust_widgets::view::Node) -> Option<ObjectId> + '_ {
-        move |node| {
-            let widget: Box<dyn Widget> = factory.create(
-                &node.widget,
-                Rect::new(0, 0, 200, 28),
-                node.key_str().unwrap_or("anon"),
-            )?;
-            runtime::register(widget)
-        }
-    }
 
     /// `<node>:<kind>:<text>`.
     fn document_node(text: &str) -> Result<DocumentNode, String> {
@@ -95,7 +95,7 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
             "mount" => match parse_document(argument) {
                 Ok(next) => {
                     let factory = WidgetFactory::new_with_defaults();
-                    let make = creator(&factory);
+                    let make = control_creator(&factory);
                     match preview.mount_view(&next, &make) {
                         Ok(report) => {
                             document = Some(next);
@@ -116,16 +116,45 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                 }
                 Err(reason) => Err(reason),
             },
+            "mount-page" => match crate::app::run::generate::read_document(argument) {
+                Ok(json) => {
+                    let factory = WidgetFactory::new_with_defaults();
+                    let make = control_creator(&factory);
+                    match preview.mount_json(&json, &make) {
+                        Ok(report) => Ok(vec![format!(
+                            "mounted page {argument}: {} control(s), {} issue(s), generation {}",
+                            report.widgets_created, report.issues, report.generation
+                        )]),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                Err(reason) => Err(reason),
+            },
+            "update-page" => match crate::app::run::generate::read_document(argument) {
+                Ok(json) => {
+                    let factory = WidgetFactory::new_with_defaults();
+                    let make = control_creator(&factory);
+                    match preview.update_json(&json, &make) {
+                        Ok(report) => Ok(vec![format!(
+                            "updated page {argument}: {} patch(es), generation {}, {} update(s)",
+                            report.patches, report.generation, report.updates
+                        )]),
+                        Err(reason) => Err(reason),
+                    }
+                }
+                Err(reason) => Err(reason),
+            },
             "update" => match document.as_mut() {
                 None => Err("no document is mounted, so there is nothing to update".to_owned()),
                 Some(current) => match document_node(argument) {
                     Ok(next) => {
-                        match current.nodes.iter_mut().find(|held| held.node == next.node) {
+                        let nodes = std::sync::Arc::make_mut(&mut current.nodes);
+                        match nodes.iter_mut().find(|held| held.node == next.node) {
                             Some(held) => *held = next,
-                            None => current.nodes.push(next),
+                            None => nodes.push(next),
                         }
                         let factory = WidgetFactory::new_with_defaults();
-                        let make = creator(&factory);
+                        let make = control_creator(&factory);
                         match preview.update_view(current, &make) {
                             Ok(report) => {
                                 let mut lines = vec![format!(
@@ -177,7 +206,7 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                     None => Err("no document is mounted, so no edit can be applied".to_owned()),
                     Some(current) => {
                         let factory = WidgetFactory::new_with_defaults();
-                        let make = creator(&factory);
+                        let make = control_creator(&factory);
                         match preview.apply_update(&update, current, &make) {
                             Ok(decision) => Ok(vec![decision.render()]),
                             Err(reason) => Err(reason),
@@ -204,6 +233,29 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                 Err(reason) => Err(reason),
             },
             "gap" => Ok(vec![Preview::scroll_gap().to_owned()]),
+            // H-34: paint the mounted tree into an SVG frame. The library's real paint traversal
+            // produces the picture, so this is a headless thumbnail of the same controls a window
+            // would show, not a second host-side renderer.
+            "paint" => match argument.rsplit_once(':') {
+                Some((path, size)) => match size.split_once('x') {
+                    Some((width, height)) => match (width.parse::<u32>(), height.parse::<u32>()) {
+                        (Ok(width), Ok(height)) => {
+                            match preview.paint_svg(rust_widgets::core::Size::new(width, height)) {
+                                Ok(svg) => match std::fs::write(path, svg) {
+                                    Ok(()) => Ok(vec![format!(
+                                        "painted {width}x{height} frame -> {path}"
+                                    )]),
+                                    Err(error) => Err(format!("cannot write {path}: {error}")),
+                                },
+                                Err(reason) => Err(reason),
+                            }
+                        }
+                        _ => Err(format!("{size:?} is not <width>x<height> in pixels")),
+                    },
+                    None => Err(format!("{size:?} is not <width>x<height>")),
+                },
+                None => Err(format!("{argument:?} is not <path>:<width>x<height>")),
+            },
             "unwired" => {
                 let lines = preview.unwired_events();
                 if lines.is_empty() {

@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn a_future_version_or_a_bad_shape_is_refused_rather_than_treated_as_empty() {
-        let future = format!("{{\"version\": 99, \"favorites\": [\"button\"]}}");
+        let future = "{\"version\": 99, \"favorites\": [\"button\"]}".to_owned();
         let refusal = Favorites::parse(&future).expect_err("a future version is not read");
         assert!(refusal.contains("version 99"), "{refusal}");
 

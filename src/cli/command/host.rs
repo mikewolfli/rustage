@@ -17,6 +17,14 @@ use super::*;
 pub struct WorkbenchGuiOptions {
     /// Where the layout is loaded from and saved to, when given.
     pub layout: Option<PathBuf>,
+    /// The project directory the workbench opens, when given.
+    pub project: Option<PathBuf>,
+    /// The AI session journal the AI panel reads, when given.
+    pub ai_journal: Option<PathBuf>,
+    /// The language server the source-outline panel starts, when given.
+    pub lsp: Option<String>,
+    /// The arguments the language server is started with (`--lsp-arg`, repeatable).
+    pub lsp_arguments: Vec<String>,
     /// How long the window may live before it closes itself; zero runs until the window closes.
     pub exit_after: Duration,
     /// Drive a short action sequence (toggle panels, save the layout, split) before quitting.
@@ -27,6 +35,10 @@ impl Default for WorkbenchGuiOptions {
     fn default() -> Self {
         Self {
             layout: None,
+            project: None,
+            ai_journal: None,
+            lsp: None,
+            lsp_arguments: Vec::new(),
             // A person opens the window to use it; a bounded default would close it under them.
             exit_after: Duration::ZERO,
             smoke: false,
@@ -81,6 +93,36 @@ pub(super) fn parse_host(
                         return Some(Err(ParseError { argument }));
                     };
                     options.layout = Some(PathBuf::from(value));
+                    continue;
+                }
+                if argument == OsStr::new("--project") {
+                    let Some(value) = arguments.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    options.project = Some(PathBuf::from(value));
+                    continue;
+                }
+                if argument == OsStr::new("--ai-journal") {
+                    let Some(value) = arguments.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    options.ai_journal = Some(PathBuf::from(value));
+                    continue;
+                }
+                if argument == OsStr::new("--lsp") {
+                    let Some(value) = arguments.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    options.lsp = Some(value.to_string_lossy().into_owned());
+                    continue;
+                }
+                if argument == OsStr::new("--lsp-arg") {
+                    let Some(value) = arguments.next() else {
+                        return Some(Err(ParseError { argument }));
+                    };
+                    options
+                        .lsp_arguments
+                        .push(value.to_string_lossy().into_owned());
                     continue;
                 }
                 if argument == OsStr::new("--exit-after-ms") {

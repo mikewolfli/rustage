@@ -478,20 +478,21 @@ mod tests {
         );
         assert!(report.is_clean(), "{:?}", report.problems());
         let both = report.both();
-        assert!(both.contains(&"file.save".to_owned()), "{both:?}");
+        assert!(both.contains(&"edit.undo".to_owned()), "{both:?}");
         assert!(both.contains(&"view.palette".to_owned()), "{both:?}");
         // A command reachable only from the palette is classified as such, not as a failure.
+        assert_eq!(report.classified().get("edit.redo"), Some(&Reach::Both));
         assert_eq!(
-            report.classified().get("file.save-as"),
+            report.classified().get("view.welcome"),
             Some(&Reach::VisibleOnly)
         );
     }
 
     #[test]
     fn a_toolbar_command_with_no_key_is_reported() {
-        // file.save-as is in a menu but bound to no key; putting it on a toolbar makes the missing
+        // view.welcome is in a menu but bound to no key; putting it on a toolbar makes the missing
         // keyboard entry a problem, because a toolbar button is an advertised operation.
-        let set = vec!["file.save-as".to_owned()];
+        let set = vec!["view.welcome".to_owned()];
         let sets: [&[String]; 1] = [set.as_slice()];
         let report = discoverability(
             &registry(),
@@ -503,7 +504,7 @@ mod tests {
             report
                 .problems()
                 .iter()
-                .any(|problem| problem.contains("file.save-as") && problem.contains("no key")),
+                .any(|problem| problem.contains("view.welcome") && problem.contains("no key")),
             "{:?}",
             report.problems()
         );
@@ -568,7 +569,7 @@ mod tests {
         keymap
             .add(Binding::new(
                 Chord::parse("Ctrl+Q").unwrap(),
-                "file.save-as",
+                "edit.undo",
                 Scope::Global,
             ))
             .expect("no conflict");
@@ -579,12 +580,12 @@ mod tests {
             report
                 .problems()
                 .iter()
-                .any(|problem| problem.contains("file.save-as") && problem.contains("no menu")),
+                .any(|problem| problem.contains("edit.undo") && problem.contains("no menu")),
             "{:?}",
             report.problems()
         );
         assert_eq!(
-            report.classified().get("file.save-as"),
+            report.classified().get("edit.undo"),
             Some(&Reach::KeyboardOnly)
         );
     }

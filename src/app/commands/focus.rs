@@ -244,8 +244,6 @@ pub fn toolbar_entries(registry: &Registry, commands: &[String], context: &Conte
 /// The toolbar this build declares: the commands a person reaches most often.
 pub fn built_in_toolbar() -> Vec<String> {
     vec![
-        "file.save".to_owned(),
-        "file.save-all".to_owned(),
         "edit.undo".to_owned(),
         "edit.redo".to_owned(),
         "build.run".to_owned(),
@@ -274,12 +272,12 @@ mod tests {
             &context(),
             &Target::Canvas,
             "design",
-            Chord::parse("Ctrl+S").unwrap().keys(),
+            Chord::parse("Ctrl+Z").unwrap().keys(),
         );
         assert_eq!(
             route,
             Route::Ran {
-                command: "file.save".to_owned()
+                command: "edit.undo".to_owned()
             }
         );
         assert!(route.is_claimed(), "a route that ran must not fall through");
@@ -362,19 +360,19 @@ mod tests {
     fn the_menu_the_toolbar_and_the_context_menu_agree_about_one_command() {
         let registry = registry();
         let untrusted = Context::in_area("design");
-        let file_menu = menus()
+        let edit_menu = menus()
             .into_iter()
-            .find(|menu| menu.title() == "File")
-            .expect("a File menu");
+            .find(|menu| menu.title() == "Edit")
+            .expect("an Edit menu");
 
-        let from_menu = menu_entries(&registry, &file_menu, &untrusted)
+        let from_menu = menu_entries(&registry, &edit_menu, &untrusted)
             .into_iter()
-            .find(|entry| entry.id() == "file.save")
-            .expect("the Save item");
+            .find(|entry| entry.id() == "edit.undo")
+            .expect("the Undo item");
         let from_toolbar = toolbar_entries(&registry, &built_in_toolbar(), &untrusted)
             .into_iter()
-            .find(|entry| entry.id() == "file.save")
-            .expect("the Save button");
+            .find(|entry| entry.id() == "edit.undo")
+            .expect("the Undo button");
         assert_eq!(from_menu, from_toolbar, "the two entry points must agree");
         assert!(from_menu.is_enabled());
 
@@ -405,12 +403,31 @@ mod tests {
             .find(|menu| menu.title() == "Build")
             .expect("a Build menu");
         let entries = menu_entries(&registry, &build_menu, &untrusted);
-        assert_eq!(entries.len(), 1);
-        assert!(
-            entries[0].render().contains("not trusted"),
-            "{}",
-            entries[0].render()
+        assert_eq!(
+            entries.len(),
+            8,
+            "Run, Check, Rebuild, Clean, Cancel, Copy Output, Copy Build Command and Go to First Error"
         );
+        for id in ["build.run", "build.check", "build.rebuild", "build.clean"] {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id() == id)
+                .expect("a build leaf");
+            assert!(entry.render().contains("not trusted"), "{}", entry.render());
+        }
+        // The log and navigation commands need no trust, so they keep their real (enabled) state.
+        for id in [
+            "build.cancel",
+            "build.copy-output",
+            "build.copy-command",
+            "build.locate-first-error",
+        ] {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id() == id)
+                .expect("a log command");
+            assert!(entry.is_enabled(), "{} is enabled: {}", id, entry.render());
+        }
     }
 
     #[test]
@@ -437,7 +454,7 @@ mod tests {
         let registry = registry();
         let entries = toolbar_entries(
             &registry,
-            &["file.save".to_owned(), "nowhere.here".to_owned()],
+            &["edit.undo".to_owned(), "nowhere.here".to_owned()],
             &context(),
         );
         assert!(entries[0].is_enabled());

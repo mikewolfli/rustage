@@ -136,7 +136,7 @@ impl DocumentStore {
     }
 
     /// Applies a change set, or refuses it without changing anything.
-    pub fn apply(&mut self, set: ChangeSet) -> ApplyOutcome {
+    pub fn apply(&mut self, set: &ChangeSet) -> ApplyOutcome {
         if set.base() != self.revision {
             return self.reject(ChangeRejection::StaleBase {
                 base: set.base(),
@@ -674,7 +674,7 @@ mod tests {
             }],
         )
         .unwrap();
-        let outcome = store.apply(set);
+        let outcome = store.apply(&set);
         assert!(outcome.is_applied(), "{}", outcome);
         id
     }
@@ -731,7 +731,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = fixture.store.apply(set);
+        let outcome = fixture.store.apply(&set);
 
         assert_eq!(
             outcome,
@@ -774,7 +774,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = fixture.store.apply(stale);
+        let outcome = fixture.store.apply(&stale);
 
         assert_eq!(
             outcome.rejection(),
@@ -821,7 +821,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = fixture.store.apply(set);
+        let outcome = fixture.store.apply(&set);
 
         assert_eq!(
             outcome.rejection(),
@@ -859,7 +859,7 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(fixture.store.apply(relabel).is_applied());
+        assert!(fixture.store.apply(&relabel).is_applied());
 
         let id = fixture.store.allocate_id();
         let structural = ChangeSet::new(
@@ -874,7 +874,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = fixture.store.apply(structural.clone());
+        let outcome = fixture.store.apply(&structural);
 
         assert_eq!(
             outcome.rejection(),
@@ -892,7 +892,7 @@ mod tests {
             .store
             .gate_mut()
             .approve(Capability::AddOrRemoveNode);
-        assert!(fixture.store.apply(structural).is_applied());
+        assert!(fixture.store.apply(&structural).is_applied());
         assert_eq!(
             fixture.store.node(fixture.root).unwrap().children(),
             [child, id]
@@ -921,7 +921,7 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(fixture.store.apply(first).is_applied());
+        assert!(fixture.store.apply(&first).is_applied());
 
         let based_on_nothing = ChangeSet::new(
             fixture.store.revision(),
@@ -936,7 +936,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = fixture.store.apply(based_on_nothing);
+        let outcome = fixture.store.apply(&based_on_nothing);
 
         assert!(matches!(
             outcome.rejection(),
@@ -986,7 +986,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fixture.store.apply(duplicate).rejection(),
+            fixture.store.apply(&duplicate).rejection(),
             Some(&ChangeRejection::DuplicateNode { id: duplicated }),
         );
 
@@ -1006,7 +1006,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            fixture.store.apply(out_of_range).rejection(),
+            fixture.store.apply(&out_of_range).rejection(),
             Some(ChangeRejection::PlacementOutOfRange { index: 9, .. }),
         ));
 
@@ -1022,7 +1022,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fixture.store.apply(subtree).rejection(),
+            fixture.store.apply(&subtree).rejection(),
             Some(&ChangeRejection::ImplicitSubtreeRemoval {
                 id: child,
                 children: 1
@@ -1043,7 +1043,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fixture.store.apply(cycle).rejection(),
+            fixture.store.apply(&cycle).rejection(),
             Some(&ChangeRejection::CyclicMove {
                 id: child,
                 parent: grandchild
@@ -1062,7 +1062,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fixture.store.apply(root_change).rejection(),
+            fixture.store.apply(&root_change).rejection(),
             Some(&ChangeRejection::PageRootChange { page: fixture.page }),
         );
 
@@ -1078,7 +1078,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            fixture.store.apply(stale_structure).rejection(),
+            fixture.store.apply(&stale_structure).rejection(),
             Some(ChangeRejection::StaleStructure { found, .. }) if found == "at index 0",
         ));
     }
@@ -1104,7 +1104,7 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(fixture.store.apply(removal).is_applied());
+        assert!(fixture.store.apply(&removal).is_applied());
         assert_eq!(fixture.store.node(child), None);
         assert!(
             fixture
@@ -1128,7 +1128,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fixture.store.apply(resurrect).rejection(),
+            fixture.store.apply(&resurrect).rejection(),
             Some(&ChangeRejection::RetiredNode { id: child }),
         );
     }
@@ -1150,7 +1150,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fixture.store.apply(set).rejection(),
+            fixture.store.apply(&set).rejection(),
             Some(&ChangeRejection::UnknownNode { id: invented }),
         );
     }
@@ -1194,7 +1194,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let applied = fixture.store.apply(edit.clone());
+        let applied = fixture.store.apply(&edit);
         assert!(applied.is_applied());
         assert_eq!(
             fixture.store.node(fixture.root).unwrap().children(),
@@ -1202,7 +1202,7 @@ mod tests {
         );
 
         let undo = edit.inverse(applied.revision());
-        let undone = fixture.store.apply(undo);
+        let undone = fixture.store.apply(&undo);
 
         assert!(undone.is_applied(), "{}", undone);
         assert_eq!(

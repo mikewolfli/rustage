@@ -1215,7 +1215,7 @@ fn check_url() -> (CapabilityCheck, CapabilityCheck) {
                      person asks for it"
                 .to_owned(),
         },
-        format!("the platform handler would be asked to open the accepted target"),
+        "the platform handler would be asked to open the accepted target".to_owned(),
     );
 
     (present, handover)

@@ -819,16 +819,12 @@ impl Keymap {
 pub fn built_in() -> Keymap {
     let mut keymap = Keymap::new();
     let bindings = [
-        ("Ctrl+S", "file.save", Scope::Global),
-        ("Ctrl+Shift+S", "file.save-all", Scope::Global),
         ("Ctrl+W", "file.close", Scope::Global),
         ("Ctrl+Z", "edit.undo", Scope::Global),
         ("Ctrl+Shift+Z", "edit.redo", Scope::Global),
         ("Ctrl+B", "build.run", Scope::Global),
         ("Ctrl+K Ctrl+S", "keys.show", Scope::Global),
         ("Ctrl+P", "view.palette", Scope::Global),
-        ("Escape", "panel.close", Scope::Panel("outline".to_owned())),
-        ("Enter", "tree.activate", Scope::TextField),
     ];
     for (chord, command, scope) in bindings {
         keymap

@@ -520,6 +520,42 @@ pub fn file_uri(path: &Path) -> String {
     out
 }
 
+/// The local path a `file://` URI names, when it names one.
+///
+/// The inverse of [`file_uri`]: percent escapes are decoded as UTF-8 bytes, and a `localhost`
+/// authority is accepted because servers commonly send `file://localhost/path`. A URI with another
+/// authority, or one that is not `file:`, is refused rather than guessed at.
+pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(rest.len());
+    let mut input = rest.bytes();
+    while let Some(byte) = input.next() {
+        if byte != b'%' {
+            bytes.push(byte);
+            continue;
+        }
+        let high = input.next()?;
+        let low = input.next()?;
+        let value = (hex_digit(high)? << 4) | hex_digit(low)?;
+        bytes.push(value);
+    }
+    String::from_utf8(bytes).ok().map(PathBuf::from)
+}
+
+/// The value of one hexadecimal digit.
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// A map of project to running client, so a caller that only has a project name can stop it.
 #[derive(Default)]
 pub struct Clients {
@@ -577,7 +613,7 @@ impl Clients {
 mod tests {
     use super::{
         Position, TextEdit, change_params, close_params, file_uri, full_change, incremental_change,
-        open_params, read_message, response_body, save_params,
+        open_params, path_from_uri, read_message, response_body, save_params,
     };
     use crate::project::record::json::parse;
     use std::path::Path;
@@ -588,6 +624,23 @@ mod tests {
         assert!(uri.starts_with("file:///tmp/a%20folder/"));
         assert!(!uri.contains(' '));
         assert!(uri.contains("%C3%BC"));
+    }
+
+    #[test]
+    fn a_file_uri_round_trips_through_its_path() {
+        let path = Path::new("/tmp/a folder/üi.rs");
+        assert_eq!(path_from_uri(&file_uri(path)), Some(path.to_path_buf()));
+        assert_eq!(
+            path_from_uri("file://localhost/tmp/plain.rs"),
+            Some(Path::new("/tmp/plain.rs").to_path_buf())
+        );
+    }
+
+    #[test]
+    fn a_uri_that_is_not_a_local_file_is_refused() {
+        assert_eq!(path_from_uri("https://example.com/a.rs"), None);
+        assert_eq!(path_from_uri("file://server/share/a.rs"), None);
+        assert_eq!(path_from_uri("file:///tmp/%zz.rs"), None);
     }
 
     #[test]

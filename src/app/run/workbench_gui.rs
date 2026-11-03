@@ -26,9 +26,9 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use rust_widgets::app::{ButtonHandle, MenuHandle, WidgetHandle, WindowHandle};
@@ -49,7 +49,7 @@ use rust_widgets::widget::{GroupBox, ListBox, Menu, TabWidget, ToolBar};
 use crate::app::canvas::scene::Rect as SceneRect;
 use crate::app::canvas::widget_catalog::{Catalog, WidgetDescriptor};
 use crate::app::canvas::widget_favorites::Favorites;
-use crate::app::commands::command::{Context, Registry, built_in};
+use crate::app::commands::command::{Call, Context, Registry, built_in};
 use crate::app::commands::palette::Recents;
 use crate::app::shell::groups::{Axis, Groups};
 use crate::app::shell::layout::Layout;
@@ -59,6 +59,9 @@ use crate::contracts::identity::NodeId;
 use crate::contracts::permission::EffectClass;
 use crate::host::platform::NativePlatform;
 use crate::host::startup::{StartupPlatform, StartupRequest};
+use crate::project::lifecycle::session::ProjectSession;
+use crate::project::record::entries::ProjectTree;
+use crate::project::record::format::{PROJECT_FILE_NAME, ProjectContent, migration_path};
 
 use super::report;
 use super::workbench_debug::{Command as DebugCommand, DebugState, Update as DebugUpdate};
@@ -68,7 +71,10 @@ use super::workbench_layout::{Area, WorkbenchLayout};
 use super::workbench_pages::PagesState;
 use super::workbench_palette::Palette;
 use super::workbench_property::PropertyState;
-use super::workbench_scene::{CanvasLayout, CanvasState, CanvasTransform, ClipboardSubtree, span};
+use super::workbench_scene::{
+    CanvasLayout, CanvasState, CanvasTransform, CanvasView, ClipboardSubtree, DESIGN_HEIGHT,
+    DESIGN_WIDTH, span,
+};
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 800;
@@ -80,14 +86,87 @@ const STATUS_Y: i32 = 768;
 const STATUS_HEIGHT: u32 = 28;
 
 /// The panels this window adds to the built-in set.
-const EXTRA_PANELS: [(&str, &str, Dock); 7] = [
+const EXTRA_PANELS: [(&str, &str, Dock); 37] = [
     ("widgets", "Widgets", Dock::Left),
     ("pages", "Pages", Dock::Left),
     ("events", "Events", Dock::Left),
     ("assets", "Assets", Dock::Left),
+    ("project", "Project", Dock::Left),
     ("data", "Data & State", Dock::Right),
+    ("states", "States", Dock::Right),
+    ("items", "Collection contents", Dock::Right),
+    ("components", "Components", Dock::Right),
+    ("timeline", "Timeline", Dock::Right),
+    ("ai", "AI session", Dock::Right),
+    ("source", "Source outline", Dock::Left),
+    ("layout", "Layout inspector", Dock::Right),
     ("theme", "Theme", Dock::Right),
     ("debug", "Debug", Dock::Right),
+    ("breakpoints", "Breakpoints", Dock::Right),
+    ("stack", "Call stack", Dock::Right),
+    ("variables", "Variables", Dock::Right),
+    ("targets", "Targets", Dock::Right),
+    ("actions", "Actions", Dock::Right),
+    ("help", "Help", Dock::Bottom),
+    ("search", "Search", Dock::Bottom),
+    ("environments", "Environments", Dock::Bottom),
+    ("inspection", "Inspection", Dock::Bottom),
+    ("vcs", "Version control", Dock::Bottom),
+    ("dependencies", "Dependencies", Dock::Bottom),
+    ("notifications", "Notifications", Dock::Bottom),
+    ("application", "Application structure", Dock::Bottom),
+    ("history", "History", Dock::Bottom),
+    ("extensions", "Extensions", Dock::Bottom),
+    ("tests", "Tests", Dock::Bottom),
+    ("tasks", "Background tasks", Dock::Bottom),
+    ("build", "Build output", Dock::Bottom),
+    ("run", "Application output", Dock::Bottom),
+    ("terminal", "Terminal", Dock::Bottom),
+    ("preview", "Preview", Dock::Bottom),
+    ("hot", "Hot update", Dock::Bottom),
+];
+
+/// The Inspector's right-click menu: label key and action.
+const INSPECTOR_MENU_KEYS: [(&str, &str); 3] = [
+    ("ui.context.clear", "clear"),
+    ("ui.context.reset", "reset"),
+    ("ui.context.inspect", "inspect"),
+];
+
+/// The scene node's right-click menu.
+const SCENE_MENU_KEYS: [(&str, &str); 16] = [
+    ("ui.context.select-parent", "select-parent"),
+    ("ui.context.select-child", "select-child"),
+    ("ui.context.rename", "rename"),
+    ("ui.context.wrap-container", "wrap-container"),
+    ("ui.context.move-out", "move-out"),
+    ("ui.context.move-into", "move-into"),
+    ("ui.context.copy-node", "copy-node"),
+    ("ui.context.paste-node", "paste-node"),
+    ("ui.context.toggle-lock", "toggle-lock"),
+    ("ui.context.toggle-hide", "toggle-hide"),
+    ("ui.context.raise", "raise"),
+    ("ui.context.raise-one", "raise-one"),
+    ("ui.context.lower-one", "lower-one"),
+    ("ui.context.send-to-back", "send-to-back"),
+    ("ui.context.duplicate", "duplicate"),
+    ("ui.context.delete", "delete"),
+];
+
+/// The editor tab's right-click menu.
+const EDITOR_MENU_KEYS: [(&str, &str); 5] = [
+    ("ui.context.editor.close", "close"),
+    ("ui.context.editor.close-others", "close-others"),
+    ("ui.context.editor.close-right", "close-right"),
+    ("ui.context.editor.split", "split"),
+    ("ui.context.editor.next-group", "next-group"),
+];
+
+/// The Messages list's right-click menu.
+const DIAGNOSTIC_MENU_KEYS: [(&str, &str); 3] = [
+    ("ui.context.diagnostic.copy", "copy"),
+    ("ui.context.diagnostic.copy-all", "copy-all"),
+    ("ui.context.diagnostic.clear", "clear"),
 ];
 
 /// One widget-library row's label: the library's designer category and the control name, with a
@@ -128,6 +207,153 @@ fn widget_rows(catalog: &Catalog, query: &str) -> Vec<(String, String)> {
     }
 }
 
+/// The local toolbox a desktop target has on this machine, probed once per session.
+///
+/// `Probe::from_path` reads every directory on `PATH`; two panels ask for the toolbox, so the
+/// result is kept rather than read twice. `host` decides the signing program; the mobile platform
+/// is unused by a desktop profile.
+fn local_toolbox() -> &'static crate::app::targets::local::Toolbox {
+    static TOOLBOX: std::sync::OnceLock<crate::app::targets::local::Toolbox> =
+        std::sync::OnceLock::new();
+    TOOLBOX.get_or_init(|| {
+        crate::app::targets::local::Toolbox::for_target(
+            "desktop",
+            crate::app::targets::configuration::Os::host(),
+            crate::app::targets::local::MobilePlatform::Android,
+            &crate::app::targets::local::Probe::from_path(),
+        )
+    })
+}
+
+/// The build-environment probe (cargo, rustc, installed targets, the host SDK), read once.
+fn build_environment() -> &'static crate::app::build::toolchain::Environment {
+    static ENVIRONMENT: std::sync::OnceLock<crate::app::build::toolchain::Environment> =
+        std::sync::OnceLock::new();
+    ENVIRONMENT.get_or_init(crate::app::build::toolchain::Environment::probe)
+}
+
+/// Opens the project document in `directory`.
+///
+/// The directory is the unit a person recognises; the document inside it has one name. Nothing is
+/// written, trusted or run here — [`ProjectSession::open`] only reads.
+fn open_project(directory: &Path) -> Result<ProjectSession, String> {
+    let file = directory.join(PROJECT_FILE_NAME);
+    ProjectSession::open(&file).map_err(|error| error.message())
+}
+
+/// The Project panel's rows: the document's own tree, grouped the way the project model groups it.
+///
+/// The tree is the model's `ProjectTree`, not a second scan of the directory: pages, project files,
+/// generated outputs, stylesheets, target profiles and the network services the document declares.
+fn project_rows(project: &Option<ProjectSession>) -> Vec<String> {
+    let Some(session) = project else {
+        return vec![tr("ui.project.none")];
+    };
+    let Some(document) = session.file().document() else {
+        return vec![tr("ui.project.unreadable")];
+    };
+    let root = session.root().as_path().display().to_string();
+    ProjectTree::of(document, Some(&root)).render()
+}
+
+/// The Dependencies panel's rows: the lockfile and the resolution a caller would have to authorize.
+fn dependency_rows(project: &Option<ProjectSession>) -> Vec<String> {
+    let Some(session) = project else {
+        return vec![tr("ui.project.none")];
+    };
+    crate::app::run::workbench_dependencies::rows(session.root().as_path())
+}
+
+/// The Environments panel's rows: the local toolkit and the facts every capability claim rests on.
+///
+/// The roadmap's panel is "the local kit/toolchain and the capabilities"; a connection or container
+/// is a future extension and is deliberately not shown. Every row is a fact this process can read
+/// now: the backend the window is drawn with, the host, the pinned dependency, the active interface
+/// language, and the local tools a desktop target needs on this machine.
+fn environment_rows() -> Vec<String> {
+    let revision = crate::probe::DEPENDENCY_REVISION;
+    let language = rust_widgets::i18n::get_manager()
+        .as_ref()
+        .map(|manager| manager.current_language().clone())
+        .unwrap_or_else(|| "en".to_owned());
+    let mut rows = vec![
+        format!(
+            "{}: {}",
+            tr("ui.environment.backend"),
+            rust_widgets::platform::backend_name()
+        ),
+        format!(
+            "{}: {}/{}",
+            tr("ui.environment.platform"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+        format!(
+            "{}: {} {} @ {}",
+            tr("ui.environment.dependency"),
+            crate::probe::DEPENDENCY_CRATE,
+            crate::probe::DEPENDENCY_VERSION,
+            &revision[..12.min(revision.len())]
+        ),
+        format!("{}: {language}", tr("ui.environment.language")),
+    ];
+    rows.extend(local_toolbox().render());
+    rows
+}
+
+/// The Targets panel's rows: the profile set, the installed targets, the toolchain and SDK, the
+/// device seam and the certification level.
+///
+/// The designer has no target selected in this session, so nothing here is a chosen value: the rows
+/// are what `Environment::probe` and `Toolbox` measured, plus the certification report's own state.
+/// A cell without evidence stays unverified, so `0/25` is a result rather than a blank.
+fn target_rows() -> Vec<String> {
+    use crate::app::targets::certification::{Report, Stage};
+    use crate::app::targets::configuration::PROFILES;
+    use crate::app::targets::local::{ToolKind, ToolState};
+
+    let environment = build_environment();
+    let none = tr("ui.target.none");
+    let targets = if environment.targets.is_empty() {
+        none.clone()
+    } else {
+        environment.targets.join(", ")
+    };
+    let toolchain = match (&environment.cargo, &environment.rustc) {
+        (Some(cargo), Some(rustc)) => format!("{cargo}; {rustc}"),
+        (Some(line), None) | (None, Some(line)) => line.clone(),
+        (None, None) => none.clone(),
+    };
+    let devices = match local_toolbox().get(ToolKind::Devices) {
+        Some(tool) => match (&tool.state, &tool.program) {
+            (ToolState::Present, Some(program)) => program.clone(),
+            (ToolState::Missing { remedy }, Some(program)) => format!("{program} ({remedy})"),
+            (ToolState::NotApplicable { reason }, _) => reason.clone(),
+            (_, None) => none.clone(),
+        },
+        None => none.clone(),
+    };
+    let report = Report::new();
+    let total = report.rows().len() * Stage::all().len();
+    let verified = total.saturating_sub(report.unverified().len());
+    vec![
+        format!("{}: {}", tr("ui.target.profiles"), PROFILES.join(", ")),
+        format!("{}: {targets}", tr("ui.target.target")),
+        format!("{}: {toolchain}", tr("ui.target.toolchain")),
+        format!(
+            "{}: {}",
+            tr("ui.target.sdk"),
+            environment.sdk.clone().unwrap_or_else(|| none.clone())
+        ),
+        format!("{}: {devices}", tr("ui.target.devices")),
+        format!(
+            "{}: {verified}/{total} {}",
+            tr("ui.target.certification"),
+            tr("ui.target.verified")
+        ),
+    ]
+}
+
 /// The property the Inspector edits for one control.
 ///
 /// `text` and `title` come first because they are the two properties the scene's own contracts use.
@@ -158,6 +384,13 @@ type DataControls = (u64, u64, u64);
 
 /// The Pages panel's list, field, Add/Open/Back/Fwd/Close buttons, error line and note.
 type PageControls = (u64, u64, u64, u64, u64, u64, u64, u64, u64);
+
+/// The panels and chrome zen mode hid, held only while zen is on.
+struct ZenSnapshot {
+    shown: Vec<String>,
+    toolbar: bool,
+    status: bool,
+}
 
 /// One editor group's widgets.
 struct GroupView {
@@ -203,6 +436,56 @@ struct RenameRequest {
     answer: RenameAnswer,
 }
 
+/// Which one-field prompt is open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromptKind {
+    /// Go to line (or line:column).
+    Goto,
+    /// Quick-open a project file by path or fuzzy query.
+    OpenFile,
+    /// Jump to a symbol in the focused editor's document.
+    FileSymbol,
+    /// Jump to a symbol the language server reports for the workspace.
+    WorkspaceSymbol,
+    /// Write the focused document to a new project path and keep working there.
+    SaveAs,
+    /// Write a copy of the focused document without changing the active document.
+    SaveCopy,
+    /// Confirm removing the declaration of unreferenced resources.
+    CleanResources,
+}
+
+/// One answer from a one-field prompt, waiting for the main loop to apply it.
+enum Prompt {
+    /// The go-to-line field's text.
+    Goto(String),
+    /// The quick-open field's text.
+    OpenFile(String),
+    /// The file-symbol field's text.
+    FileSymbol(String),
+    /// The workspace-symbol field's text.
+    WorkspaceSymbol(String),
+    /// The save-as path field's text.
+    SaveAs(String),
+    /// The save-copy path field's text.
+    SaveCopy(String),
+    /// The resource-cleanup confirmation field's text.
+    CleanResources(String),
+    /// Escape or the cancel path, with the prompt it came from.
+    Cancelled(PromptKind),
+}
+
+/// One location the editor can return to: a document and a caret position in it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct JumpLocation {
+    /// The document the caret was in.
+    document: String,
+    /// The zero-based line.
+    line: usize,
+    /// The zero-based character column.
+    column: usize,
+}
+
 /// A translated label, through the library's global manager (loaded by `main` from the same JSON
 /// packs the CLI reads).
 fn tr(key: &str) -> String {
@@ -223,12 +506,56 @@ fn panel_key(id: &str) -> &'static str {
         "outline" => "ui.panel.outline",
         "events" => "ui.panel.events",
         "theme" => "ui.panel.theme",
+        "help" => "ui.panel.help",
+        "search" => "ui.panel.search",
+        "environments" => "ui.panel.environments",
+        "targets" => "ui.panel.targets",
+        "inspection" => "ui.panel.inspection",
+        "vcs" => "ui.panel.vcs",
+        "project" => "ui.panel.project",
+        "dependencies" => "ui.panel.dependencies",
+        "breakpoints" => "ui.panel.breakpoints",
+        "stack" => "ui.panel.stack",
+        "variables" => "ui.panel.variables",
+        "actions" => "ui.panel.actions",
+        "notifications" => "ui.panel.notifications",
+        "application" => "ui.panel.application",
+        "history" => "ui.panel.history",
+        "extensions" => "ui.panel.extensions",
+        "tests" => "ui.panel.tests",
+        "tasks" => "ui.panel.tasks",
+        "build" => "ui.panel.build",
+        "run" => "ui.panel.run",
+        "terminal" => "ui.panel.terminal",
+        "preview" => "ui.panel.preview",
+        "hot" => "ui.panel.hot",
         "inspector" => "ui.panel.inspector",
         "data" => "ui.panel.data",
+        "states" => "ui.panel.states",
+        "items" => "ui.panel.items",
+        "components" => "ui.panel.components",
+        "timeline" => "ui.panel.timeline",
+        "ai" => "ui.panel.ai",
+        "source" => "ui.panel.source-outline",
+        "layout" => "ui.panel.layout",
         "messages" => "ui.panel.messages",
         "problems" => "ui.panel.problems",
         "debug" => "ui.panel.debug",
         _ => "ui.panel.outline",
+    }
+}
+
+/// The action a View → Panels entry runs.
+///
+/// The ledger id is what `view.panel-show` accepts; a panel outside §2.2 (the built-in Messages
+/// list) keeps the window's own toggle, because the command's argument list is the ledger.
+fn panel_action(host: &str) -> String {
+    match crate::app::shell::panels::REQUIRED_PANELS
+        .iter()
+        .find(|panel| panel.host_id() == Some(host))
+    {
+        Some(panel) => format!("command:view.panel-show?panel={}", panel.id()),
+        None => format!("toggle:{host}"),
     }
 }
 
@@ -272,6 +599,100 @@ struct Gui {
     default_layout: Layout,
     layout_path: Option<PathBuf>,
     panel_widgets: BTreeMap<String, Vec<u64>>,
+    /// The dock slot each panel was placed in. A slot hosts one visible panel at a time, so the
+    /// toggle action hides the other panels sharing it.
+    panel_areas: BTreeMap<String, Area>,
+    /// The inspection and version-control lists, refreshed when their panels are shown.
+    inspection_list: u64,
+    vcs_list: u64,
+    vcs_menu: u64,
+    /// The project opened for this session, when one was named on the command line.
+    project: Option<ProjectSession>,
+    /// The text each document had on disk when it was read or last saved.
+    saved_texts: BTreeMap<String, String>,
+    /// The session's permission record; trusting a project is the person's decision.
+    permissions: crate::host::permission::PermissionService,
+    project_list: u64,
+    dependencies_list: u64,
+    /// The debug session's separate panels and the actions list.
+    breakpoints_list: u64,
+    stack_list: u64,
+    variables_list: u64,
+    actions_list: u64,
+    /// The host notification centre and the panel that shows it.
+    notifications: crate::app::run::workbench_notifications::Notifications,
+    notifications_list: u64,
+    notifications_menu: u64,
+    notification_row: Option<usize>,
+    application_list: u64,
+    /// The local extension registry the panel lists (empty until an install surface lands).
+    extensions: crate::app::extension::Registry,
+    extensions_usage: crate::app::extension::manager::Usage,
+    extensions_list: u64,
+    history_list: u64,
+    /// The page state machine the States panel reads, and where it was read from.
+    states_list: u64,
+    states_source: Option<String>,
+    states: Option<crate::project::record::page::PageStates>,
+    /// The collection-contents panel's list.
+    items_list: u64,
+    /// The component-library panel's list.
+    components_list: u64,
+    /// The transition-preview panel's list.
+    timeline_list: u64,
+    /// The AI-session journal path and the list that shows it.
+    ai_journal: Option<PathBuf>,
+    ai_list: u64,
+    /// The source-outline panel: the language server it may start and the rows it shows.
+    source: crate::app::run::workbench_outline::SourceOutline,
+    source_list: u64,
+    source_field: u64,
+    source_filter: String,
+    /// Where code navigation has been, newest last; [`Gui::jump_forward`] is the reverse.
+    jump_back: Vec<JumpLocation>,
+    jump_forward: Vec<JumpLocation>,
+    /// The selections `edit.select-shrink` walks back through, and the document they belong to.
+    selection_history: Vec<((usize, usize), (usize, usize))>,
+    selection_history_document: String,
+    /// Documents closed by a command, newest last, with the text they had.
+    closed_documents: Vec<(String, String)>,
+    /// The resource paths a cleanup preview listed, waiting for confirmation.
+    pending_resource_cleanup: Vec<String>,
+    /// Commands the window executed, newest last, with the millisecond they ran.
+    command_history: Vec<(u64, String)>,
+    /// The layout-inspector panel's list.
+    layout_list: u64,
+    /// The test runner's state and the controls that show it.
+    tests: crate::app::run::workbench_tests::TestsState,
+    tests_list: u64,
+    tests_menu: u64,
+    /// The process executor's records.
+    tasks: crate::app::run::workbench_tasks::Tasks,
+    tasks_list: u64,
+    /// The last build submitted to the same executor, and the controls that show it.
+    build: crate::app::run::workbench_build::BuildState,
+    build_owner: crate::host::tasks::OwnerId,
+    build_list: u64,
+    build_menu: u64,
+    /// The last started program, the field that names it, and the panel that shows it.
+    run: crate::app::run::workbench_run::RunState,
+    run_list: u64,
+    run_field: u64,
+    run_program: String,
+    run_menu: u64,
+    /// The terminal session, its command-line field and its output list.
+    terminal: crate::app::run::workbench_terminal::TerminalState,
+    terminal_list: u64,
+    terminal_field: u64,
+    terminal_input: String,
+    terminal_menu: u64,
+    /// The preview service's dock slot and menu; the service itself lives on the main thread.
+    preview_list: u64,
+    preview_menu: u64,
+    /// Whether the preview has a mounted library document (mount first, then update).
+    preview_json: bool,
+    hot: crate::app::preview::hot_update::Updater,
+    hot_list: u64,
     group_views: Vec<GroupView>,
     status: u64,
     message: String,
@@ -295,6 +716,9 @@ struct Gui {
     inspect_extra: Vec<String>,
     property_error: u64,
     /// The object tree, the canvas scene and the one selection both views read (T09.02–T09.04).
+    /// The design surface's zoom and helpers; the scene itself is in design space (roadmap
+    /// `design.tool.*`).
+    canvas_view: CanvasView,
     scene: CanvasState,
     outline_list: u64,
     /// The in-app scene clipboard (not the OS clipboard; T05.06 owns that payload).
@@ -311,6 +735,10 @@ struct Gui {
     widget_menu: u64,
     widgets_search: u64,
     widgets_list: u64,
+    /// The Search panel's query field, result list and current hits.
+    search_field: u64,
+    search_list: u64,
+    search_hits: Vec<SearchHit>,
     /// The Messages panel's log lines, newest last, and the list that shows them.
     messages: Vec<String>,
     messages_list: u64,
@@ -373,7 +801,6 @@ struct Gui {
     /// nothing in the scene reuses the node list instead of allocating it again.
     canvas_revision: u64,
     /// The Outline rows and their node ids, rebuilt only when names or membership change.
-    outline_rows: Vec<String>,
     outline_index: BTreeMap<NodeId, usize>,
     outline_content_revision: u64,
     /// Set while the Outline's current row is being written from the model.
@@ -383,11 +810,32 @@ struct Gui {
     /// node the selection already dropped (deleting the selected node used to end with another node
     /// selected, from a rebuild scheduled before the delete).
     outline_syncing: Arc<AtomicBool>,
+    /// Set while `sync_editors` writes the tab strips from the model.
+    ///
+    /// `TabWidget` emits `current_changed` synchronously when the active tab is set. The subscriber
+    /// locks this same `Gui`, so a rebuild that changes the active tab while the caller already
+    /// holds the lock would deadlock the main loop; the guard makes that emission the model
+    /// following itself instead of a person's click.
+    syncing_editors: Arc<AtomicBool>,
     /// Labels re-read after a translation hot reload.
     translatable: Vec<Translatable>,
     /// The toolbar and the catalog keys of its items, so a reload can rebuild its labels.
     toolbar: u64,
     toolbar_items: Vec<(&'static str, &'static str)>,
+    /// Whether the toolbar and the status bar take their row in the layout (roadmap view/display).
+    show_toolbar: bool,
+    show_status: bool,
+    /// Whether the layout is locked against save, load and reset (roadmap view/workspace).
+    layout_locked: bool,
+    /// Panels hidden most recently, newest last, so restore can put one back (bounded).
+    closed_panels: Vec<String>,
+    /// Whether the platform window is in full screen.
+    fullscreen: bool,
+    /// The panels and chrome zen mode hid, held only while zen is on.
+    zen: Option<ZenSnapshot>,
+    /// A weak handle to the shared state, so a command that starts a background poller can hand it
+    /// the same handle the menu closures hold without a second `Arc` cycle.
+    self_weak: Weak<Mutex<Gui>>,
     /// The Inspector's right-click menu.
     context_menu: u64,
     /// The scene node's right-click menu.
@@ -396,7 +844,19 @@ struct Gui {
     editor_menu: u64,
     /// The mounted rename dialog (0 when none) and the slot its signals write.
     rename_dialog: u64,
+    /// The one-field prompt dialog, when one is open.
+    prompt_dialog: u64,
+    /// One prompt answer waiting for the main loop.
+    prompt_slot: Arc<Mutex<Option<Prompt>>>,
     rename_slot: Arc<Mutex<Option<RenameRequest>>>,
+}
+
+/// One hit in the Search panel, with the range a click selects.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct SearchHit {
+    document: String,
+    offset: u32,
+    length: u32,
 }
 
 /// One visible node as the canvas paints it: rectangle, label, and hidden/locked/selected flags.
@@ -410,6 +870,7 @@ type CanvasNode = (SceneRect, String, bool, bool, bool);
 struct CanvasSnapshot {
     nodes: Arc<[CanvasNode]>,
     marquee: Option<SceneRect>,
+    view: CanvasView,
 }
 
 /// How far a press must move in design space before it is a marquee rather than a click.
@@ -489,7 +950,9 @@ impl Gui {
     /// this is what makes a resize scale the chrome instead of only the widgets present at
     /// startup. Splitting or closing a group changes the count and therefore the layout object.
     fn refresh_layout(&self) {
-        let mut layout = WorkbenchLayout::new(self.groups.len() as u32);
+        let mut layout = WorkbenchLayout::new(self.groups.len() as u32)
+            .showing_toolbar(self.show_toolbar)
+            .showing_status(self.show_status);
         for (id, area) in &self.placements {
             layout.place(*id, *area);
         }
@@ -507,6 +970,10 @@ impl Gui {
     }
 
     fn sync_editors(&mut self) {
+        // `TabWidget::set_current_index` emits `current_changed` synchronously, and that signal's
+        // subscriber locks this same `Gui`; a rebuild the caller asked for is not a click. The flag
+        // is cleared before the function returns, and nothing below returns early.
+        self.syncing_editors.store(true, Ordering::SeqCst);
         // The model decides how many groups exist; the responsive layout follows it. Geometry is
         // no longer written here, so the two cannot disagree about which box a group owns.
         self.refresh_layout();
@@ -589,6 +1056,7 @@ impl Gui {
         // A split or a panel toggle replaces the layout object, which re-places the canvas
         // control; the stored draw commands are absolute, so they are rebuilt for the new rect.
         sync_canvas(self);
+        self.syncing_editors.store(false, Ordering::SeqCst);
     }
 }
 
@@ -838,6 +1306,1001 @@ fn schedule_tooltips(gui: Arc<Mutex<Gui>>) {
     });
 }
 
+/// Fills the design-inspection list from the current scene.
+///
+/// The check returns no row when the scene is clean; the panel shows the same “no problems” line
+/// the Problems panel uses rather than an empty list that reads as "not run".
+fn refresh_inspection(gui: &mut Gui) {
+    let mut rows = crate::app::run::workbench_inspection::rows(&gui.scene);
+    if rows.is_empty() {
+        rows.push(tr("ui.status.no-problems"));
+    }
+    set_list_rows(gui.inspection_list, rows);
+}
+
+/// Fills the version-control list from the repository containing the working directory.
+///
+/// The module reads Git on every call, so showing the panel is the moment the status is taken; a
+/// missing `git` or a directory that is not a repository is a row, never an empty list.
+fn refresh_vcs(gui: &mut Gui) {
+    let rows = crate::app::run::workbench_vcs::rows(std::path::Path::new("."));
+    set_list_rows(gui.vcs_list, rows);
+}
+
+/// Fills the Project panel from the session that was opened at startup.
+fn refresh_project(gui: &mut Gui) {
+    set_list_rows(gui.project_list, project_rows(&gui.project));
+}
+
+/// Fills the Dependencies panel from the open project's root.
+fn refresh_dependencies(gui: &mut Gui) {
+    set_list_rows(gui.dependencies_list, dependency_rows(&gui.project));
+}
+
+/// One debug section, with an honest empty state before a session reports anything.
+fn debug_section_rows(rows: Vec<String>) -> Vec<String> {
+    if rows.is_empty() {
+        vec![tr("ui.debug.no-session")]
+    } else {
+        rows
+    }
+}
+
+/// Fills the Breakpoints panel from the debug session's own breakpoint rows.
+fn refresh_breakpoints(gui: &mut Gui) {
+    let list = gui.breakpoints_list;
+    set_list_rows(list, debug_section_rows(gui.debug.breakpoints()));
+}
+
+/// Fills the Call-stack panel with the session's threads followed by its frames.
+fn refresh_stack(gui: &mut Gui) {
+    let list = gui.stack_list;
+    let mut rows = gui.debug.threads();
+    rows.extend(gui.debug.frames());
+    set_list_rows(list, debug_section_rows(rows));
+}
+
+/// Fills the Variables panel with the session's scope and variable rows.
+fn refresh_variables(gui: &mut Gui) {
+    let list = gui.variables_list;
+    set_list_rows(list, debug_section_rows(gui.debug.variables()));
+}
+
+/// Fills the Actions panel from the command registry and the real keymap.
+fn refresh_actions(gui: &mut Gui) {
+    let list = gui.actions_list;
+    let rows = crate::app::run::workbench_actions::rows(
+        &gui.registry,
+        &crate::app::commands::shortcuts::built_in(),
+    );
+    set_list_rows(list, rows);
+}
+
+/// Fills the Notifications panel from the host's notification centre.
+fn refresh_notifications(gui: &mut Gui) {
+    let list = gui.notifications_list;
+    let counts = gui.notifications.counts();
+    let errors = counts.errors.to_string();
+    let warnings = counts.warnings.to_string();
+    let information = counts.information.to_string();
+    let mut rows = vec![tr_args(
+        "ui.notifications.counts",
+        &[
+            ("errors", &errors),
+            ("warnings", &warnings),
+            ("information", &information),
+        ],
+    )];
+    let open = gui.notifications.rows();
+    if open.is_empty() {
+        rows.push(tr("ui.notifications.none"));
+    } else {
+        rows.extend(open);
+    }
+    set_list_rows(list, rows);
+}
+
+/// Fills the Application-structure panel from the chrome the window built.
+fn refresh_application(gui: &mut Gui) {
+    let list = gui.application_list;
+    let rows = application_rows(gui);
+    set_list_rows(list, rows);
+}
+
+/// The active interface language's date and number rules.
+fn active_rules() -> crate::app::locale::format::Rules {
+    let language = rust_widgets::i18n::get_manager()
+        .as_ref()
+        .and_then(|manager| crate::host::locale::Language::parse(manager.current_language()))
+        .unwrap_or(crate::host::locale::DEFAULT);
+    crate::app::locale::format::Rules::for_language(language)
+}
+
+/// Fills the History panel from the open project's repository (or the working directory).
+fn refresh_history(gui: &mut Gui) {
+    let list = gui.history_list;
+    let directory = gui
+        .project
+        .as_ref()
+        .map(|project| project.root().as_path())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let rows = crate::app::run::workbench_history::rows(directory, 20, active_rules());
+    set_list_rows(list, rows);
+}
+
+/// Fills the Extensions panel from the local registry the window holds.
+fn refresh_extensions(gui: &mut Gui) {
+    let list = gui.extensions_list;
+    let mut rows =
+        crate::app::run::workbench_extensions::rows(&gui.extensions, &gui.extensions_usage);
+    if rows.is_empty() {
+        rows.push(tr("ui.extensions.none"));
+    }
+    set_list_rows(list, rows);
+}
+
+/// Fills the Tests panel with the last report the worker sent.
+fn refresh_tests(gui: &mut Gui) {
+    let list = gui.tests_list;
+    set_list_rows(list, gui.tests.rows());
+}
+
+/// Fills the Background-tasks panel from the executor's own records.
+fn refresh_tasks(gui: &mut Gui) {
+    let list = gui.tasks_list;
+    let mut rows = gui.tasks.rows();
+    if rows.is_empty() {
+        rows.push(tr("ui.tasks.none"));
+    }
+    set_list_rows(list, rows);
+}
+
+/// Fills the Build-output panel with the last report.
+fn refresh_build(gui: &mut Gui) {
+    let list = gui.build_list;
+    set_list_rows(list, gui.build.rows());
+}
+
+/// Mirrors one build report into the list and the status bar.
+fn apply_build_update(gui: &mut Gui, update: crate::app::run::workbench_build::Update) {
+    gui.message = update.status.clone();
+    let rows = update.rows.clone();
+    let list = gui.build_list;
+    set_list_rows(list, rows.clone());
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-build",
+        &format!("build: {}", update.status),
+    );
+    for row in &rows {
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-build",
+            &format!("build row: {row}"),
+        );
+    }
+    report_build_cause(gui);
+}
+
+/// Reports a finished build that did not succeed to the notification centre.
+///
+/// The cause is built from the executor's own task record ([`crate::host::notify::Cause::for_task`]),
+/// so a failed or abandoned build becomes an actionable notification and a repeat increments the
+/// existing one. A successful build is not news and is not reported.
+fn report_build_cause(gui: &mut Gui) {
+    let Some(task) = gui.build.task() else {
+        return;
+    };
+    let record = gui
+        .tasks
+        .executor()
+        .records()
+        .into_iter()
+        .find(|record| record.id == task);
+    let Some(record) = record else {
+        return;
+    };
+    let Some(cause) = crate::host::notify::Cause::for_task(&record) else {
+        return;
+    };
+    if matches!(cause.severity(), crate::host::notify::Severity::Info) {
+        return;
+    }
+    let reported = gui.notifications.report(cause);
+    if reported.first_time {
+        refresh_notifications(gui);
+    }
+}
+
+/// Polls the submitted build until it reports.
+fn schedule_build_poll(gui: &Arc<Mutex<Gui>>) {
+    let next = Arc::clone(gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(300), move || {
+        let mut live = false;
+        let mut updates = Vec::new();
+        if let Ok(mut gui) = next.lock() {
+            while let Some(update) = gui.build.poll() {
+                updates.push(update);
+            }
+            live = gui.build.is_live();
+            for update in updates {
+                apply_build_update(&mut gui, update);
+            }
+        }
+        if live {
+            schedule_build_poll(&next);
+        }
+    });
+}
+
+/// Fills the Application-output panel with the last report.
+fn refresh_run(gui: &mut Gui) {
+    let list = gui.run_list;
+    set_list_rows(list, gui.run.rows());
+}
+
+/// Mirrors one application-output report into the list and the status bar.
+fn apply_run_update(gui: &mut Gui, update: crate::app::run::workbench_run::Update) {
+    gui.message = update.status.clone();
+    let rows = update.rows.clone();
+    let list = gui.run_list;
+    set_list_rows(list, rows.clone());
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-run",
+        &format!("run: {}", update.status),
+    );
+    for row in &rows {
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-run",
+            &format!("run row: {row}"),
+        );
+    }
+}
+
+/// Polls the running program until it ends or the panel asks it to stop.
+fn schedule_run_poll(gui: &Arc<Mutex<Gui>>) {
+    let next = Arc::clone(gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(200), move || {
+        let mut live = false;
+        let mut updates = Vec::new();
+        if let Ok(mut gui) = next.lock() {
+            while let Some(update) = gui.run.poll() {
+                updates.push(update);
+            }
+            live = gui.run.is_live();
+            for update in updates {
+                apply_run_update(&mut gui, update);
+            }
+        }
+        if live {
+            schedule_run_poll(&next);
+        }
+    });
+}
+
+/// Fills the Terminal panel with the last report.
+fn refresh_terminal(gui: &mut Gui) {
+    let list = gui.terminal_list;
+    set_list_rows(list, gui.terminal.rows());
+}
+
+/// Mirrors one terminal report into the list and the status bar.
+fn apply_terminal_update(gui: &mut Gui, update: crate::app::run::workbench_terminal::Update) {
+    gui.message = update.status.clone();
+    let rows = update.rows.clone();
+    let list = gui.terminal_list;
+    set_list_rows(list, rows.clone());
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-terminal",
+        &format!("terminal: {}", update.status),
+    );
+    for row in &rows {
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-terminal",
+            &format!("terminal row: {row}"),
+        );
+    }
+}
+
+/// Polls the terminal's worker while a session is connected.
+fn schedule_terminal_poll(gui: &Arc<Mutex<Gui>>) {
+    let next = Arc::clone(gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(200), move || {
+        let mut live = false;
+        let mut updates = Vec::new();
+        if let Ok(mut gui) = next.lock() {
+            while let Some(update) = gui.terminal.poll() {
+                updates.push(update);
+            }
+            live = gui.terminal.is_live();
+            for update in updates {
+                apply_terminal_update(&mut gui, update);
+            }
+        }
+        if live {
+            schedule_terminal_poll(&next);
+        }
+    });
+}
+
+// The preview service is not `Send` — it owns a `ViewEngine` whose mounted document is `Rc` — so it
+// lives on the main thread. The window's shared state holds only its dock slot and menu.
+thread_local! {
+    static PREVIEW: std::cell::RefCell<crate::app::preview::preview_service::Preview> =
+        std::cell::RefCell::new(crate::app::preview::preview_service::Preview::new());
+}
+
+/// Runs `f` with the main thread's preview service.
+fn with_preview<R>(f: impl FnOnce(&mut crate::app::preview::preview_service::Preview) -> R) -> R {
+    PREVIEW.with(|preview| f(&mut preview.borrow_mut()))
+}
+
+/// Fills the Preview panel from the service the window holds.
+fn refresh_preview(gui: &mut Gui) {
+    let list = gui.preview_list;
+    let rows = with_preview(|preview| crate::app::run::workbench_preview::rows(preview));
+    set_list_rows(list, rows);
+}
+
+/// Fills the Hot-update panel from the updater's queue and history.
+fn refresh_hot(gui: &mut Gui) {
+    let list = gui.hot_list;
+    set_list_rows(list, crate::app::run::workbench_hot::rows(&gui.hot));
+}
+
+/// Fills the States panel from the opened project's first page document.
+///
+/// The page's `states` member is the only source; a project without a page, or a page without a
+/// machine, is reported as itself rather than replaced by an invented graph.
+/// Why the startup page could not be read, so each panel can name the reason with its own key.
+enum PageRead {
+    NoProject,
+    Unreadable,
+    NoPage,
+    Failed(String),
+}
+
+/// The page the States and Collection-contents panels read.
+///
+/// The startup page is the one the project says the application starts with; without one, the first
+/// declared page is the only honest choice, and the returned source names it.
+fn read_startup_page(
+    gui: &Gui,
+) -> Result<(String, crate::project::record::page::PageDocument), PageRead> {
+    let Some(project) = gui.project.as_ref() else {
+        return Err(PageRead::NoProject);
+    };
+    let Some(document) = project.file().document() else {
+        return Err(PageRead::Unreadable);
+    };
+    let relative = match document.startup_written() {
+        Some(written) => written.to_owned(),
+        None => match document.pages().first() {
+            Some(page) => page.document().written().to_owned(),
+            None => return Err(PageRead::NoPage),
+        },
+    };
+    match crate::project::record::page::PageDocument::read(project.root(), &relative) {
+        Ok(page) => Ok((relative, page)),
+        Err(error) => Err(PageRead::Failed(format!("{relative}: {}", error.message()))),
+    }
+}
+
+/// Fills the States panel from the opened project's startup page.
+fn refresh_states(gui: &mut Gui) {
+    let list = gui.states_list;
+    match read_startup_page(gui) {
+        Ok((source, page)) => {
+            let states = page.states().cloned();
+            gui.states_source = Some(source.clone());
+            gui.states = states.clone();
+            let rows = crate::app::run::workbench_states::rows(&source, states.as_ref());
+            set_list_rows(list, rows);
+        }
+        Err(PageRead::NoProject) => {
+            gui.states_source = None;
+            gui.states = None;
+            set_list_rows(list, vec![tr("ui.states.no-project")]);
+        }
+        Err(PageRead::Unreadable) => {
+            gui.states_source = None;
+            gui.states = None;
+            set_list_rows(list, vec![tr("ui.states.unreadable")]);
+        }
+        Err(PageRead::NoPage) => {
+            gui.states_source = None;
+            gui.states = None;
+            set_list_rows(list, vec![tr("ui.states.no-page")]);
+        }
+        Err(PageRead::Failed(reason)) => {
+            gui.states_source = None;
+            gui.states = None;
+            set_list_rows(
+                list,
+                vec![tr_args("ui.states.unreadable-at", &[("reason", &reason)])],
+            );
+        }
+    }
+}
+
+/// Fills the Collection-contents panel from the opened project's startup page.
+fn refresh_items(gui: &mut Gui) {
+    let list = gui.items_list;
+    match read_startup_page(gui) {
+        Ok((source, page)) => {
+            let rows = crate::app::run::workbench_items::rows(&source, page.collections());
+            set_list_rows(list, rows);
+        }
+        Err(PageRead::NoProject) => set_list_rows(list, vec![tr("ui.items.no-project")]),
+        Err(PageRead::Unreadable) => set_list_rows(list, vec![tr("ui.items.unreadable")]),
+        Err(PageRead::NoPage) => set_list_rows(list, vec![tr("ui.items.no-page")]),
+        Err(PageRead::Failed(reason)) => set_list_rows(
+            list,
+            vec![tr_args(
+                "ui.components.unreadable-at",
+                &[("reason", &reason)],
+            )],
+        ),
+    }
+}
+
+/// Fills the Timeline panel from the opened project's startup page.
+fn refresh_timeline(gui: &mut Gui) {
+    let list = gui.timeline_list;
+    match read_startup_page(gui) {
+        Ok((source, page)) => {
+            let rows = crate::app::run::workbench_timeline::rows(&source, page.motions());
+            set_list_rows(list, rows);
+        }
+        Err(PageRead::NoProject) => set_list_rows(list, vec![tr("ui.timeline.no-project")]),
+        Err(PageRead::Unreadable) => set_list_rows(list, vec![tr("ui.timeline.unreadable")]),
+        Err(PageRead::NoPage) => set_list_rows(list, vec![tr("ui.timeline.no-page")]),
+        Err(PageRead::Failed(reason)) => set_list_rows(
+            list,
+            vec![tr_args("ui.timeline.unreadable-at", &[("reason", &reason)])],
+        ),
+    }
+}
+
+/// Fills the AI-session panel from the journal named on the command line.
+fn refresh_ai(gui: &mut Gui) {
+    let list = gui.ai_list;
+    let rows = match gui.ai_journal.as_deref() {
+        Some(path) => crate::app::run::workbench_ai::rows(path),
+        None => vec![tr("ui.ai.no-journal")],
+    };
+    set_list_rows(list, rows);
+}
+
+/// The document the focused editor group shows, with the buffer text it shows.
+fn active_document(gui: &Gui) -> Option<(String, String)> {
+    let tabs = gui.groups.tabs(gui.groups.focus())?;
+    let document = tabs.active()?.document().to_owned();
+    let text = gui.groups.text(&document)?.to_owned();
+    Some((document, text))
+}
+
+/// Fills the source-outline panel.
+///
+/// Without `--lsp` no server is started and no document is claimed: the panel's own rows say that a
+/// server has to be configured.
+///
+/// With one, the subject is the project's **generated artifact** when the startup page generates:
+/// that is the text the per-node anchors describe and the text whose generated/handwritten regions
+/// are interesting. When no generation is available (no project, a page the generator refuses, or a
+/// blocked precheck) the panel falls back to the focused editor's buffer and reports that the
+/// association is not available.
+fn refresh_source(gui: &mut Gui) {
+    let list = gui.source_list;
+    if !gui.source.is_configured() {
+        // `render` says so itself; no server is started and no document is claimed.
+        let filter = gui.source_filter.clone();
+        let rows = gui.source.render(&filter);
+        set_list_rows(list, rows);
+        return;
+    }
+    let root = gui
+        .project
+        .as_ref()
+        .map(|project| project.root().as_path().to_path_buf())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let generated = generated_source(gui);
+    match &generated {
+        Some((page, outcome)) => {
+            let document = crate::app::generate::artifact::dual_outputs()[0].clone();
+            gui.source.refresh(
+                &root,
+                &document,
+                &outcome.source,
+                Some(crate::app::run::workbench_outline::Generated {
+                    page,
+                    source: &outcome.source,
+                    anchors: &outcome.report.node_anchors,
+                }),
+            );
+        }
+        None => {
+            let Some((buffer_document, buffer_text)) = active_document(gui) else {
+                set_list_rows(list, vec![tr("ui.source.no-document")]);
+                return;
+            };
+            gui.source
+                .refresh(&root, &buffer_document, &buffer_text, None);
+        }
+    }
+    let filter = gui.source_filter.clone();
+    let rows = gui.source.render(&filter);
+    set_list_rows(list, rows);
+}
+
+/// Fills the layout-inspector panel from the opened project's startup page.
+///
+/// The declaration is read from the page document itself (format v6's root `layout` object); the
+/// diagnostics come from the generation run's own report, so a parameter the library does not honour
+/// is named by the library. Without a run the panel says "not checked" rather than "none".
+fn refresh_layout_panel(gui: &mut Gui) {
+    let list = gui.layout_list;
+    let (source, page) = match read_startup_page(gui) {
+        Ok(found) => found,
+        Err(PageRead::NoProject) => {
+            set_list_rows(list, vec![tr("ui.layout.no-project")]);
+            return;
+        }
+        Err(PageRead::Unreadable) => {
+            set_list_rows(list, vec![tr("ui.layout.unreadable")]);
+            return;
+        }
+        Err(PageRead::NoPage) => {
+            set_list_rows(list, vec![tr("ui.layout.no-page")]);
+            return;
+        }
+        Err(PageRead::Failed(reason)) => {
+            set_list_rows(
+                list,
+                vec![tr_args("ui.layout.unreadable-at", &[("reason", &reason)])],
+            );
+            return;
+        }
+    };
+    let Some(root) = page.root_node() else {
+        set_list_rows(list, vec![tr("ui.layout.no-page")]);
+        return;
+    };
+    let declaration = crate::app::run::workbench_layout_panel::Declaration {
+        node: root.id().get(),
+        kind: root.kind().as_str(),
+        layout: root.layout(),
+        children: root.children().len(),
+    };
+    // The issues belong to a generation run; without one the panel must not claim a clean document.
+    let generated = generated_source(gui);
+    let issues = generated
+        .as_ref()
+        .map(|(_, outcome)| outcome.report.layout_issues.as_slice());
+    let rows = crate::app::run::workbench_layout_panel::rows(&source, &declaration, issues);
+    set_list_rows(list, rows);
+}
+
+/// The startup page's fresh generation, for the source outline's node mapping.
+///
+/// A missing project, a page the generator refuses (the v2–v5 members it does not consume), or a
+/// blocked precheck all answer `None`; the panel then says the association is not available rather
+/// than presenting a map that belongs to some other document. Generation is in memory only — this
+/// starts no build and writes no file.
+fn generated_source(gui: &Gui) -> Option<(String, crate::app::generate::pipeline::Outcome)> {
+    use crate::app::generate::pipeline::{self, Input};
+    use rust_widgets::designer::TargetProfile;
+
+    let (page, document) = read_startup_page(gui).ok()?;
+    let root = gui.project.as_ref()?.root().as_path().to_path_buf();
+    let path = root.join(&page);
+    let json = crate::app::run::generate::read_document(&path.to_string_lossy()).ok()?;
+    let nodes = document
+        .nodes()
+        .iter()
+        .map(|node| pipeline::Node {
+            kind: node.kind().as_str().to_owned(),
+            children: node.children().len(),
+        })
+        .collect();
+    let input = Input {
+        json,
+        target: TargetProfile::Default,
+        width: WIDTH,
+        height: HEIGHT,
+        function_name: "build_ui".to_owned(),
+        nodes,
+        style: Vec::new(),
+        layout: Vec::new(),
+    };
+    pipeline::run(&input).ok().map(|outcome| (page, outcome))
+}
+
+/// Moves the editor's caret to the symbol the activated source-outline row names.
+fn jump_to_source(gui: &mut Gui, index: usize) {
+    let Some((line, column)) = gui.source.target(index) else {
+        return;
+    };
+    jump_to_source_position(gui, line, column);
+}
+
+/// Moves the caret to `line`/`column` in the document the source outline last read.
+///
+/// The outline was read from the focused group's buffer or from the generated artifact, so the
+/// caret goes into that group. A document without a tab there is opened first; the generated
+/// artifact has no file on disk in this session, so its text is the one the panel read. An already
+/// open document is never overwritten, because its buffer may hold unsaved edits.
+fn jump_to_source_position(gui: &mut Gui, line: usize, column: usize) -> bool {
+    let Some(document) = gui.source.document().map(str::to_owned) else {
+        return false;
+    };
+    let text = gui.source.document_text().map(str::to_owned);
+    if !show_document_at(gui, &document, text.as_deref(), line, column, true) {
+        gui.message = tr("ui.source.no-editor");
+        update_status(gui);
+        return false;
+    }
+    gui.message = tr_args("ui.source.jumped", &[("line", &(line + 1).to_string())]);
+    update_status(gui);
+    true
+}
+
+/// Shows `document` in the focused group and moves its caret to `line`/`column`.
+///
+/// `text` is written only when the document is not open yet: a jump must not replace a buffer that
+/// may hold unsaved edits. The caret call is the editor control's own, so the outline and the editor
+/// share one notion of a position.
+fn show_document_at(
+    gui: &mut Gui,
+    document: &str,
+    text: Option<&str>,
+    line: usize,
+    column: usize,
+    record: bool,
+) -> bool {
+    if record {
+        record_jump(gui);
+    }
+    let group = gui.groups.focus();
+    let already_open = gui
+        .groups
+        .tabs(group)
+        .is_some_and(|tabs| tabs.is_open(document));
+    gui.groups.pin(document);
+    if !already_open
+        && let Some(text) = text
+        && let Err(reason) = gui.groups.type_into(text)
+    {
+        warn_failure("the symbol's document could not be opened", reason);
+        return false;
+    }
+    gui.sync_editors();
+    let editor = gui
+        .groups
+        .group_ids()
+        .iter()
+        .position(|id| *id == group)
+        .and_then(|position| gui.group_views.get(position))
+        .map(|view| view.editor);
+    let Some(editor) = editor else {
+        return false;
+    };
+    with_widget_mut(editor, move |widget| {
+        let Some(editor) = (widget as &mut dyn Any).downcast_mut::<CodeEditor>() else {
+            return false;
+        };
+        editor.set_cursor(line, column, false);
+        true
+    }) == Some(true)
+}
+
+/// The caret's current document and position, when the focused group has an editor.
+fn current_location(gui: &Gui) -> Option<JumpLocation> {
+    let (document, _) = active_document(gui)?;
+    let (line, column) = edit_with_editor(gui, |editor| editor.cursor())?;
+    Some(JumpLocation {
+        document,
+        line,
+        column,
+    })
+}
+
+/// Records the caret's position before a jump, and drops the forward stack a new jump invalidates.
+fn record_jump(gui: &mut Gui) {
+    if let Some(location) = current_location(gui) {
+        gui.jump_back.push(location);
+        gui.jump_forward.clear();
+    }
+}
+
+/// Shows a remembered location, reading its file when the tab is not open.
+///
+/// History replay does not record itself: the caller moves the opposite stack so back/forward walk
+/// one list rather than growing it.
+fn restore_location(gui: &mut Gui, location: &JumpLocation) -> Result<(), String> {
+    let already_open = gui
+        .groups
+        .tabs(gui.groups.focus())
+        .is_some_and(|tabs| tabs.is_open(&location.document));
+    let text = if already_open {
+        None
+    } else {
+        let root = project_root(gui).ok_or_else(|| tr("ui.project.none"))?;
+        let path = if Path::new(&location.document).is_absolute() {
+            PathBuf::from(&location.document)
+        } else {
+            root.join(&location.document)
+        };
+        Some(std::fs::read_to_string(&path).map_err(|error| error.to_string())?)
+    };
+    if let Some(text) = &text {
+        remember_saved_text(gui, &location.document, text);
+    }
+    if !show_document_at(
+        gui,
+        &location.document,
+        text.as_deref(),
+        location.line,
+        location.column,
+        false,
+    ) {
+        return Err(tr("ui.source.no-editor"));
+    }
+    Ok(())
+}
+
+/// Runs one code-navigation query and moves to the first location inside the project.
+///
+/// Every target the server reported is written to the Messages panel, so a multi-target answer is
+/// not reduced to the one this build jumped to. The first target whose URI is under the project
+/// root is the one opened; a result entirely outside the project is refused with that reason.
+fn code_navigation(gui: &mut Gui, query: crate::app::run::workbench_outline::CodeQuery) -> String {
+    use crate::app::run::workbench_outline::SourceOutline;
+
+    if !gui.source.is_configured() {
+        return tr("ui.error.navigation-no-server");
+    }
+    let Some(root) = project_root(gui) else {
+        return tr("ui.project.none");
+    };
+    let Some((document, text)) = active_document(gui) else {
+        return tr("ui.status.no-editor");
+    };
+    let Some((line, column)) = edit_with_editor(gui, |editor| editor.cursor()) else {
+        return tr("ui.source.no-editor");
+    };
+    let locations = match gui
+        .source
+        .code_locations(&root, &document, &text, line, column, query)
+    {
+        Ok(locations) => locations,
+        Err(reason) => return tr_args("ui.error.navigation-failed", &[("reason", &reason)]),
+    };
+    if locations.is_empty() {
+        return tr("ui.error.navigation-not-found");
+    }
+    let count = locations.len();
+    for location in &locations {
+        push_message(
+            gui,
+            format!(
+                "{}:{}:{}",
+                location.uri,
+                location.line + 1,
+                location.character + 1
+            ),
+        );
+    }
+    let mut opened = None;
+    for location in &locations {
+        let Some(path) = crate::host::lsp::path_from_uri(&location.uri) else {
+            continue;
+        };
+        let Ok(relative) = path.strip_prefix(&root) else {
+            continue;
+        };
+        let Ok(file_text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let document = relative.to_string_lossy().into_owned();
+        let (line, column) = SourceOutline::position(&file_text, location.line, location.character)
+            .unwrap_or((location.line as usize, location.character as usize));
+        opened = Some((document, file_text, line, column));
+        break;
+    }
+    let Some((document, file_text, line, column)) = opened else {
+        return tr_args(
+            "ui.error.navigation-failed",
+            &[("reason", "no reported location is inside the project root")],
+        );
+    };
+    if !show_document_at(gui, &document, Some(&file_text), line, column, true) {
+        return tr("ui.source.no-editor");
+    }
+    if count > 1 {
+        tr_args(
+            "ui.status.navigation-many",
+            &[
+                ("count", &count.to_string()),
+                ("path", &document),
+                ("line", &(line + 1).to_string()),
+            ],
+        )
+    } else {
+        tr_args(
+            "ui.status.navigation-done",
+            &[("path", &document), ("line", &(line + 1).to_string())],
+        )
+    }
+}
+
+/// Walks the jump history in one direction.
+fn code_history(gui: &mut Gui, forward: bool) -> String {
+    let target = if forward {
+        gui.jump_forward.pop()
+    } else {
+        gui.jump_back.pop()
+    };
+    let Some(target) = target else {
+        return tr(if forward {
+            "ui.status.no-next-location"
+        } else {
+            "ui.status.no-previous-location"
+        });
+    };
+    let current = current_location(gui);
+    if let Err(reason) = restore_location(gui, &target) {
+        // Put the target back so a failed restore does not silently consume the history entry.
+        if forward {
+            gui.jump_forward.push(target);
+        } else {
+            gui.jump_back.push(target);
+        }
+        return tr_args("ui.error.navigation-failed", &[("reason", &reason)]);
+    }
+    if let Some(current) = current {
+        if forward {
+            gui.jump_back.push(current);
+        } else {
+            gui.jump_forward.push(current);
+        }
+    }
+    tr_args(
+        if forward {
+            "ui.status.moved-forward"
+        } else {
+            "ui.status.moved-back"
+        },
+        &[
+            ("path", &target.document),
+            ("line", &(target.line + 1).to_string()),
+        ],
+    )
+}
+
+/// Fills the Components panel from the opened project's startup page.
+fn refresh_components(gui: &mut Gui) {
+    let list = gui.components_list;
+    match read_startup_page(gui) {
+        Ok((source, page)) => {
+            let rows = crate::app::run::workbench_components::rows(&source, page.components());
+            set_list_rows(list, rows);
+        }
+        Err(PageRead::NoProject) => set_list_rows(list, vec![tr("ui.components.no-project")]),
+        Err(PageRead::Unreadable) => set_list_rows(list, vec![tr("ui.components.unreadable")]),
+        Err(PageRead::NoPage) => set_list_rows(list, vec![tr("ui.components.no-page")]),
+        Err(PageRead::Failed(reason)) => set_list_rows(
+            list,
+            vec![tr_args(
+                "ui.components.unreadable-at",
+                &[("reason", &reason)],
+            )],
+        ),
+    }
+}
+
+/// Records an Inspector commit as a hot-update edit and flushes the batch.
+///
+/// The source is the inspector, not a generated file, so this is not an echo of the process's own
+/// write. The updater classifies the edit (`Live` for a property) itself; the panel reads that
+/// history, so the rule is not repeated here.
+fn record_hot_edit(gui: &mut Gui, nodes: &str) {
+    let subject = format!("{} on {nodes}", gui.property.name().as_str());
+    record_hot(
+        gui,
+        "inspector",
+        crate::app::preview::hot_update::Edit::Property(subject),
+    );
+}
+
+/// Records one document edit and flushes the batch that is now complete.
+///
+/// The source names where the edit came from (the scene, the Inspector, a paste); it is never the
+/// updater's own source, so the edit is not mistaken for an echo of this process's write. The
+/// updater itself decides whether the batch is `live` or `rebuild` — the caller does not classify.
+fn record_hot(gui: &mut Gui, source: &str, edit: crate::app::preview::hot_update::Edit) {
+    let _ = gui.hot.push(source, edit);
+    if gui.hot.flush().is_some() {
+        refresh_hot(gui);
+    }
+}
+
+/// Mirrors one test-run report into the list and the status bar.
+fn apply_tests_update(gui: &mut Gui, update: crate::app::run::workbench_tests::Update) {
+    gui.message = update.status.clone();
+    let rows = update.rows.clone();
+    let list = gui.tests_list;
+    set_list_rows(list, rows.clone());
+    update_status(gui);
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-tests",
+        &format!("tests: {}", update.status),
+    );
+    for row in &rows {
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-tests",
+            &format!("test row: {row}"),
+        );
+    }
+}
+
+/// Polls the test worker until it reports that it has finished.
+fn schedule_tests_poll(gui: &Arc<Mutex<Gui>>) {
+    let next = Arc::clone(gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(300), move || {
+        let mut live = false;
+        let mut updates = Vec::new();
+        if let Ok(mut gui) = next.lock() {
+            while let Some(update) = gui.tests.poll() {
+                updates.push(update);
+            }
+            live = gui.tests.is_live();
+            for update in updates {
+                apply_tests_update(&mut gui, update);
+            }
+        }
+        if live {
+            schedule_tests_poll(&next);
+        }
+    });
+}
+
+/// The chrome the window built: menus, toolbar, status line and the four context-menu groups.
+fn application_rows(gui: &Gui) -> Vec<String> {
+    let menus = crate::app::commands::menu::built_in();
+    let toolbar: Vec<(String, String)> = gui
+        .toolbar_items
+        .iter()
+        .map(|(key, action)| (tr(key), (*action).to_owned()))
+        .collect();
+    let status = format!("{} | {}", gui.status_line(), gui.message);
+    let context_menus: Vec<(String, Vec<String>)> = [
+        ("inspector", INSPECTOR_MENU_KEYS.as_slice()),
+        ("scene", SCENE_MENU_KEYS.as_slice()),
+        ("editor", EDITOR_MENU_KEYS.as_slice()),
+        ("diagnostic", DIAGNOSTIC_MENU_KEYS.as_slice()),
+    ]
+    .into_iter()
+    .map(|(group, keys)| {
+        (
+            group.to_owned(),
+            keys.iter().map(|(key, _)| tr(key)).collect::<Vec<_>>(),
+        )
+    })
+    .collect();
+    crate::app::run::workbench_application::rows(&menus, &toolbar, &status, &context_menus)
+}
+
 /// Replaces a `ListBox`'s rows without clearing and rebuilding an unchanged list.
 ///
 /// The library publishes no per-row text setter, so a changed row is a remove-and-insert at its
@@ -851,16 +2314,22 @@ fn set_list_rows(list: u64, rows: Vec<String>) {
         let Some(list) = (widget as &mut dyn Any).downcast_mut::<ListBox>() else {
             return false;
         };
-        let current = list.items().to_vec();
-        if current == rows {
-            return true;
-        }
-        let common = current
-            .iter()
-            .zip(&rows)
-            .take_while(|(before, after)| before == after)
-            .count();
-        for index in (common..current.len()).rev() {
+        // Compare the widget's own slice first: an equal list needs no allocation at all, and a
+        // changed one only needs the common prefix. The old code cloned every row before the
+        // comparison, which is exactly the per-repaint cost this path exists to avoid.
+        let (common, previous_len) = {
+            let current = list.items();
+            if current == rows.as_slice() {
+                return true;
+            }
+            let common = current
+                .iter()
+                .zip(&rows)
+                .take_while(|(before, after)| before == after)
+                .count();
+            (common, current.len())
+        };
+        for index in (common..previous_len).rev() {
             list.remove_item(index);
         }
         for (offset, row) in rows.into_iter().enumerate().skip(common) {
@@ -1533,6 +3002,7 @@ fn apply_property(gui: &mut Gui, text: &str) {
             refresh_inspector(gui);
             sync_outline(gui);
             sync_canvas(gui);
+            record_hot_edit(gui, &nodes_text);
             gui.message = format!(
                 "{} = {text:?} on {nodes_text} (revision {revision})",
                 gui.property.name().as_str()
@@ -1692,12 +3162,12 @@ fn inspect_values(gui: &mut Gui) {
 /// The panel's rectangle is what the canvas control is laid out against, so the transform is the
 /// same one [`CanvasLayout`] used. Reading it from the panel (not the canvas control) is what keeps
 /// this callable from inside a canvas signal: the control being dispatched is already lent out.
-fn canvas_point(canvas_panel: u64, x: i32, y: i32) -> Option<(i32, i32)> {
-    if canvas_panel == 0 {
+fn canvas_point(gui: &Gui, x: i32, y: i32) -> Option<(i32, i32)> {
+    if gui.canvas_panel == 0 {
         return None;
     }
-    with_widget_mut(canvas_panel, |widget| {
-        CanvasTransform::new(widget.geometry()).to_design(x, y)
+    with_widget_mut(gui.canvas_panel, |widget| {
+        gui.canvas_view.transform(widget.geometry()).to_design(x, y)
     })
 }
 
@@ -1774,7 +3244,6 @@ fn sync_outline(gui: &mut Gui) {
     let revision = gui.scene.content_revision();
     let rows_changed = revision != gui.outline_content_revision;
     if rows_changed {
-        gui.outline_rows = gui.scene.rows();
         gui.outline_index = gui
             .scene
             .row_nodes()
@@ -1788,7 +3257,10 @@ fn sync_outline(gui: &mut Gui) {
         .scene
         .primary()
         .and_then(|node| gui.outline_index.get(&node).copied());
-    let rows = rows_changed.then(|| gui.outline_rows.clone());
+    // The rows are handed to the scheduled rebuild by value: the library has no per-row text
+    // setter, so a content change re-adds every row anyway and a cached copy would only cost one
+    // extra clone of the whole strip.
+    let rows = rows_changed.then(|| gui.scene.rows());
     let syncing = Arc::clone(&gui.outline_syncing);
     let last = rows.as_ref().map_or(0, Vec::len).saturating_sub(1);
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
@@ -1868,7 +3340,11 @@ fn sync_canvas(gui: &mut Gui) {
     if let Ok(mut snapshot) = gui.canvas_snapshot.lock() {
         // Replacing the `Arc` is cheap and keeps the old list alive in any frame already reading
         // it.
-        *snapshot = Arc::new(CanvasSnapshot { nodes, marquee });
+        *snapshot = Arc::new(CanvasSnapshot {
+            nodes,
+            marquee,
+            view: gui.canvas_view,
+        });
     }
     // One queued frame at a time, and it reads the newest snapshot when it runs. A drag that
     // emits a pointer event per pixel therefore repaints at the loop's pace instead of stacking
@@ -1906,7 +3382,7 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
     let Some(rect) = with_widget_mut(panel, |widget| widget.geometry()) else {
         return;
     };
-    let transform = CanvasTransform::new(rect);
+    let transform = frame.view.transform(rect);
     static FONT: std::sync::OnceLock<rust_widgets::core::Font> = std::sync::OnceLock::new();
     let font = FONT.get_or_init(|| rust_widgets::core::Font::new("Inter", 13.0, false, false));
     let _ = with_widget_mut(surface, |widget| {
@@ -1917,6 +3393,12 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
         };
         canvas.clear();
         canvas.fill_rect(rect, CANVAS_BACKGROUND);
+        if frame.view.grid {
+            draw_grid(canvas, rect, transform);
+        }
+        if frame.view.rulers {
+            draw_rulers(canvas, rect, transform, font);
+        }
         for (design, name, hidden, locked, selected) in frame.nodes.iter() {
             if *hidden {
                 continue;
@@ -1942,6 +3424,75 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
             canvas.draw_rect(transform.place(marquee), ACCENT);
         }
     });
+}
+
+/// Paints the design grid over the control.
+fn draw_grid(
+    canvas: &mut rust_widgets::widget::special_widgets::Canvas,
+    rect: Rect,
+    transform: CanvasTransform,
+) {
+    const STEP: f32 = 16.0;
+    const GRID: Color = Color::rgb(0xE6, 0xE6, 0xEA);
+    let step = STEP * transform.scale;
+    if !(4.0..=200.0).contains(&step) {
+        return;
+    }
+    let right = rect.x + rect.width as i32;
+    let bottom = rect.y + rect.height as i32;
+    let mut x = transform.offset_x as f32;
+    while x < right as f32 {
+        if x >= rect.x as f32 {
+            canvas.fill_rect(Rect::new(x.round() as i32, rect.y, 1, rect.height), GRID);
+        }
+        x += step;
+    }
+    let mut y = transform.offset_y as f32;
+    while y < bottom as f32 {
+        if y >= rect.y as f32 {
+            canvas.fill_rect(Rect::new(rect.x, y.round() as i32, rect.width, 1), GRID);
+        }
+        y += step;
+    }
+}
+
+/// Paints rulers along the top and left edges, labelled in design pixels.
+fn draw_rulers(
+    canvas: &mut rust_widgets::widget::special_widgets::Canvas,
+    rect: Rect,
+    transform: CanvasTransform,
+    font: &rust_widgets::core::Font,
+) {
+    const RULER: u32 = 18;
+    const BACKGROUND: Color = Color::rgb(0xF0, 0xF0, 0xF4);
+    canvas.fill_rect(Rect::new(rect.x, rect.y, rect.width, RULER), BACKGROUND);
+    canvas.fill_rect(Rect::new(rect.x, rect.y, RULER, rect.height), BACKGROUND);
+    let step = 100.0 * transform.scale;
+    if step < 12.0 {
+        return;
+    }
+    let mut design = 0u32;
+    while design <= DESIGN_WIDTH {
+        let x = transform.offset_x + (design as f32 * transform.scale) as i32;
+        if x >= rect.x && x < rect.x + rect.width as i32 {
+            canvas.fill_rect(Rect::new(x, rect.y, 1, RULER), MUTED_TEXT);
+            canvas.draw_text(
+                Point::new(x + 2, rect.y + 2),
+                &design.to_string(),
+                font,
+                MUTED_TEXT,
+            );
+        }
+        design += 100;
+    }
+    let mut design = 0u32;
+    while design <= DESIGN_HEIGHT {
+        let y = transform.offset_y + (design as f32 * transform.scale) as i32;
+        if y >= rect.y && y < rect.y + rect.height as i32 {
+            canvas.fill_rect(Rect::new(rect.x, y, RULER, 1), MUTED_TEXT);
+        }
+        design += 100;
+    }
 }
 
 /// Applies one scene context-menu action to the primary selection.
@@ -1973,6 +3524,20 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
             Some(child) => select_node(gui, child, "context"),
             None => {
                 gui.message = tr_args("ui.status.no-child", &[("name", &name)]);
+                update_status(gui);
+            }
+        },
+        "select-next-sibling" => match gui.scene.sibling(node, 1) {
+            Some(sibling) => select_node(gui, sibling, "context"),
+            None => {
+                gui.message = tr_args("ui.status.no-sibling", &[("name", &name)]);
+                update_status(gui);
+            }
+        },
+        "select-previous-sibling" => match gui.scene.sibling(node, -1) {
+            Some(sibling) => select_node(gui, sibling, "context"),
+            None => {
+                gui.message = tr_args("ui.status.no-sibling", &[("name", &name)]);
                 update_status(gui);
             }
         },
@@ -2061,6 +3626,16 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
             let count = subtree.len();
             match gui.scene.paste_clipboard(&subtree) {
                 Ok(root) => {
+                    let pasted = gui
+                        .scene
+                        .name(root)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("node {}", root.get()));
+                    record_hot(
+                        gui,
+                        "scene",
+                        crate::app::preview::hot_update::Edit::AddNode(pasted),
+                    );
                     select_node(gui, root, "paste");
                     gui.message = tr_args(
                         "ui.status.node-pasted",
@@ -2089,6 +3664,11 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
         }
         "wrap-container" => match gui.scene.wrap_in_container(node) {
             Ok(container) => {
+                record_hot(
+                    gui,
+                    "scene",
+                    crate::app::preview::hot_update::Edit::AddNode(format!("container for {name}")),
+                );
                 select_node(gui, container, "context");
                 gui.message = tr_args(
                     "ui.status.wrapped",
@@ -2176,6 +3756,16 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
         }
         "duplicate" => match gui.scene.duplicate(node) {
             Ok(copy) => {
+                let copied = gui
+                    .scene
+                    .name(copy)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("node {}", copy.get()));
+                record_hot(
+                    gui,
+                    "scene",
+                    crate::app::preview::hot_update::Edit::AddNode(copied),
+                );
                 select_node(gui, copy, "context");
                 gui.message = tr_args(
                     "ui.status.duplicated",
@@ -2200,6 +3790,11 @@ fn scene_context_action(gui: &mut Gui, action: &str) {
         },
         "delete" => match gui.scene.delete(node) {
             Ok(report) => {
+                record_hot(
+                    gui,
+                    "scene",
+                    crate::app::preview::hot_update::Edit::RemoveNode(name.clone()),
+                );
                 // The deleted node is no longer selected, so the Inspector must stop showing its
                 // contract; without this it would keep editing a node the tree no longer holds.
                 gui.property.clear();
@@ -2376,6 +3971,426 @@ fn schedule_rename(gui: Arc<Mutex<Gui>>, slot: Arc<Mutex<Option<RenameRequest>>>
     });
 }
 
+/// Opens the go-to-line dialog for the focused editor.
+fn open_prompt(
+    gui: &mut Gui,
+    kind: PromptKind,
+    title_key: &str,
+    label_key: &str,
+    require_editor: bool,
+) {
+    if require_editor && edit_with_editor(gui, |_| ()).is_none() {
+        gui.message = tr("ui.status.no-editor");
+        update_status(gui);
+        return;
+    }
+    if gui.prompt_dialog != 0 {
+        let old = gui.prompt_dialog;
+        runtime::exit_modal(old);
+        runtime::unregister(old);
+        gui.prompt_dialog = 0;
+    }
+    let mut dialog = InputDialog::new(Rect::new(
+        (WIDTH as i32 - 360) / 2,
+        (HEIGHT as i32 - 160) / 2,
+        360,
+        160,
+    ));
+    dialog.set_title(tr(title_key));
+    dialog.set_label_text(tr(label_key));
+    dialog.set_text_value(String::new());
+
+    let typed = Arc::new(Mutex::new(String::new()));
+    {
+        let typed = Arc::clone(&typed);
+        dialog.text_value_changed.connect(move |text| {
+            if let Ok(mut slot) = typed.lock() {
+                *slot = (*text).clone();
+            }
+        });
+    }
+    let slot = Arc::clone(&gui.prompt_slot);
+    {
+        let slot = Arc::clone(&slot);
+        let typed = Arc::clone(&typed);
+        dialog.accepted.connect(move || {
+            let text = typed.lock().map(|text| text.clone()).unwrap_or_default();
+            if let Ok(mut pending) = slot.lock() {
+                *pending = Some(match kind {
+                    PromptKind::Goto => Prompt::Goto(text),
+                    PromptKind::OpenFile => Prompt::OpenFile(text),
+                    PromptKind::FileSymbol => Prompt::FileSymbol(text),
+                    PromptKind::WorkspaceSymbol => Prompt::WorkspaceSymbol(text),
+                    PromptKind::SaveAs => Prompt::SaveAs(text),
+                    PromptKind::SaveCopy => Prompt::SaveCopy(text),
+                    PromptKind::CleanResources => Prompt::CleanResources(text),
+                });
+            }
+        });
+    }
+    dialog.rejected.connect(move || {
+        if let Ok(mut pending) = slot.lock() {
+            *pending = Some(Prompt::Cancelled(kind));
+        }
+    });
+
+    let Some(id) = runtime::register(Box::new(dialog)) else {
+        gui.message = tr_args(
+            "ui.error.goto-refused",
+            &[("reason", "the dialog could not be mounted")],
+        );
+        update_status(gui);
+        return;
+    };
+    runtime::set_host_window(id, gui.window);
+    if !runtime::enter_modal(id) {
+        runtime::unregister(id);
+        gui.message = tr_args(
+            "ui.error.goto-refused",
+            &[(
+                "reason",
+                "the go-to-line dialog could not take the modal stack",
+            )],
+        );
+        update_status(gui);
+        return;
+    }
+    gui.prompt_dialog = id;
+}
+
+/// Polls the prompt slot on the main loop.
+fn schedule_prompt(gui: Arc<Mutex<Gui>>, slot: Arc<Mutex<Option<Prompt>>>) {
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(50), move || {
+        // Take the answer before locking the `Gui`, the same order the rename poll uses: a dialog
+        // callback may hold the slot while the main loop holds the window state.
+        let answer = match slot.lock() {
+            Ok(mut pending) => pending.take(),
+            Err(_) => None,
+        };
+        if let Some(answer) = answer
+            && let Ok(mut state) = gui.lock()
+        {
+            apply_prompt(&mut state, answer);
+        }
+        schedule_prompt(gui, slot);
+    });
+}
+
+/// Applies one go-to-line answer on the main loop, outside any widget borrow.
+fn apply_prompt(gui: &mut Gui, answer: Prompt) {
+    if gui.prompt_dialog != 0 {
+        let id = gui.prompt_dialog;
+        runtime::exit_modal(id);
+        runtime::unregister(id);
+        gui.prompt_dialog = 0;
+    }
+    match answer {
+        Prompt::Goto(text) => apply_goto(gui, &text),
+        Prompt::OpenFile(text) => apply_open_file(gui, &text),
+        Prompt::FileSymbol(text) => apply_file_symbol(gui, &text),
+        Prompt::WorkspaceSymbol(text) => apply_workspace_symbol(gui, &text),
+        Prompt::SaveAs(text) => apply_save_as(gui, &text),
+        Prompt::SaveCopy(text) => apply_save_copy(gui, &text),
+        Prompt::CleanResources(text) => apply_clean_resources(gui, &text),
+        Prompt::Cancelled(kind) => {
+            gui.message = tr(match kind {
+                PromptKind::Goto => "ui.status.goto-cancelled",
+                PromptKind::OpenFile => "ui.status.open-cancelled",
+                PromptKind::SaveAs | PromptKind::SaveCopy => "ui.status.save-cancelled",
+                PromptKind::CleanResources => "ui.status.resources-clean-cancelled",
+                PromptKind::FileSymbol | PromptKind::WorkspaceSymbol => {
+                    "ui.status.symbol-cancelled"
+                }
+            });
+            update_status(gui);
+        }
+    }
+}
+
+/// Moves the caret for a go-to-line answer.
+fn apply_goto(gui: &mut Gui, text: &str) {
+    let (line, column) = match parse_goto(text) {
+        Ok(parsed) => parsed,
+        Err(reason) => {
+            gui.message = tr_args("ui.error.goto-refused", &[("reason", reason)]);
+            update_status(gui);
+            return;
+        }
+    };
+    let applied = edit_with_editor(gui, |editor| {
+        match column {
+            Some(column) => editor.set_cursor(line - 1, column - 1, false),
+            None => editor.goto_line(line - 1),
+        }
+        true
+    });
+    if applied.is_none() {
+        gui.message = tr("ui.status.no-editor");
+        update_status(gui);
+        return;
+    }
+    gui.message = tr_args(
+        "ui.status.goto-done",
+        &[
+            ("line", &line.to_string()),
+            ("column", &column.unwrap_or(1).to_string()),
+        ],
+    );
+    update_status(gui);
+}
+
+/// Records the text a document had on disk, for later external-change checks.
+fn remember_saved_text(gui: &mut Gui, document: &str, text: &str) {
+    gui.saved_texts.insert(document.to_owned(), text.to_owned());
+}
+
+/// Opens the project file a quick-open answer names, or the best fuzzy match.
+fn apply_open_file(gui: &mut Gui, text: &str) {
+    let Some(session) = gui.project.as_ref() else {
+        gui.message = tr("ui.project.none");
+        update_status(gui);
+        return;
+    };
+    let entries: Vec<String> = session
+        .file()
+        .document()
+        .map(|document| {
+            document
+                .references()
+                .into_iter()
+                .map(|reference| reference.written().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(relative) = resolve_open_path(&entries, text) else {
+        gui.message = tr_args(
+            "ui.error.file-not-opened",
+            &[("reason", "no project file matches that input")],
+        );
+        update_status(gui);
+        return;
+    };
+    let root = session.root().as_path().to_path_buf();
+    let path = root.join(&relative);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            gui.message = tr_args(
+                "ui.error.file-not-opened",
+                &[("reason", &error.to_string())],
+            );
+            update_status(gui);
+            return;
+        }
+    };
+    remember_saved_text(gui, &relative, &text);
+    gui.groups.pin(relative.clone());
+    if let Err(reason) = gui.groups.type_into(text) {
+        gui.message = tr_args("ui.error.file-not-opened", &[("reason", &reason)]);
+        update_status(gui);
+        return;
+    }
+    gui.sync_editors();
+    gui.message = tr_args("ui.status.file-opened", &[("path", &relative)]);
+    update_status(gui);
+}
+
+/// Jumps to a symbol in the focused editor's document, read through the language server.
+///
+/// The source panel normally outlines the generated artifact; a *file* symbol is about the buffer
+/// the person is editing, so this reads that buffer explicitly rather than the panel's subject.
+fn apply_file_symbol(gui: &mut Gui, text: &str) {
+    let query = text.trim();
+    if !gui.source.is_configured() {
+        gui.message = tr("ui.error.symbol-no-server");
+        update_status(gui);
+        return;
+    }
+    if let Err(reason) = refresh_active_source(gui) {
+        gui.message = tr_args("ui.error.symbol-not-jumped", &[("reason", &reason)]);
+        update_status(gui);
+        return;
+    }
+    match gui.source.file_symbol(query) {
+        Some((name, line, column)) => {
+            if jump_to_source_position(gui, line, column) {
+                gui.message = tr_args(
+                    "ui.status.file-symbol-jumped",
+                    &[("name", &name), ("line", &(line + 1).to_string())],
+                );
+                update_status(gui);
+            }
+        }
+        None => {
+            gui.message = match gui.source.failure() {
+                Some(reason) => tr_args("ui.error.symbol-not-jumped", &[("reason", reason)]),
+                None => tr_args("ui.error.symbol-not-found", &[("query", query)]),
+            };
+            update_status(gui);
+        }
+    }
+}
+
+/// Reads the focused editor's buffer into the source outline for a file-symbol query.
+fn refresh_active_source(gui: &mut Gui) -> Result<(), String> {
+    let Some((document, text)) = active_document(gui) else {
+        return Err(tr("ui.status.no-editor"));
+    };
+    let root = project_root(gui).unwrap_or_else(|| PathBuf::from("."));
+    gui.source.refresh(&root, &document, &text, None);
+    Ok(())
+}
+
+/// Jumps to the best workspace symbol the language server reports for `text`.
+fn apply_workspace_symbol(gui: &mut Gui, text: &str) {
+    let query = text.trim();
+    if !gui.source.is_configured() {
+        gui.message = tr("ui.error.symbol-no-server");
+        update_status(gui);
+        return;
+    }
+    let Some(root) = project_root(gui) else {
+        gui.message = tr("ui.project.none");
+        update_status(gui);
+        return;
+    };
+    let symbols = match gui.source.workspace_symbols(&root, query) {
+        Ok(symbols) => symbols,
+        Err(reason) => {
+            gui.message = tr_args("ui.error.symbol-not-jumped", &[("reason", &reason)]);
+            update_status(gui);
+            return;
+        }
+    };
+    let Some(symbol) = best_workspace_symbol(&symbols, query) else {
+        gui.message = tr_args("ui.error.symbol-not-found", &[("query", query)]);
+        update_status(gui);
+        return;
+    };
+    let Some(path) = crate::host::lsp::path_from_uri(&symbol.uri) else {
+        gui.message = tr_args(
+            "ui.error.symbol-not-jumped",
+            &[("reason", "the symbol is not in a local file")],
+        );
+        update_status(gui);
+        return;
+    };
+    let Ok(relative) = path.strip_prefix(&root) else {
+        gui.message = tr_args(
+            "ui.error.symbol-not-jumped",
+            &[("reason", "the symbol is outside the project root")],
+        );
+        update_status(gui);
+        return;
+    };
+    let document = relative.to_string_lossy().into_owned();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            gui.message = tr_args(
+                "ui.error.symbol-not-jumped",
+                &[("reason", &error.to_string())],
+            );
+            update_status(gui);
+            return;
+        }
+    };
+    let (line, column) = crate::app::run::workbench_outline::SourceOutline::position(
+        &text,
+        symbol.line,
+        symbol.character,
+    )
+    .unwrap_or((symbol.line as usize, symbol.character as usize));
+    remember_saved_text(gui, &document, &text);
+    if !show_document_at(gui, &document, Some(&text), line, column, true) {
+        gui.message = tr("ui.source.no-editor");
+        update_status(gui);
+        return;
+    }
+    gui.message = tr_args(
+        "ui.status.workspace-symbol-jumped",
+        &[
+            ("name", &symbol.name),
+            ("path", &document),
+            ("line", &(line + 1).to_string()),
+        ],
+    );
+    update_status(gui);
+}
+
+/// The exact workspace symbol `query` names, or the best fuzzy match among the server's answer.
+fn best_workspace_symbol<'a>(
+    symbols: &'a [crate::app::run::workbench_outline::WorkspaceSymbol],
+    query: &str,
+) -> Option<&'a crate::app::run::workbench_outline::WorkspaceSymbol> {
+    use crate::app::search::quick_open::fuzzy_score;
+
+    symbols
+        .iter()
+        .find(|symbol| symbol.name == query)
+        .or_else(|| {
+            symbols
+                .iter()
+                .filter_map(|symbol| fuzzy_score(query, &symbol.name).map(|score| (score, symbol)))
+                .max_by_key(|(score, _)| *score)
+                .map(|(_, symbol)| symbol)
+        })
+}
+
+/// The open project's root, or `None` when no project is open.
+fn project_root(gui: &Gui) -> Option<PathBuf> {
+    gui.project
+        .as_ref()
+        .map(|project| project.root().as_path().to_path_buf())
+}
+
+/// The exact project file a query names, or the best fuzzy match among the declared files.
+///
+/// The candidates come from the project document's own references, so a query cannot open a path
+/// the project does not declare.
+fn resolve_open_path(entries: &[String], query: &str) -> Option<String> {
+    use crate::app::search::quick_open::{Candidate, QuickOpen};
+
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    if let Some(exact) = entries.iter().find(|entry| entry.as_str() == query) {
+        return Some(exact.clone());
+    }
+    let mut open = QuickOpen::new();
+    for entry in entries {
+        open.add(Candidate::new(entry.as_str()));
+    }
+    open.open(query, 1)
+        .into_iter()
+        .next()
+        .and_then(|hit| hit.path)
+}
+
+/// Parses `line` or `line:column`, both 1-based, from the go-to-line field.
+fn parse_goto(text: &str) -> Result<(usize, Option<usize>), &'static str> {
+    let text = text.trim();
+    let (line, column) = match text.split_once(':') {
+        Some((line, column)) => (line.trim(), Some(column.trim())),
+        None => (text, None),
+    };
+    let line = line
+        .parse::<usize>()
+        .map_err(|_| "use line or line:column, for example 42 or 42:7")?;
+    let column = match column {
+        Some(raw) => Some(
+            raw.parse::<usize>()
+                .map_err(|_| "the column must be a whole number")?,
+        ),
+        None => None,
+    };
+    if line == 0 || column == Some(0) {
+        return Err("line and column are 1-based");
+    }
+    Ok((line, column))
+}
+
 /// Applies one editor-tab context-menu action to the active tab.
 fn editor_context_action(gui: &mut Gui, action: &str, label: &str) {
     let group = gui.groups.focus();
@@ -2549,6 +4564,11 @@ fn insert_widget_from_palette(gui: &mut Gui, index: usize) {
     };
     match gui.scene.insert_widget(&control, &name, &property) {
         Ok(node) => {
+            record_hot(
+                gui,
+                "scene",
+                crate::app::preview::hot_update::Edit::AddNode(name.clone()),
+            );
             select_node(gui, node, "widgets");
             gui.message = tr_args(
                 "ui.status.widget-inserted",
@@ -2604,6 +4624,101 @@ fn rebuild_widget_rows(gui: &mut Gui, query: &str) {
     let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
         set_list_rows(list, labels);
     });
+}
+
+/// Finds every occurrence of `query` in one document, in text order.
+///
+/// The search is case-sensitive and literal: the Search panel is a document viewer's find, not a
+/// regex engine, and a byte offset it reports must map back to the same text a click selects.
+fn find_hits(
+    document: &str,
+    text: &str,
+    query: &str,
+    limit: usize,
+    hits: &mut Vec<SearchHit>,
+    labels: &mut Vec<String>,
+) {
+    if query.is_empty() || limit == 0 {
+        return;
+    }
+    for (offset, _) in text.match_indices(query) {
+        if hits.len() >= limit {
+            break;
+        }
+        let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+        let line_end = text[offset..]
+            .find('\n')
+            .map_or(text.len(), |index| offset + index);
+        let line_number = text[..offset].matches('\n').count() + 1;
+        let preview: String = text[line_start..line_end]
+            .trim()
+            .chars()
+            .take(120)
+            .collect();
+        hits.push(SearchHit {
+            document: document.to_owned(),
+            offset: offset as u32,
+            length: query.len() as u32,
+        });
+        labels.push(format!("{document}:{line_number}: {preview}"));
+    }
+}
+
+/// Recomputes the Search panel's hits for `query` over the documents the editor has open.
+fn run_search(gui: &mut Gui, query: &str) {
+    let query = query.trim();
+    let documents: Vec<String> = gui
+        .groups
+        .documents()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let mut hits = Vec::new();
+    let mut labels = Vec::new();
+    if !query.is_empty() {
+        for document in &documents {
+            if let Some(text) = gui.groups.text(document) {
+                find_hits(document, text, query, 200, &mut hits, &mut labels);
+            }
+            if hits.len() >= 200 {
+                break;
+            }
+        }
+    }
+    gui.search_hits = hits;
+    if gui.search_list != 0 {
+        // The field's `text_changed` is emitted synchronously, so the list is written on the next
+        // main-loop turn rather than inside this callback (the same rule the widget search follows).
+        let list = gui.search_list;
+        let _ = rust_widgets::schedule_on_main(Duration::from_millis(0), move || {
+            set_list_rows(list, labels);
+        });
+    }
+    gui.message = if query.is_empty() {
+        tr("ui.status.ready")
+    } else if gui.search_hits.is_empty() {
+        tr("ui.search.no-match")
+    } else {
+        format!("{} match(es)", gui.search_hits.len())
+    };
+    update_status(gui);
+}
+
+/// Opens the document and selects the range a Search result names.
+fn activate_search_hit(gui: &mut Gui, index: usize) {
+    let Some(hit) = gui.search_hits.get(index).cloned() else {
+        return;
+    };
+    gui.groups.open(&hit.document);
+    if let Err(reason) = gui
+        .groups
+        .select(hit.offset, hit.offset.saturating_add(hit.length))
+    {
+        warn_failure("a search result could not be selected", reason);
+    }
+    gui.sync_editors();
+    gui.message = tr_args("ui.status.now-on", &[("page", &hit.document)]);
+    update_status(gui);
 }
 
 /// Toggles the favorite state of the widget row at `index` and returns the new state.
@@ -2769,8 +4884,9 @@ fn create_drag_ghost(state: &Arc<Mutex<Gui>>, gui: &mut Gui) {
     let Some(node_rect) = gui.scene.rect(node) else {
         return;
     };
+    let view = gui.canvas_view;
     let Some(origin) = with_widget_mut(gui.canvas_panel, move |widget| {
-        CanvasTransform::new(widget.geometry()).place(node_rect)
+        view.transform(widget.geometry()).place(node_rect)
     }) else {
         warn_failure(
             "the drag ghost could not be placed",
@@ -2838,7 +4954,7 @@ fn finish_ghost_drag(gui: &mut Gui, point: Point, floated: bool) {
     };
     if floated {
         gui.message = "drop cancelled: outside the canvas".to_owned();
-    } else if let Some((x, y)) = canvas_point(gui.canvas_panel, point.x, point.y) {
+    } else if let Some((x, y)) = canvas_point(gui, point.x, point.y) {
         let hit = gui.scene.hit(x, y);
         let target = if hit.is_some_and(|node| drag.candidates().accepts(Some(node))) {
             hit
@@ -3183,19 +5299,18 @@ fn run_palette_id(gui: &mut Gui, id: &str) {
             update_status(gui);
             return;
         }
-        "view.welcome" => {
-            open_onboarding(gui);
-            gui.message = format!("{id}: welcome opened");
-            update_status(gui);
-            return;
-        }
         "panel.close" => {
             // Focus tracking for docked panels is a later T04.07 slice; hiding an arbitrary panel
             // would be a different action from the one the user asked for.
             format!("{id}: no focused docked panel is tracked in this window yet")
         }
-        "keys.show" => shortcut_summary(),
-        other => format!("{other}: resolved; the workbench has no handler for it yet"),
+        // Every other palette entry runs through the same dispatcher as the menu, so a command
+        // implemented for one entry is never "no handler" from the other.
+        _ => {
+            close_palette(gui);
+            run_command(gui, &id);
+            return;
+        }
     };
     close_palette(gui);
     gui.message = outcome;
@@ -3207,7 +5322,181 @@ fn run_palette_id(gui: &mut Gui, id: &str) {
     );
 }
 
+/// The commands this window has a handler for.
+///
+/// A menu leaf and a shortcut both end in [`run_command`]; a command whose name is not here has no
+/// effect in this build, and saying so is the only honest answer. The list is deliberately short:
+/// registering a command claims it exists, and the window can only claim what it can do.
+const HANDLED_COMMANDS: [&str; 137] = [
+    "view.palette",
+    "view.welcome",
+    "view.split",
+    "view.split-down",
+    "view.next-group",
+    "view.previous-group",
+    "view.merge-group",
+    "view.move-tab",
+    "view.panel-show",
+    "view.panel-hide-current",
+    "view.panel-restore",
+    "view.display-toolbar",
+    "view.display-status-bar",
+    "view.display-zoom-in",
+    "view.display-zoom-out",
+    "view.display-zoom-reset",
+    "view.mode-welcome",
+    "view.mode-project",
+    "view.mode-design",
+    "view.mode-code",
+    "view.mode-debug",
+    "view.mode-test",
+    "view.mode-release",
+    "view.save-layout",
+    "view.reset-layout",
+    "view.layout-load",
+    "view.layout-lock",
+    "view.layout-zen",
+    "view.layout-fullscreen",
+    "file.close",
+    "file.close-others",
+    "file.close-saved",
+    "file.close-project",
+    "file.open-reopen",
+    "file.exit",
+    "file.copy-path",
+    "file.reveal",
+    "file.save",
+    "file.save-all",
+    "file.save-as",
+    "file.save-copy",
+    "project.trust",
+    "project.clean-resources",
+    "keys.show",
+    "build.run",
+    "build.check",
+    "build.rebuild",
+    "build.clean",
+    "build.cancel",
+    "build.copy-output",
+    "build.copy-command",
+    "build.locate-first-error",
+    "preview.start",
+    "preview.stop",
+    "preview.rebuild",
+    "vcs.refresh",
+    "terminal.start",
+    "terminal.stop",
+    "test.run",
+    "test.run-failed",
+    "test.run-current-file",
+    "test.run-stop",
+    "help.shortcuts",
+    "help.commands",
+    "help.controls",
+    "project.check",
+    "project.rescan",
+    "project.migration",
+    "project.check-references",
+    "debug.start",
+    "debug.continue",
+    "debug.step",
+    "debug.step-in",
+    "debug.step-out",
+    "debug.pause",
+    "debug.stop",
+    "run.start",
+    "run.stop",
+    "run.clear",
+    "run.copy-output",
+    "edit.undo",
+    "edit.redo",
+    "edit.cut",
+    "edit.copy",
+    "edit.copy-node-id",
+    "edit.history-view",
+    "edit.paste",
+    "edit.select-all",
+    "edit.select-clear",
+    "edit.select-occurrences",
+    "edit.select-next-occurrence",
+    "edit.select-cursor-above",
+    "edit.select-cursor-below",
+    "edit.text-comment",
+    "edit.text-indent",
+    "edit.text-outdent",
+    "edit.text-move-up",
+    "edit.text-move-down",
+    "edit.text-duplicate",
+    "edit.text-delete",
+    "edit.text-join",
+    "edit.text-sort",
+    "edit.find",
+    "edit.replace",
+    "edit.find-next",
+    "edit.find-previous",
+    "edit.find-selection",
+    "nav.design-parent",
+    "nav.design-child",
+    "nav.design-next-sibling",
+    "nav.design-previous-sibling",
+    "nav.goto-line",
+    "nav.open-file",
+    "nav.file-symbol",
+    "nav.workspace-symbol",
+    "nav.reveal-current-file",
+    "nav.code-definition",
+    "nav.code-declaration",
+    "nav.code-type-definition",
+    "nav.code-implementation",
+    "nav.code-references",
+    "nav.code-back",
+    "nav.code-forward",
+    "edit.select-expand",
+    "edit.select-shrink",
+    "code.fold",
+    "code.unfold",
+    "code.fold-all",
+    "code.unfold-all",
+    "code.outline",
+    "code.breadcrumbs",
+    "code.inlay-hints",
+    "code.bookmark-toggle",
+    "design.fit",
+    "design.actual-size",
+    "design.grid",
+    "design.rulers",
+];
+
 fn run_command(gui: &mut Gui, command: &str) {
+    run_call(gui, &Call::to(command));
+}
+
+/// Runs one registry call, with its arguments.
+///
+/// A menu leaf carries its argument in the action string (`command:view.panel-show?panel=…`); this
+/// is where the call reaches the same dispatcher a key or the palette uses, so an implemented
+/// command is never "no handler" depending on which surface asked for it.
+fn run_call(gui: &mut Gui, call: &Call) {
+    let command = call.id();
+    if !HANDLED_COMMANDS.contains(&command) {
+        // A key still binds some of these (Ctrl+S, Ctrl+Z). Answering "resolved" was a lie: nothing
+        // ran. The menu ledger names the task that will implement it, so the refusal can too.
+        gui.message = match crate::app::commands::menu::planned_task(command) {
+            Some(task) => tr_args(
+                "ui.status.command-not-implemented",
+                &[("command", command), ("task", &task)],
+            ),
+            None => tr_args("ui.status.command-no-handler", &[("command", command)]),
+        };
+        update_status(gui);
+        crate::host::log::emit(
+            crate::host::log::Level::Info,
+            "app::run::workbench-menu",
+            &format!("menu command {command}: not implemented"),
+        );
+        push_message(gui, gui.message.clone());
+        return;
+    }
     let outcome = match command {
         "view.palette" => {
             open_palette(gui);
@@ -3217,18 +5506,297 @@ fn run_command(gui: &mut Gui, command: &str) {
             open_onboarding(gui);
             return;
         }
-        "panel.outline" => {
-            apply_action(gui, "toggle:outline");
-            return;
+        "file.close" => {
+            let group = gui.groups.focus();
+            match gui.groups.tabs(group).and_then(|tabs| tabs.active_index()) {
+                None => tr("ui.status.nothing-to-close"),
+                Some(index) => {
+                    let closed = gui
+                        .groups
+                        .tabs_mut(group)
+                        .and_then(|tabs| tabs.close_view(index).ok())
+                        .map(|tab| tab.document().to_owned());
+                    match closed {
+                        Some(document) => {
+                            if let Some(text) = gui.groups.text(&document).map(str::to_owned) {
+                                remember_closed_document(gui, &document, text);
+                            }
+                            gui.sync_editors();
+                            tr_args("ui.status.document-closed", &[("document", &document)])
+                        }
+                        None => tr("ui.error.document-not-closed"),
+                    }
+                }
+            }
         }
-        "panel.inspector" => {
-            apply_action(gui, "toggle:inspector");
-            return;
+        "file.close-others" => close_others(gui),
+        "file.close-saved" => close_saved(gui),
+        "file.close-project" => close_project(gui),
+        "file.open-reopen" => reopen_closed_document(gui),
+        "file.exit" => {
+            apply_action(gui, "quit");
+            gui.message.clone()
         }
-        "panel.close" => "no focused docked panel is tracked in this window yet".to_owned(),
+        "file.copy-path" => copy_project_path(gui),
+        "file.reveal" => reveal_project(gui),
+        "file.save" => file_save(gui),
+        "file.save-all" => file_save_all(gui),
+        "file.save-as" => {
+            open_prompt(
+                gui,
+                PromptKind::SaveAs,
+                "ui.dialog.save-as-title",
+                "ui.dialog.save-as-label",
+                true,
+            );
+            gui.message.clone()
+        }
+        "file.save-copy" => {
+            open_prompt(
+                gui,
+                PromptKind::SaveCopy,
+                "ui.dialog.save-copy-title",
+                "ui.dialog.save-copy-label",
+                true,
+            );
+            gui.message.clone()
+        }
+        "project.trust" => project_trust(gui),
+        "project.clean-resources" => start_resource_cleanup(gui),
         "keys.show" => shortcut_summary(),
-        other => format!("{other}: resolved; the workbench has no handler for it yet"),
+        "build.run" => start_build(gui, crate::app::build::compile::Action::Build),
+        "build.check" => start_build(gui, crate::app::build::compile::Action::Check),
+        "build.rebuild" => start_build(gui, crate::app::build::compile::Action::Rebuild),
+        "build.clean" => start_build(gui, crate::app::build::compile::Action::Clean),
+        "build.cancel" => build_cancel(gui),
+        "build.copy-output" => build_copy_output(gui),
+        "build.copy-command" => build_copy_command(gui),
+        "build.locate-first-error" => build_locate_first_error(gui),
+        "preview.start" => preview_start(gui),
+        "preview.stop" => preview_stop(gui),
+        "preview.rebuild" => preview_rebuild(gui),
+        "vcs.refresh" => vcs_refresh(gui),
+        "terminal.start" => terminal_start(gui),
+        "terminal.stop" => terminal_stop(gui),
+        "test.run" => tests_run(gui),
+        "test.run-failed" => tests_run_failed(gui),
+        "test.run-current-file" => tests_run_current_file(gui),
+        "test.run-stop" => tests_stop(gui),
+        "help.shortcuts" => {
+            apply_action(gui, "help:shortcuts");
+            gui.message.clone()
+        }
+        "help.commands" => {
+            apply_action(gui, "help:commands");
+            gui.message.clone()
+        }
+        "help.controls" => {
+            apply_action(gui, "help:controls");
+            gui.message.clone()
+        }
+        "project.check" => project_check(gui),
+        "project.rescan" => project_rescan(gui),
+        "project.migration" => project_migration(gui),
+        "project.check-references" => project_check_references(gui),
+        "debug.start" => debug_command(gui, DebugCommand::Start),
+        "debug.continue" => debug_command(gui, DebugCommand::Continue),
+        "debug.step" => debug_command(gui, DebugCommand::Step),
+        "debug.step-in" => debug_command(gui, DebugCommand::StepIn),
+        "debug.step-out" => debug_command(gui, DebugCommand::StepOut),
+        "debug.pause" => debug_command(gui, DebugCommand::Pause),
+        "debug.stop" => debug_command(gui, DebugCommand::Stop),
+        "run.start" => run_panel_start(gui),
+        "run.stop" => run_panel_stop(gui),
+        "run.clear" => run_panel_clear(gui),
+        "run.copy-output" => run_panel_copy(gui),
+        "edit.undo" => edit_history(gui, true),
+        "edit.redo" => edit_history(gui, false),
+        "edit.cut" => edit_clipboard(gui, "cut"),
+        "edit.copy" => edit_clipboard(gui, "copy"),
+        "edit.copy-node-id" => copy_node_id(gui),
+        "edit.history-view" => edit_history_view(gui),
+        "edit.paste" => edit_clipboard(gui, "paste"),
+        "edit.select-all" => edit_clipboard(gui, "select-all"),
+        "edit.select-clear" => edit_select_clear(gui),
+        "edit.select-expand" => edit_select_expand(gui),
+        "edit.select-shrink" => edit_select_shrink(gui),
+        "code.fold" => code_fold(gui, "fold"),
+        "code.unfold" => code_fold(gui, "unfold"),
+        "code.fold-all" => code_fold(gui, "fold-all"),
+        "code.unfold-all" => code_fold(gui, "unfold-all"),
+        "code.outline" => {
+            if !gui
+                .panels
+                .layout()
+                .shown()
+                .iter()
+                .any(|shown| shown == "source")
+            {
+                toggle_panel(gui, "source");
+            }
+            refresh_source(gui);
+            tr_args("ui.status.shown", &[("id", "source")])
+        }
+        "code.breadcrumbs" => code_breadcrumbs(gui),
+        "code.inlay-hints" => code_inlay_hints(gui),
+        "code.bookmark-toggle" => code_bookmark_toggle(gui),
+        "edit.select-occurrences" => edit_select_occurrences(gui),
+        "edit.select-next-occurrence" => edit_select_more(gui, "next-occurrence"),
+        "edit.select-cursor-above" => edit_select_more(gui, "cursor-above"),
+        "edit.select-cursor-below" => edit_select_more(gui, "cursor-below"),
+        "edit.text-comment" => edit_text_operation(gui, "comment"),
+        "edit.text-indent" => edit_text_operation(gui, "indent"),
+        "edit.text-outdent" => edit_text_operation(gui, "outdent"),
+        "edit.text-move-up" => edit_text_operation(gui, "move-up"),
+        "edit.text-move-down" => edit_text_operation(gui, "move-down"),
+        "edit.text-duplicate" => edit_text_operation(gui, "duplicate"),
+        "edit.text-delete" => edit_text_operation(gui, "delete"),
+        "edit.text-join" => edit_text_operation(gui, "join"),
+        "edit.text-sort" => edit_text_operation(gui, "sort"),
+        "edit.find" => edit_search(gui, "find"),
+        "edit.replace" => edit_search(gui, "replace"),
+        "edit.find-next" => edit_search(gui, "next"),
+        "edit.find-previous" => edit_search(gui, "previous"),
+        "edit.find-selection" => edit_find_selection(gui),
+        "nav.design-parent" => scene_command(gui, "select-parent"),
+        "nav.design-child" => scene_command(gui, "select-child"),
+        "nav.design-next-sibling" => scene_command(gui, "select-next-sibling"),
+        "nav.design-previous-sibling" => scene_command(gui, "select-previous-sibling"),
+        "nav.goto-line" => {
+            open_prompt(
+                gui,
+                PromptKind::Goto,
+                "ui.dialog.goto-title",
+                "ui.dialog.goto-label",
+                true,
+            );
+            gui.message.clone()
+        }
+        "nav.open-file" => {
+            open_prompt(
+                gui,
+                PromptKind::OpenFile,
+                "ui.dialog.open-title",
+                "ui.dialog.open-label",
+                false,
+            );
+            gui.message.clone()
+        }
+        "nav.file-symbol" => {
+            open_prompt(
+                gui,
+                PromptKind::FileSymbol,
+                "ui.dialog.file-symbol-title",
+                "ui.dialog.file-symbol-label",
+                true,
+            );
+            gui.message.clone()
+        }
+        "nav.workspace-symbol" => {
+            open_prompt(
+                gui,
+                PromptKind::WorkspaceSymbol,
+                "ui.dialog.workspace-symbol-title",
+                "ui.dialog.workspace-symbol-label",
+                false,
+            );
+            gui.message.clone()
+        }
+        "nav.reveal-current-file" => reveal_current_file(gui),
+        "nav.code-definition" => code_navigation(
+            gui,
+            crate::app::run::workbench_outline::CodeQuery::Definition,
+        ),
+        "nav.code-declaration" => code_navigation(
+            gui,
+            crate::app::run::workbench_outline::CodeQuery::Declaration,
+        ),
+        "nav.code-type-definition" => code_navigation(
+            gui,
+            crate::app::run::workbench_outline::CodeQuery::TypeDefinition,
+        ),
+        "nav.code-implementation" => code_navigation(
+            gui,
+            crate::app::run::workbench_outline::CodeQuery::Implementation,
+        ),
+        "nav.code-references" => code_navigation(
+            gui,
+            crate::app::run::workbench_outline::CodeQuery::References,
+        ),
+        "nav.code-back" => code_history(gui, false),
+        "nav.code-forward" => code_history(gui, true),
+        "design.fit" => design_zoom(gui, None),
+        "design.actual-size" => design_zoom(gui, Some(1.0)),
+        "design.grid" => design_aid(gui, "grid"),
+        "design.rulers" => design_aid(gui, "rulers"),
+        // The layout and editor actions the window already had, now reached through the registry.
+        "view.split" => {
+            apply_action(gui, "group:split");
+            gui.message.clone()
+        }
+        "view.next-group" => {
+            apply_action(gui, "group:next");
+            gui.message.clone()
+        }
+        "view.previous-group" => {
+            apply_action(gui, "group:previous");
+            gui.message.clone()
+        }
+        "view.split-down" => {
+            apply_action(gui, "group:split-down");
+            gui.message.clone()
+        }
+        "view.merge-group" => {
+            apply_action(gui, "group:merge");
+            gui.message.clone()
+        }
+        "view.move-tab" => move_tab_to_next_group(gui),
+        "view.save-layout" => {
+            if gui.layout_locked {
+                tr("ui.status.layout-locked")
+            } else {
+                apply_action(gui, "layout:save");
+                gui.message.clone()
+            }
+        }
+        "view.reset-layout" => {
+            if gui.layout_locked {
+                tr("ui.status.layout-locked")
+            } else {
+                apply_action(gui, "layout:reset");
+                gui.message.clone()
+            }
+        }
+        "view.layout-load" => load_layout(gui),
+        "view.layout-lock" => toggle_layout_lock(gui),
+        "view.layout-zen" => toggle_zen(gui),
+        "view.layout-fullscreen" => toggle_fullscreen(gui),
+        "view.panel-show" => show_panel(gui, call.arguments().get("panel").map(String::as_str)),
+        "view.panel-hide-current" => hide_current_panel(gui),
+        "view.panel-restore" => restore_panel(gui),
+        "view.display-toolbar" => {
+            apply_action(gui, "display:toolbar");
+            gui.message.clone()
+        }
+        "view.display-status-bar" => {
+            apply_action(gui, "display:status-bar");
+            gui.message.clone()
+        }
+        "view.display-zoom-in" => editor_zoom(gui, "in"),
+        "view.display-zoom-out" => editor_zoom(gui, "out"),
+        "view.display-zoom-reset" => editor_zoom(gui, "reset"),
+        "view.mode-welcome" => view_mode(gui, Mode::Welcome),
+        "view.mode-project" => view_mode(gui, Mode::Project),
+        "view.mode-design" => view_mode(gui, Mode::Design),
+        "view.mode-code" => view_mode(gui, Mode::Code),
+        "view.mode-debug" => view_mode(gui, Mode::Debug),
+        "view.mode-test" => view_mode(gui, Mode::Test),
+        "view.mode-release" => view_mode(gui, Mode::Release),
+        other => format!("{other}: not implemented in this build"),
     };
+    if command != "edit.history-view" {
+        record_command(gui, command);
+    }
     gui.message = outcome;
     update_status(gui);
     crate::host::log::emit(
@@ -3237,6 +5805,1934 @@ fn run_command(gui: &mut Gui, command: &str) {
         &format!("menu command {command}: {}", gui.message),
     );
     push_message(gui, format!("{command}: {}", gui.message));
+}
+
+/// The panel whose control currently owns the keyboard, if any.
+fn focused_panel(gui: &Gui) -> Option<String> {
+    let focused = focused_widget()?;
+    gui.panel_widgets
+        .iter()
+        .find(|(_, widgets)| widgets.contains(&focused))
+        .map(|(id, _)| id.clone())
+}
+
+/// Remembers a hidden panel for `view.panel-restore`, keeping the stack bounded.
+fn remember_closed(gui: &mut Gui, id: &str) {
+    const LIMIT: usize = 16;
+    gui.closed_panels.retain(|other| other != id);
+    gui.closed_panels.push(id.to_owned());
+    if gui.closed_panels.len() > LIMIT {
+        gui.closed_panels.remove(0);
+    }
+}
+
+/// Hides the panel that holds the keyboard focus.
+///
+/// The focused control is mapped to its panel through the window's own `panel_widgets`; a focus on
+/// the editor, the canvas or the chrome belongs to no panel and is refused rather than guessed.
+fn hide_current_panel(gui: &mut Gui) -> String {
+    let Some(id) = focused_panel(gui) else {
+        return tr("ui.status.no-focused-panel");
+    };
+    if let Err(error) = gui.panels.hide(&id) {
+        return error.message().to_owned();
+    }
+    remember_closed(gui, &id);
+    gui.sync_panels();
+    gui.sync_editors();
+    tr_args("ui.status.hidden", &[("id", &id)])
+}
+
+/// Shows the panel hidden most recently.
+fn restore_panel(gui: &mut Gui) -> String {
+    let Some(id) = gui.closed_panels.pop() else {
+        return tr("ui.status.no-closed-panels");
+    };
+    if gui.panels.show(&id).is_err() {
+        return tr_args("ui.status.no-panel", &[("id", &id)]);
+    }
+    gui.sync_panels();
+    gui.sync_editors();
+    tr_args("ui.status.shown", &[("id", &id)])
+}
+
+/// Shows one panel named by its §2.2 ledger id.
+///
+/// The ledger is the only list: a deferred panel answers with the task that will provide it, and an
+/// id the ledger does not name is refused rather than passed to the docking model, which knows the
+/// window's host ids and would be a second vocabulary.
+fn show_panel(gui: &mut Gui, panel: Option<&str>) -> String {
+    let Some(id) = panel else {
+        return tr("ui.status.panel-not-named");
+    };
+    let Some(required) = crate::app::shell::panels::REQUIRED_PANELS
+        .iter()
+        .find(|required| required.id() == id)
+    else {
+        return tr_args("ui.status.no-panel", &[("id", id)]);
+    };
+    let Some(host) = required.host_id() else {
+        return tr_args(
+            "ui.status.command-not-implemented",
+            &[("command", "view.panel-show"), ("task", required.domain())],
+        );
+    };
+    toggle_panel(gui, host);
+    gui.message.clone()
+}
+
+/// Zooms the focused editor's text with the control's own zoom state.
+fn editor_zoom(gui: &mut Gui, direction: &str) -> String {
+    let applied = edit_with_editor(gui, |editor| {
+        match direction {
+            "in" => editor.zoom_in(),
+            "out" => editor.zoom_out(),
+            _ => editor.reset_zoom(),
+        }
+        true
+    });
+    if applied.is_none() {
+        return tr("ui.status.no-editor");
+    }
+    tr(match direction {
+        "in" => "ui.status.zoomed-in",
+        "out" => "ui.status.zoomed-out",
+        _ => "ui.status.zoom-reset",
+    })
+}
+
+/// Sets the design surface's zoom and repaints it.
+///
+/// `None` is “fit the control”, the behaviour before any explicit zoom; the pointer mapping uses
+/// the same view state, so a click lands on the node the person sees.
+fn design_zoom(gui: &mut Gui, zoom: Option<f32>) -> String {
+    gui.canvas_view.zoom = zoom;
+    sync_canvas(gui);
+    tr(match zoom {
+        Some(_) => "ui.status.zoom-actual",
+        None => "ui.status.zoom-fit",
+    })
+}
+
+/// Shows or hides one design aid and repaints the surface.
+fn design_aid(gui: &mut Gui, aid: &str) -> String {
+    let showing = if aid == "grid" {
+        gui.canvas_view.grid = !gui.canvas_view.grid;
+        gui.canvas_view.grid
+    } else {
+        gui.canvas_view.rulers = !gui.canvas_view.rulers;
+        gui.canvas_view.rulers
+    };
+    sync_canvas(gui);
+    tr_args(
+        if showing {
+            "ui.status.shown"
+        } else {
+            "ui.status.hidden"
+        },
+        &[("id", aid)],
+    )
+}
+
+/// Runs one scene action as a command and answers with the message it produced.
+fn scene_command(gui: &mut Gui, action: &str) -> String {
+    scene_context_action(gui, action);
+    gui.message.clone()
+}
+
+/// Closes every tab in the focused group except the active one.
+/// Closes every tab whose document has no unsaved changes, in every editor group.
+///
+/// A document is skipped when any view of it is dirty: "saved" means no view would lose an edit,
+/// not that this particular tab happened to be clean.
+fn close_saved(gui: &mut Gui) -> String {
+    let mut dirty = BTreeSet::new();
+    let mut documents = BTreeSet::new();
+    for group in gui.groups.group_ids() {
+        if let Some(tabs) = gui.groups.tabs(group) {
+            for tab in tabs.tabs() {
+                documents.insert(tab.document().to_owned());
+                if tab.is_dirty() {
+                    dirty.insert(tab.document().to_owned());
+                }
+            }
+        }
+    }
+    let saved: Vec<(String, String)> = documents
+        .difference(&dirty)
+        .filter_map(|document| {
+            gui.groups
+                .text(document)
+                .map(|text| (document.clone(), text.to_owned()))
+        })
+        .collect();
+    let mut closed = 0;
+    let mut closed_now = Vec::new();
+    for group in gui.groups.group_ids() {
+        if let Some(tabs) = gui.groups.tabs_mut(group) {
+            for (document, text) in &saved {
+                let count = tabs.close_document(document);
+                if count > 0 {
+                    closed += count;
+                    closed_now.push((document.clone(), text.clone()));
+                }
+            }
+        }
+    }
+    for (document, text) in closed_now {
+        remember_closed_document(gui, &document, text);
+    }
+    gui.sync_editors();
+    tr_args("ui.status.saved-closed", &[("count", &closed.to_string())])
+}
+
+fn close_others(gui: &mut Gui) -> String {
+    let group = gui.groups.focus();
+    let Some(index) = gui.groups.tabs(group).and_then(|tabs| tabs.active_index()) else {
+        return tr("ui.status.nothing-to-close");
+    };
+    let closed_documents: Vec<(String, String)> = gui
+        .groups
+        .tabs(group)
+        .map(|tabs| {
+            tabs.tabs()
+                .iter()
+                .enumerate()
+                .filter(|(position, _)| *position != index)
+                .filter_map(|(_, tab)| {
+                    let document = tab.document();
+                    gui.groups
+                        .text(document)
+                        .map(|text| (document.to_owned(), text.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    match gui
+        .groups
+        .tabs_mut(group)
+        .map(|tabs| tabs.close_others(index))
+    {
+        Some(Ok(closed)) => {
+            for (document, text) in closed_documents {
+                remember_closed_document(gui, &document, text);
+            }
+            gui.sync_editors();
+            tr_args("ui.status.others-closed", &[("count", &closed.to_string())])
+        }
+        Some(Err(reason)) => reason,
+        None => tr("ui.status.nothing-to-close"),
+    }
+}
+
+/// Remembers a document a command closed, with the text it had.
+///
+/// The stack is bounded and deduplicated: reopening is a convenience, not a session log, and a
+/// document closed twice has only its latest text.
+fn remember_closed_document(gui: &mut Gui, document: &str, text: String) {
+    const LIMIT: usize = 16;
+    gui.closed_documents.retain(|(other, _)| other != document);
+    gui.closed_documents.push((document.to_owned(), text));
+    if gui.closed_documents.len() > LIMIT {
+        gui.closed_documents.remove(0);
+    }
+}
+
+/// Reopens the most recently closed document, with its text.
+fn reopen_closed_document(gui: &mut Gui) -> String {
+    let Some((document, text)) = gui.closed_documents.pop() else {
+        return tr("ui.error.nothing-to-reopen");
+    };
+    gui.groups.pin(document.clone());
+    if let Err(reason) = gui.groups.type_into(text) {
+        return reason;
+    }
+    gui.sync_editors();
+    tr_args("ui.status.reopened", &[("document", &document)])
+}
+
+/// Moves the focused group's active tab to the next editor group.
+///
+/// Groups are ordered, and the last wraps to the first: with one group there is nowhere to move,
+/// which is refused by name rather than silently reordering the strip.
+fn move_tab_to_next_group(gui: &mut Gui) -> String {
+    let from = gui.groups.focus();
+    let Some(index) = gui.groups.tabs(from).and_then(|tabs| tabs.active_index()) else {
+        return tr("ui.status.nothing-to-move");
+    };
+    let groups = gui.groups.group_ids();
+    let Some(position) = groups.iter().position(|group| *group == from) else {
+        return tr("ui.error.no-other-group");
+    };
+    let to = groups[(position + 1) % groups.len()];
+    if to == from {
+        return tr("ui.error.no-other-group");
+    }
+    let to_index = gui.groups.tabs(to).map_or(0, |tabs| tabs.len());
+    match gui.groups.move_tab(from, index, to, to_index) {
+        Ok(()) => {
+            gui.sync_editors();
+            tr("ui.status.tab-moved")
+        }
+        Err(reason) => tr_args("ui.error.tab-not-moved", &[("reason", &reason)]),
+    }
+}
+
+/// Whether a document name resolves inside the open project root.
+fn document_is_under_root(root: &crate::host::paths::ProjectRoot, document: &str) -> bool {
+    if Path::new(document).is_absolute() {
+        Path::new(document).starts_with(root.as_path())
+    } else {
+        root.resolve(document).is_ok()
+    }
+}
+
+/// Closes the open project, refusing while any of its documents is dirty.
+///
+/// Closing a project is not a way to discard edits silently: a dirty buffer under the root is
+/// named by count and the project stays open. With no dirty buffer, every tab under the root is
+/// closed, the project is cleared, and the project panels say there is none.
+fn close_project(gui: &mut Gui) -> String {
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let root = session.root().clone();
+    let mut dirty = 0usize;
+    let mut documents = BTreeSet::new();
+    for group in gui.groups.group_ids() {
+        if let Some(tabs) = gui.groups.tabs(group) {
+            for tab in tabs.tabs() {
+                if !document_is_under_root(&root, tab.document()) {
+                    continue;
+                }
+                documents.insert(tab.document().to_owned());
+                if tab.is_dirty() {
+                    dirty += 1;
+                }
+            }
+        }
+    }
+    if dirty > 0 {
+        return tr_args(
+            "ui.error.project-close-dirty",
+            &[("count", &dirty.to_string())],
+        );
+    }
+    for group in gui.groups.group_ids() {
+        if let Some(tabs) = gui.groups.tabs_mut(group) {
+            for document in &documents {
+                tabs.close_document(document);
+            }
+        }
+    }
+    gui.project = None;
+    gui.saved_texts
+        .retain(|document, _| !document_is_under_root(&root, document));
+    gui.sync_editors();
+    refresh_project(gui);
+    refresh_dependencies(gui);
+    refresh_components(gui);
+    tr("ui.status.project-closed")
+}
+
+/// Copies the selected design node's stable id to the clipboard.
+fn copy_node_id(gui: &mut Gui) -> String {
+    use crate::host::clipboard::{ClipboardHost, ClipboardWrite, NativeClipboard};
+
+    let Some(node) = gui.scene.primary() else {
+        return tr("ui.error.no-node-selected");
+    };
+    let id = node.get().to_string();
+    match NativeClipboard::new().write_text(&id) {
+        ClipboardWrite::Written => tr_args("ui.status.node-id-copied", &[("id", &id)]),
+        ClipboardWrite::Refused { reason } => {
+            warn_failure("the node id could not be copied", &reason);
+            tr_args("ui.error.copy-refused", &[("reason", &reason)])
+        }
+    }
+}
+
+/// Runs one operation on the focused editor's control, answering `None` when there is no editor.
+fn edit_with_editor<T>(gui: &Gui, action: impl FnOnce(&mut CodeEditor) -> T) -> Option<T> {
+    let group = gui.groups.focus();
+    let editor = gui
+        .groups
+        .group_ids()
+        .iter()
+        .position(|id| *id == group)
+        .and_then(|position| gui.group_views.get(position))
+        .map(|view| view.editor)?;
+    with_widget_mut(editor, |widget| {
+        let editor = (widget as &mut dyn Any).downcast_mut::<CodeEditor>()?;
+        Some(action(editor))
+    })
+    .flatten()
+}
+
+/// Applies the layout file this session was started with, without restarting.
+///
+/// A file that does not check out changes nothing: `Layout::from_json` and `Layout::apply` are the
+/// same pair the startup path uses, so a bad layout is reported rather than half-applied.
+fn load_layout(gui: &mut Gui) -> String {
+    let Some(path) = gui.layout_path.clone() else {
+        return tr("ui.status.no-layout-path");
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            return tr_args(
+                "ui.status.layout-not-loaded",
+                &[("reason", &error.to_string())],
+            );
+        }
+    };
+    let layout = match Layout::from_json(&text) {
+        Ok(layout) => layout,
+        Err(error) => {
+            return tr_args(
+                "ui.status.layout-not-loaded",
+                &[("reason", &error.message())],
+            );
+        }
+    };
+    if let Err(error) = layout.apply(&mut gui.groups, &mut gui.panels) {
+        return tr_args(
+            "ui.status.layout-not-loaded",
+            &[("reason", &error.message())],
+        );
+    }
+    gui.sync_editors();
+    gui.sync_panels();
+    tr_args(
+        "ui.status.layout-loaded",
+        &[("path", &path.display().to_string())],
+    )
+}
+
+/// Locks or unlocks the layout.
+///
+/// Locking is enforced where a layout would change: save, load and reset answer with the lock
+/// message instead of writing over what the person pinned.
+fn toggle_layout_lock(gui: &mut Gui) -> String {
+    gui.layout_locked = !gui.layout_locked;
+    tr(if gui.layout_locked {
+        "ui.status.layout-locked"
+    } else {
+        "ui.status.layout-unlocked"
+    })
+}
+
+/// Hides every docked panel and the chrome, and puts back exactly what was shown on exit.
+fn toggle_zen(gui: &mut Gui) -> String {
+    if let Some(snapshot) = gui.zen.take() {
+        for id in snapshot.shown {
+            let _ = gui.panels.show(&id);
+        }
+        gui.show_toolbar = snapshot.toolbar;
+        gui.show_status = snapshot.status;
+    } else {
+        let shown: Vec<String> = gui.panels.layout().shown().to_vec();
+        for id in &shown {
+            let _ = gui.panels.hide(id);
+        }
+        gui.zen = Some(ZenSnapshot {
+            shown,
+            toolbar: gui.show_toolbar,
+            status: gui.show_status,
+        });
+        gui.show_toolbar = false;
+        gui.show_status = false;
+    }
+    if gui.toolbar != 0 {
+        rust_widgets::set_widget_visible(gui.toolbar, gui.show_toolbar);
+    }
+    if gui.status != 0 {
+        rust_widgets::set_widget_visible(gui.status, gui.show_status);
+    }
+    gui.sync_panels();
+    gui.sync_editors();
+    tr(if gui.zen.is_some() {
+        "ui.status.zen-on"
+    } else {
+        "ui.status.zen-off"
+    })
+}
+
+/// Asks the platform window to enter or leave full screen.
+fn toggle_fullscreen(gui: &mut Gui) -> String {
+    gui.fullscreen = !gui.fullscreen;
+    if gui.window != 0 {
+        WindowHandle::from_raw(gui.window).set_fullscreen(gui.fullscreen);
+    }
+    tr_args(
+        if gui.fullscreen {
+            "ui.status.shown"
+        } else {
+            "ui.status.hidden"
+        },
+        &[("id", "fullscreen")],
+    )
+}
+
+/// Shows or hides one piece of the window chrome and re-flows the areas it used to occupy.
+///
+/// The widget's visibility alone would leave its row reserved, so the layout owns the flag too
+/// (`WorkbenchLayout::showing_toolbar`/`showing_status`); the two cannot disagree.
+fn toggle_chrome(gui: &mut Gui, toolbar: bool) {
+    let (widget, id, showing) = if toolbar {
+        (gui.toolbar, "toolbar", gui.show_toolbar)
+    } else {
+        (gui.status, "status-bar", gui.show_status)
+    };
+    let showing = !showing;
+    if toolbar {
+        gui.show_toolbar = showing;
+    } else {
+        gui.show_status = showing;
+    }
+    if widget != 0 {
+        rust_widgets::set_widget_visible(widget, showing);
+    }
+    gui.refresh_layout();
+    gui.message = tr_args(
+        if showing {
+            "ui.status.shown"
+        } else {
+            "ui.status.hidden"
+        },
+        &[("id", id)],
+    );
+}
+
+/// Reports the open project's format, identity, members and references into Messages.
+///
+/// The questions are the same ones `--project-check` prints; reading the session's own
+/// [`ProjectFile`] means the GUI and the CLI answer from one parse, not two.
+fn project_check(gui: &mut Gui) -> String {
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let file = session.file();
+    let mut rows = vec![
+        format!("project: {}", file.path().display()),
+        format!("root: {}", file.root().as_path().display()),
+        format!("format: {}", file.verdict().message()),
+    ];
+    match file.content() {
+        ProjectContent::Interpreted(document) => {
+            rows.push(format!(
+                "identity: {} ({})",
+                document.identity().name(),
+                document.identity().id()
+            ));
+            rows.push(format!(
+                "pages: {}, resources: {}, targets: {}, generated: {}, services: {}",
+                document.pages().len(),
+                document.resources().len(),
+                document.targets().len(),
+                document.generated().len(),
+                document.services().len()
+            ));
+            rows.push(format!(
+                "members this build keeps without reading: {}",
+                document.unknown_fields().len()
+            ));
+            rows.push(format!("references: {}", document.references().len()));
+        }
+        ProjectContent::Foreign(_) => {
+            rows.push(
+                "the project file is not in a format this build reads; nothing was guessed"
+                    .to_owned(),
+            );
+        }
+    }
+    let summary = rows.len().to_string();
+    for row in rows {
+        push_message(gui, row);
+    }
+    tr_args("ui.status.project-checked", &[("rows", &summary)])
+}
+
+/// Re-reads the project structure into the Project panel.
+fn project_rescan(gui: &mut Gui) -> String {
+    if gui.project.is_none() {
+        return tr("ui.project.none");
+    }
+    refresh_project(gui);
+    tr("ui.status.project-rescanned")
+}
+
+/// Reports the format version and the migration steps writing the project would take.
+fn project_migration(gui: &mut Gui) -> String {
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let file = session.file();
+    let verdict = file.verdict();
+    let mut rows = vec![format!("format: {}", verdict.message())];
+    match migration_path(verdict.version()) {
+        Ok(steps) if steps.is_empty() => {
+            rows.push("nothing to migrate: this is the version the build writes".to_owned());
+        }
+        Ok(steps) => {
+            for step in steps {
+                rows.push(format!("{} -> {}: {}", step.from(), step.to(), step.what()));
+            }
+        }
+        Err(version) => {
+            rows.push(format!(
+                "no migration step out of {version}; this build will not write it"
+            ));
+        }
+    }
+    for row in rows {
+        push_message(gui, row);
+    }
+    tr("ui.status.migration-previewed")
+}
+
+/// Lists every project reference with its verdict, without touching any file.
+fn project_check_references(gui: &mut Gui) -> String {
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let file = session.file();
+    let rendered: Vec<String> = {
+        let ProjectContent::Interpreted(document) = file.content() else {
+            return tr("ui.status.project-not-readable");
+        };
+        document
+            .references()
+            .into_iter()
+            .map(|reference| reference.render())
+            .collect()
+    };
+    let count = rendered.len().to_string();
+    for row in rendered {
+        push_message(gui, row);
+    }
+    tr_args("ui.status.references-checked", &[("count", &count)])
+}
+
+/// The declared resources no page document references.
+///
+/// A resource is referenced when any page's `Resource` reference names it, either as written or as
+/// resolved (the two spellings one path can have). An unreadable page refuses the whole answer:
+/// guessing that it references nothing would turn a read error into a deleted declaration.
+fn unused_resources(session: &ProjectSession) -> Result<Vec<String>, String> {
+    use crate::project::record::format::ReferenceKind;
+    use crate::project::record::page::PageDocument;
+
+    let file = session.file();
+    let ProjectContent::Interpreted(document) = file.content() else {
+        return Err(tr("ui.status.project-not-readable"));
+    };
+    let root = file.root();
+    let mut referenced: BTreeSet<String> = BTreeSet::new();
+    for page in document.pages() {
+        let page_document =
+            PageDocument::read(root, page.document().written()).map_err(|error| error.message())?;
+        for reference in page_document.references() {
+            if reference.kind() == ReferenceKind::Resource {
+                referenced.insert(reference.written().to_owned());
+                if let Some(path) = reference.resolved() {
+                    referenced.insert(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    Ok(document
+        .resources()
+        .iter()
+        .map(|resource| resource.path().written().to_owned())
+        .filter(|written| {
+            if referenced.contains(written) {
+                return false;
+            }
+            root.resolve(written)
+                .ok()
+                .map(|resolved| resolved.to_string_lossy().into_owned())
+                .is_none_or(|resolved| !referenced.contains(&resolved))
+        })
+        .collect())
+}
+
+/// Lists unreferenced resources and asks for the confirmation that removes their declarations.
+fn start_resource_cleanup(gui: &mut Gui) -> String {
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let candidates = match unused_resources(session) {
+        Ok(candidates) => candidates,
+        Err(reason) => {
+            return tr_args("ui.error.resources-clean-refused", &[("reason", &reason)]);
+        }
+    };
+    if candidates.is_empty() {
+        return tr("ui.status.resources-clean-none");
+    }
+    let count = candidates.len();
+    for candidate in &candidates {
+        push_message(gui, candidate.clone());
+    }
+    gui.pending_resource_cleanup = candidates;
+    open_prompt(
+        gui,
+        PromptKind::CleanResources,
+        "ui.dialog.clean-resources-title",
+        "ui.dialog.clean-resources-label",
+        false,
+    );
+    tr_args(
+        "ui.status.resources-clean-candidates",
+        &[("count", &count.to_string())],
+    )
+}
+
+/// Applies a resource-cleanup answer: only the exact word `delete` removes declarations.
+fn apply_clean_resources(gui: &mut Gui, answer: &str) {
+    let candidates = std::mem::take(&mut gui.pending_resource_cleanup);
+    if candidates.is_empty() || !answer.trim().eq_ignore_ascii_case("delete") {
+        gui.message = tr("ui.status.resources-clean-cancelled");
+        update_status(gui);
+        return;
+    }
+    let outcome = {
+        let Some(session) = gui.project.as_ref() else {
+            gui.message = tr("ui.project.none");
+            update_status(gui);
+            return;
+        };
+        if !session.may_write(&gui.permissions) {
+            gui.message = tr("ui.error.project-not-trusted");
+            update_status(gui);
+            return;
+        }
+        let file = session.file();
+        let ProjectContent::Interpreted(document) = file.content() else {
+            gui.message = tr("ui.status.project-not-readable");
+            update_status(gui);
+            return;
+        };
+        let mut updated = document.clone();
+        for written in &candidates {
+            let (next, _removed) = updated.without_resource(written);
+            updated = next;
+        }
+        file.write_document(&updated)
+            .map(|_| file.path().to_path_buf())
+            .map_err(|error| error.message())
+    };
+    match outcome {
+        Ok(path) => match ProjectSession::open(&path) {
+            Ok(session) => {
+                gui.project = Some(session);
+                refresh_project(gui);
+                refresh_dependencies(gui);
+                gui.message = tr_args(
+                    "ui.status.resources-cleaned",
+                    &[("count", &candidates.len().to_string())],
+                );
+                update_status(gui);
+            }
+            Err(error) => {
+                gui.message = tr_args(
+                    "ui.error.resources-clean-refused",
+                    &[("reason", &error.message())],
+                );
+                update_status(gui);
+            }
+        },
+        Err(reason) => {
+            gui.message = tr_args("ui.error.resources-clean-refused", &[("reason", &reason)]);
+            update_status(gui);
+        }
+    }
+}
+
+/// Runs one debug command, the same call the panel's four buttons make.
+fn debug_command(gui: &mut Gui, command: DebugCommand) -> String {
+    let accepted = match command {
+        DebugCommand::Start => {
+            // The debuggee is generated from the same scene the tree and canvas show, so the source
+            // map entries name real nodes. The selected node is the breakpoint anchor; with no
+            // selection the second row (the demo panel) is used.
+            let nodes: Vec<(NodeId, String)> = gui
+                .scene
+                .row_nodes()
+                .into_iter()
+                .filter_map(|node| gui.scene.name(node).map(|name| (node, name.to_owned())))
+                .collect();
+            let break_node = gui
+                .scene
+                .primary()
+                .or_else(|| nodes.get(1).map(|(node, _)| *node))
+                .or_else(|| nodes.first().map(|(node, _)| *node))
+                .unwrap_or_else(|| NodeId::from_raw(0));
+            gui.debug.start(nodes, break_node)
+        }
+        other => gui.debug.send(other),
+    };
+    if command == DebugCommand::Start
+        && let Some(state) = gui.self_weak.upgrade()
+    {
+        schedule_debug_poll(&state);
+    }
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench-debug",
+        &format!("debug {} requested (accepted {accepted})", command.name()),
+    );
+    tr_args(
+        if accepted {
+            "ui.status.debug-ran"
+        } else {
+            "ui.status.debug-unavailable"
+        },
+        &[("command", command.name())],
+    )
+}
+
+/// Switches the workbench's mode; nothing else about the session changes.
+fn view_mode(gui: &mut Gui, mode: Mode) -> String {
+    gui.workbench.set_mode(mode);
+    update_status(gui);
+    tr_args("ui.status.mode-changed", &[("mode", mode.name())])
+}
+
+/// Expands the editor selection to the next structural unit.
+///
+/// The editor's own `expand_selection` is progressive within one structural kind, so the command
+/// tries the kinds in the order a person widens a selection: word, line, brackets, block. The
+/// previous selection is remembered so [`edit_select_shrink`] can walk back.
+fn edit_select_expand(gui: &mut Gui) -> String {
+    use rust_widgets::widget::special_widgets::code_editor::StructuralKind;
+
+    let Some(document) = active_document(gui).map(|(document, _)| document) else {
+        return tr("ui.status.no-editor");
+    };
+    prepare_selection_history(gui, &document);
+    let Some(bounds) = edit_with_editor(gui, |editor| {
+        let (start, end) = editor.selection_bounds();
+        ((start.line, start.column), (end.line, end.column))
+    }) else {
+        return tr("ui.source.no-editor");
+    };
+    gui.selection_history.push(bounds);
+    let expanded = edit_with_editor(gui, |editor| {
+        for kind in [
+            StructuralKind::Word,
+            StructuralKind::Line,
+            StructuralKind::Bracket,
+            StructuralKind::Block,
+        ] {
+            if editor.expand_selection(kind) {
+                return true;
+            }
+        }
+        false
+    });
+    if expanded == Some(true) {
+        tr("ui.status.selection-expanded")
+    } else {
+        // Nothing contains the current selection: do not leave a history entry that would
+        // shrink to the same place.
+        gui.selection_history.pop();
+        tr("ui.status.nothing-to-expand")
+    }
+}
+
+/// Restores the selection `edit.select-expand` had before its last step.
+fn edit_select_shrink(gui: &mut Gui) -> String {
+    use rust_widgets::widget::special_widgets::code_editor::TextPosition;
+
+    let Some(document) = active_document(gui).map(|(document, _)| document) else {
+        return tr("ui.status.no-editor");
+    };
+    prepare_selection_history(gui, &document);
+    let Some((anchor, head)) = gui.selection_history.pop() else {
+        return tr("ui.status.nothing-to-shrink");
+    };
+    let restored = edit_with_editor(gui, move |editor| {
+        editor.set_caret(TextPosition::new(anchor.0, anchor.1), false);
+        editor.set_caret(TextPosition::new(head.0, head.1), true);
+        true
+    });
+    match restored {
+        Some(true) => tr("ui.status.selection-shrunk"),
+        _ => {
+            gui.selection_history.push((anchor, head));
+            tr("ui.source.no-editor")
+        }
+    }
+}
+
+/// Drops a selection history recorded against another document.
+fn prepare_selection_history(gui: &mut Gui, document: &str) {
+    if gui.selection_history_document != document {
+        gui.selection_history.clear();
+        gui.selection_history_document = document.to_owned();
+    }
+}
+
+/// Toggles inlay-hint painting on the focused editor.
+///
+/// The control owns the flag (`config.show_inlay_hints`), so the command only flips it and reads
+/// the result back; the hints themselves are not discarded.
+fn code_inlay_hints(gui: &mut Gui) -> String {
+    let enabled = edit_with_editor(gui, |editor| {
+        let next = !editor.inlay_hints_enabled();
+        editor.set_inlay_hints_enabled(next);
+        next
+    });
+    match enabled {
+        Some(true) => tr("ui.status.inlay-hints-shown"),
+        Some(false) => tr("ui.status.inlay-hints-hidden"),
+        None => tr("ui.source.no-editor"),
+    }
+}
+
+/// Toggles a bookmark on the caret line of the focused editor.
+fn code_bookmark_toggle(gui: &mut Gui) -> String {
+    let bookmarked = edit_with_editor(gui, |editor| {
+        let line = editor.cursor().0;
+        editor.toggle_bookmark(line)
+    });
+    match bookmarked {
+        Some(true) => tr("ui.status.bookmark-added"),
+        Some(false) => tr("ui.status.bookmark-removed"),
+        None => tr("ui.source.no-editor"),
+    }
+}
+
+/// Folds or unfolds the editor's blocks (`code.structure.*`).
+fn code_fold(gui: &mut Gui, command: &str) -> String {
+    match command {
+        "fold" => {
+            let folded = edit_with_editor(gui, |editor| {
+                let line = editor.cursor().0;
+                editor.fold_block_at(line)
+            });
+            match folded {
+                Some(true) => tr("ui.status.folded"),
+                Some(false) => tr("ui.status.nothing-to-fold"),
+                None => tr("ui.source.no-editor"),
+            }
+        }
+        "unfold" => {
+            let unfolded = edit_with_editor(gui, |editor| {
+                let line = editor.cursor().0;
+                let start = editor
+                    .fold_regions()
+                    .into_iter()
+                    .find(|region| {
+                        region.folded && region.start_line <= line && line <= region.end_line
+                    })
+                    .map(|region| region.start_line);
+                match start {
+                    Some(start) => editor.unfold(start),
+                    None => editor.unfold(line),
+                }
+            });
+            match unfolded {
+                Some(true) => tr("ui.status.unfolded"),
+                Some(false) => tr("ui.status.nothing-to-unfold"),
+                None => tr("ui.source.no-editor"),
+            }
+        }
+        "fold-all" => {
+            let count = edit_with_editor(gui, |editor| editor.fold_all()).unwrap_or(0);
+            tr_args("ui.status.folded-many", &[("count", &count.to_string())])
+        }
+        "unfold-all" => {
+            let count = edit_with_editor(gui, |editor| {
+                let folded = editor
+                    .fold_regions()
+                    .iter()
+                    .filter(|region| region.folded)
+                    .count();
+                editor.unfold_all();
+                folded
+            })
+            .unwrap_or(0);
+            tr_args("ui.status.unfolded-many", &[("count", &count.to_string())])
+        }
+        _ => tr("ui.status.command-no-handler"),
+    }
+}
+
+/// Shows the symbols containing the caret, joined the way a breadcrumb bar reads.
+fn code_breadcrumbs(gui: &mut Gui) -> String {
+    if !gui.source.is_configured() {
+        return tr("ui.error.navigation-no-server");
+    }
+    let Some((line, column)) = edit_with_editor(gui, |editor| editor.cursor()) else {
+        return tr("ui.status.no-editor");
+    };
+    if let Err(reason) = refresh_active_source(gui) {
+        return tr_args("ui.error.navigation-failed", &[("reason", &reason)]);
+    }
+    let Some(text) = gui.source.document_text().map(str::to_owned) else {
+        return tr("ui.error.navigation-not-found");
+    };
+    let Some(offset) = crate::app::run::workbench_outline::offset_of(&text, line, column) else {
+        return tr("ui.error.navigation-not-found");
+    };
+    let crumbs = gui.source.breadcrumbs(offset);
+    if crumbs.is_empty() {
+        return tr("ui.error.navigation-not-found");
+    }
+    let path = crumbs.join(" > ");
+    push_message(gui, path.clone());
+    tr_args("ui.status.breadcrumbs", &[("path", &path)])
+}
+
+/// Collapses the editor selection to the caret, keeping the caret where it is.
+fn edit_select_clear(gui: &mut Gui) -> String {
+    let cleared = edit_with_editor(gui, |editor| {
+        let (line, column) = editor.cursor();
+        editor.set_cursor(line, column, false);
+        true
+    });
+    if cleared.is_none() {
+        return tr("ui.status.no-editor");
+    }
+    tr("ui.status.selection-cleared")
+}
+
+/// Applies one of the editor's line operations and writes the text back into the model.
+///
+/// The operation itself is the control's own (`toggle_line_comment`, `indent_selection`,
+/// `move_line`, ...), so the host has no second implementation of indentation or line movement.
+fn edit_text_operation(gui: &mut Gui, operation: &str) -> String {
+    let changed = edit_with_editor(gui, |editor| {
+        match operation {
+            "comment" => editor.toggle_line_comment(),
+            "indent" => editor.indent_selection(),
+            "outdent" => editor.outdent_selection(),
+            "move-up" => editor.move_line(-1),
+            "move-down" => editor.move_line(1),
+            "duplicate" => editor.duplicate_line(),
+            "delete" => editor.delete_line(),
+            "join" => editor.join_lines(),
+            _ => editor.sort_lines(),
+        }
+        true
+    });
+    if changed.is_none() {
+        return tr("ui.status.no-editor");
+    }
+    if let Some(text) = edit_with_editor(gui, |editor| editor.text())
+        && let Err(reason) = gui.groups.type_into(text)
+    {
+        return reason;
+    }
+    gui.sync_editors();
+    let id = match operation {
+        "comment" => "edit.text-comment",
+        "indent" => "edit.text-indent",
+        "outdent" => "edit.text-outdent",
+        "move-up" => "edit.text-move-up",
+        "move-down" => "edit.text-move-down",
+        "duplicate" => "edit.text-duplicate",
+        "delete" => "edit.text-delete",
+        "join" => "edit.text-join",
+        _ => "edit.text-sort",
+    };
+    let title = tr(&format!("cmd.{id}.title"));
+    tr_args("ui.status.text-changed", &[("command", &title)])
+}
+
+/// Extends the selection or adds a cursor with the editor's own multi-cursor state.
+fn edit_select_more(gui: &mut Gui, operation: &str) -> String {
+    let outcome = edit_with_editor(gui, |editor| match operation {
+        "next-occurrence" => editor.select_next_occurrence(),
+        "cursor-above" => editor.add_cursor_above(),
+        _ => editor.add_cursor_below(),
+    });
+    match outcome {
+        None => tr("ui.status.no-editor"),
+        Some(true) => tr("ui.status.cursor-added"),
+        Some(false) => tr("ui.status.no-cursor-line"),
+    }
+}
+
+/// Adds a cursor at every occurrence of the selected text, the editor's own multi-cursor.
+fn edit_select_occurrences(gui: &mut Gui) -> String {
+    let count = edit_with_editor(gui, |editor| editor.select_all_occurrences());
+    match count {
+        None => tr("ui.status.no-editor"),
+        Some(0) => tr("ui.status.nothing-selected"),
+        Some(count) => tr_args(
+            "ui.status.occurrences-selected",
+            &[("count", &count.to_string())],
+        ),
+    }
+}
+
+/// Searches for the text the focused editor has selected.
+fn edit_find_selection(gui: &mut Gui) -> String {
+    let opened = edit_with_editor(gui, |editor| {
+        let Some(selected) = editor.selected_text() else {
+            return false;
+        };
+        if selected.is_empty() {
+            return false;
+        }
+        editor.set_search_query(&selected);
+        editor.open_find(false);
+        true
+    });
+    match opened {
+        None => tr("ui.status.no-editor"),
+        Some(false) => tr("ui.status.nothing-selected"),
+        Some(true) => tr("ui.status.find-open"),
+    }
+}
+
+/// Opens the editor's find bar, or moves to the next/previous match.
+///
+/// The find state and the matches are the control's own: the host only asks it to open or to step,
+/// so a second search model here cannot disagree with the one the bar shows.
+fn edit_search(gui: &mut Gui, operation: &str) -> String {
+    let stepped = edit_with_editor(gui, |editor| match operation {
+        "find" => {
+            editor.open_find(false);
+            None
+        }
+        "replace" => {
+            editor.open_find(true);
+            None
+        }
+        "next" => Some(editor.find_next(false)),
+        _ => Some(editor.find_next(true)),
+    });
+    match stepped {
+        None => tr("ui.status.no-editor"),
+        Some(None) => tr(match operation {
+            "replace" => "ui.status.replace-open",
+            _ => "ui.status.find-open",
+        }),
+        Some(Some(true)) => tr("ui.status.found"),
+        Some(Some(false)) => tr("ui.status.no-match"),
+    }
+}
+
+/// Cuts, copies, pastes or selects everything in the focused editor.
+///
+/// The clipboard is the editor control's own (it owns the system clipboard call); a cut or a paste
+/// changes its text, so the text is written back into the model the same way `edit_history` does,
+/// and a later `sync_editors` cannot silently revert it.
+fn edit_clipboard(gui: &mut Gui, operation: &str) -> String {
+    let done = edit_with_editor(gui, |editor| match operation {
+        "cut" => editor.cut(),
+        "copy" => editor.copy(),
+        "paste" => editor.paste(),
+        "select-all" => {
+            editor.select_all();
+            true
+        }
+        _ => false,
+    });
+    match done {
+        None => tr("ui.status.no-editor"),
+        Some(false) => tr(match operation {
+            "paste" => "ui.status.clipboard-empty",
+            _ => "ui.status.nothing-selected",
+        }),
+        Some(true) => {
+            if operation == "cut" || operation == "paste" {
+                if let Some(text) = edit_with_editor(gui, |editor| editor.text())
+                    && let Err(reason) = gui.groups.type_into(text)
+                {
+                    return reason;
+                }
+                gui.sync_editors();
+            }
+            tr(match operation {
+                "cut" => "ui.status.cut",
+                "copy" => "ui.status.copied",
+                "paste" => "ui.status.pasted",
+                _ => "ui.status.selected-all",
+            })
+        }
+    }
+}
+
+/// Takes back (or puts back) the focused editor's newest change.
+///
+/// The undo history is the editor control's own — the library's `CodeEditor` owns it, and a second
+/// history here would be a second answer to "what was the last change". The text the control ends
+/// with is written back into the model, so a later `sync_editors` cannot silently revert the undo.
+fn edit_history(gui: &mut Gui, undo: bool) -> String {
+    let group = gui.groups.focus();
+    let Some(editor) = gui
+        .groups
+        .group_ids()
+        .iter()
+        .position(|id| *id == group)
+        .and_then(|position| gui.group_views.get(position))
+        .map(|view| view.editor)
+    else {
+        return tr("ui.status.no-editor");
+    };
+    let changed = with_widget_mut(editor, move |widget| {
+        let editor = (widget as &mut dyn Any).downcast_mut::<CodeEditor>()?;
+        Some(if undo { editor.undo() } else { editor.redo() })
+    });
+    match changed {
+        Some(Some(true)) => {}
+        Some(Some(false)) => {
+            return tr(if undo {
+                "ui.status.nothing-to-undo"
+            } else {
+                "ui.status.nothing-to-redo"
+            });
+        }
+        _ => return tr("ui.status.no-editor"),
+    }
+    let text = with_widget_mut(editor, |widget| {
+        let editor = (widget as &mut dyn Any).downcast_mut::<CodeEditor>()?;
+        Some(editor.text())
+    });
+    if let Some(Some(text)) = text
+        && let Err(reason) = gui.groups.type_into(text)
+    {
+        return reason;
+    }
+    gui.sync_editors();
+    tr(if undo {
+        "ui.status.undone"
+    } else {
+        "ui.status.redone"
+    })
+}
+
+/// How many command-history rows the window keeps.
+const COMMAND_HISTORY_LIMIT: usize = 200;
+
+/// Records one executed command, newest last.
+fn record_command(gui: &mut Gui, command: &str) {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    gui.command_history.push((at, command.to_owned()));
+    if gui.command_history.len() > COMMAND_HISTORY_LIMIT {
+        gui.command_history.remove(0);
+    }
+}
+
+/// One command-history row: the wall-clock time and the command id.
+fn history_row(at: u64, command: &str) -> String {
+    let seconds = (at / 1000) % 86_400;
+    format!(
+        "{:02}:{:02}:{:02} {command}",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60
+    )
+}
+
+/// Shows the commands this window executed, newest first.
+fn edit_history_view(gui: &mut Gui) -> String {
+    if gui.command_history.is_empty() {
+        return tr("ui.status.history-empty");
+    }
+    let rows: Vec<String> = gui
+        .command_history
+        .iter()
+        .rev()
+        .map(|(at, command)| history_row(*at, command))
+        .collect();
+    let count = rows.len();
+    for row in rows {
+        push_message(gui, row);
+    }
+    tr_args("ui.status.history-shown", &[("count", &count.to_string())])
+}
+
+/// Starts the Terminal panel's shell session and keeps its poller alive.
+fn terminal_start(gui: &mut Gui) -> String {
+    let root = gui
+        .project
+        .as_ref()
+        .map(|project| project.root().as_path().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let message = match gui.terminal.start(root) {
+        Ok(()) => tr("ui.status.terminal-started"),
+        Err(reason) => reason,
+    };
+    let rows = gui.terminal.rows();
+    if gui.terminal_list != 0 {
+        set_list_rows(gui.terminal_list, rows);
+    }
+    if let Some(state) = gui.self_weak.upgrade() {
+        schedule_terminal_poll(&state);
+    }
+    message
+}
+
+/// Asks the Terminal panel's shell session to stop.
+fn terminal_stop(gui: &mut Gui) -> String {
+    if gui.terminal.stop() {
+        tr("ui.status.stop-requested")
+    } else {
+        tr("ui.status.not-running")
+    }
+}
+
+/// Starts the Tests panel's run and keeps its poller alive.
+fn tests_run(gui: &mut Gui) -> String {
+    tests_start(gui, crate::app::quality::Selection::all())
+}
+
+/// Starts one test selection on the worker and schedules its poll.
+fn tests_start(gui: &mut Gui, selection: crate::app::quality::Selection) -> String {
+    let root = gui
+        .project
+        .as_ref()
+        .map(|project| project.root().as_path().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let started = gui.tests.start(root, selection);
+    refresh_tests(gui);
+    if started && let Some(state) = gui.self_weak.upgrade() {
+        schedule_tests_poll(&state);
+    }
+    tr(if started {
+        "ui.status.tests-started"
+    } else {
+        "ui.status.tests-busy"
+    })
+}
+
+/// The cargo test filter that names the module a source file belongs to.
+///
+/// A test's harness name is its module path (`app::run::workbench_gui::tests::…`), not its file
+/// path. `src/lib.rs`, `src/main.rs` and files outside `src/` have no distinguishing module path,
+/// so they are refused rather than run against a filter that would select the whole project.
+fn test_module_filter(document: &str) -> Option<String> {
+    let parts: Vec<&str> = document
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    let source = parts.iter().rposition(|part| *part == "src")?;
+    let file = *parts.last()?;
+    let stem = file.strip_suffix(".rs")?;
+    let mut module: Vec<&str> = parts[source + 1..parts.len() - 1].to_vec();
+    if !matches!(stem, "lib" | "main" | "mod") {
+        module.push(stem);
+    }
+    if module.is_empty() {
+        return None;
+    }
+    Some(module.join("::"))
+}
+
+/// Runs the tests whose module path belongs to the focused document.
+fn tests_run_current_file(gui: &mut Gui) -> String {
+    let Some((document, _)) = active_document(gui) else {
+        return tr("ui.status.no-editor");
+    };
+    let Some(filter) = test_module_filter(&document) else {
+        return tr("ui.error.tests-current-unavailable");
+    };
+    tests_start(gui, crate::app::quality::Selection::filter(filter))
+}
+
+/// Reruns exactly the tests that failed in the last finished run.
+fn tests_run_failed(gui: &mut Gui) -> String {
+    let failed = gui.tests.failed_names();
+    if failed.is_empty() {
+        return tr("ui.error.no-failed-tests");
+    }
+    tests_start(gui, crate::app::quality::Selection::exact(failed))
+}
+
+/// Asks the live test run to stop.
+fn tests_stop(gui: &mut Gui) -> String {
+    if gui.tests.stop() {
+        tr("ui.status.tests-stopped")
+    } else {
+        tr("ui.status.tests-not-running")
+    }
+}
+
+/// Starts the preview service and reports whether it reached ready.
+fn preview_start(gui: &mut Gui) -> String {
+    let outcome = with_preview(|preview| preview.start("workbench").and_then(|_| preview.ready()));
+    refresh_preview(gui);
+    match outcome {
+        Ok(()) => tr("ui.status.preview-started"),
+        Err(reason) => reason,
+    }
+}
+
+/// Stops the preview service.
+fn preview_stop(gui: &mut Gui) -> String {
+    let stopped = with_preview(|preview| {
+        let stopped = preview.stop();
+        let _ = preview.finish_stop();
+        stopped
+    });
+    refresh_preview(gui);
+    match stopped {
+        Ok(stopped) => format!("{}: {}", tr("ui.status.preview-stopped"), stopped.render()),
+        Err(reason) => reason,
+    }
+}
+
+/// Mounts or updates the preview from the startup page's library document.
+///
+/// The JSON is the one `--generate` consumes (`generate::read_document`), so the preview and the
+/// generated source interpret the same declaration; the first rebuild mounts, later ones update so
+/// the controls keep their ids.
+fn preview_rebuild(gui: &mut Gui) -> String {
+    use rust_widgets::widget::WidgetFactory;
+
+    let (relative, _page) = match read_startup_page(gui) {
+        Ok(found) => found,
+        Err(PageRead::NoProject) => return tr("ui.project.none"),
+        Err(PageRead::Unreadable) => {
+            return tr_args(
+                "ui.status.preview-rebuild-failed",
+                &[("reason", "the project file is unreadable")],
+            );
+        }
+        Err(PageRead::NoPage) => {
+            return tr_args(
+                "ui.status.preview-rebuild-failed",
+                &[("reason", "the project names no page")],
+            );
+        }
+        Err(PageRead::Failed(reason)) => {
+            return tr_args("ui.status.preview-rebuild-failed", &[("reason", &reason)]);
+        }
+    };
+    let Some(root) = gui
+        .project
+        .as_ref()
+        .map(|p| p.root().as_path().to_path_buf())
+    else {
+        return tr("ui.project.none");
+    };
+    let path = root.join(&relative);
+    let json = match crate::app::run::generate::read_document(&path.to_string_lossy()) {
+        Ok(json) => json,
+        Err(reason) => {
+            return tr_args("ui.status.preview-rebuild-failed", &[("reason", &reason)]);
+        }
+    };
+    let mounted = gui.preview_json;
+    let outcome: Result<String, String> = with_preview(|preview| {
+        let factory = WidgetFactory::new_with_defaults();
+        let make = crate::app::run::preview::control_creator(&factory);
+        if mounted {
+            preview.update_json(&json, &make).map(|report| {
+                tr_args(
+                    "ui.status.preview-updated",
+                    &[
+                        ("patches", &report.patches.to_string()),
+                        ("updates", &report.updates.to_string()),
+                    ],
+                )
+            })
+        } else {
+            preview.mount_json(&json, &make).map(|report| {
+                tr_args(
+                    "ui.status.preview-mounted",
+                    &[
+                        ("widgets", &report.widgets_created.to_string()),
+                        ("issues", &report.issues.to_string()),
+                    ],
+                )
+            })
+        }
+    });
+    match outcome {
+        Ok(message) => {
+            gui.preview_json = true;
+            refresh_preview(gui);
+            message
+        }
+        Err(reason) => tr_args("ui.status.preview-rebuild-failed", &[("reason", &reason)]),
+    }
+}
+
+/// Re-reads the repository and refreshes the Version-control panel.
+fn vcs_refresh(gui: &mut Gui) -> String {
+    refresh_vcs(gui);
+    tr("ui.status.vcs-refreshed")
+}
+
+/// Clears the Application-output panel, the same call its context menu makes.
+fn run_panel_clear(gui: &mut Gui) -> String {
+    let message = if gui.run.clear() {
+        tr("ui.status.output-cleared")
+    } else {
+        tr("ui.status.clear-running")
+    };
+    refresh_run(gui);
+    message
+}
+
+/// Copies the Application-output text, the same call its context menu makes.
+fn run_panel_copy(gui: &mut Gui) -> String {
+    use crate::host::clipboard::{ClipboardHost, ClipboardWrite, NativeClipboard};
+
+    let text = gui.run.text();
+    match NativeClipboard::new().write_text(&text) {
+        ClipboardWrite::Written => tr("ui.status.output-copied"),
+        ClipboardWrite::Refused { reason } => {
+            warn_failure("the run output could not be copied", &reason);
+            tr_args("ui.error.copy-refused", &[("reason", &reason)])
+        }
+    }
+}
+
+/// Asks the running build to stop, the same call the Build panel's menu makes.
+fn build_cancel(gui: &mut Gui) -> String {
+    let result = {
+        let Gui { tasks, build, .. } = &mut *gui;
+        build.cancel(tasks.executor())
+    };
+    match result {
+        crate::host::tasks::CancelResult::Requested => tr("ui.status.build-cancelling"),
+        other => format!("cancel: {other:?}"),
+    }
+}
+
+/// Copies the open project's root path, the one fact a path command can name without a selection.
+fn copy_project_path(gui: &mut Gui) -> String {
+    use crate::host::clipboard::{ClipboardHost, ClipboardWrite, NativeClipboard};
+
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let path = session.root().as_path().to_string_lossy().into_owned();
+    match NativeClipboard::new().write_text(&path) {
+        ClipboardWrite::Written => tr_args("ui.status.path-copied", &[("path", &path)]),
+        ClipboardWrite::Refused { reason } => {
+            warn_failure("the project path could not be copied", &reason);
+            tr_args("ui.error.copy-refused", &[("reason", &reason)])
+        }
+    }
+}
+
+/// Records a person's decision to trust the open project for this session.
+///
+/// Trust is what makes a write possible; it is never granted by opening a directory. The command
+/// is the consent surface, so choosing it is the decision the permission record stores.
+fn project_trust(gui: &mut Gui) -> String {
+    use crate::project::lifecycle::session::TrustDecision;
+
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let outcome = session.decide(&gui.permissions, TrustDecision::Trust);
+    if outcome.trusted() {
+        tr("ui.status.project-trusted")
+    } else {
+        tr_args(
+            "ui.error.project-trust-refused",
+            &[("reason", outcome.message())],
+        )
+    }
+}
+
+/// Saves the focused document back to the file it was opened from.
+fn file_save(gui: &mut Gui) -> String {
+    let Some((document, text)) = active_document(gui) else {
+        return tr("ui.status.no-editor");
+    };
+    match save_document(gui, &document, &text) {
+        Ok(path) => tr_args("ui.status.saved", &[("path", &path)]),
+        Err(reason) => tr_args("ui.error.not-saved", &[("reason", &reason)]),
+    }
+}
+
+/// Saves every open document that has a disk baseline.
+fn file_save_all(gui: &mut Gui) -> String {
+    let documents: Vec<(String, String)> = gui
+        .groups
+        .documents()
+        .into_iter()
+        .filter(|document| gui.saved_texts.contains_key(*document))
+        .filter_map(|document| {
+            gui.groups
+                .text(document)
+                .map(|text| (document.to_owned(), text.to_owned()))
+        })
+        .collect();
+    let mut saved = 0usize;
+    let mut failures = Vec::new();
+    for (document, text) in documents {
+        match save_document(gui, &document, &text) {
+            Ok(_) => saved += 1,
+            Err(reason) => failures.push(format!("{document}: {reason}")),
+        }
+    }
+    if failures.is_empty() {
+        tr_args("ui.status.saved-all", &[("count", &saved.to_string())])
+    } else {
+        tr_args("ui.error.save-failed", &[("reason", &failures.join("; "))])
+    }
+}
+
+/// Writes one document back to disk after checking trust, scope and external changes.
+///
+/// The baseline is the text read when the document was opened (or the text last saved). A disk
+/// that no longer matches it is refused rather than overwritten: another program's edit is not
+/// this window's to discard. The write itself is the same atomic replace the project writer uses.
+fn save_document(gui: &mut Gui, document: &str, text: &str) -> Result<String, String> {
+    let Some(session) = gui.project.as_ref() else {
+        return Err(tr("ui.project.none"));
+    };
+    if !session.may_write(&gui.permissions) {
+        return Err(tr("ui.error.project-not-trusted"));
+    }
+    let root = session.root();
+    let path = if Path::new(document).is_absolute() {
+        PathBuf::from(document)
+    } else {
+        root.resolve(document).map_err(|error| error.message())?
+    };
+    let relative = path
+        .strip_prefix(root.as_path())
+        .map_err(|_| tr("ui.error.save-outside-root"))?
+        .to_string_lossy()
+        .into_owned();
+    let Some(baseline) = gui.saved_texts.get(document) else {
+        return Err(tr("ui.error.save-no-baseline"));
+    };
+    let disk = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    if &disk != baseline {
+        return Err(tr("ui.error.save-conflict"));
+    }
+    crate::project::record::json::write_atomically(&path, text)
+        .map_err(|error| error.to_string())?;
+    gui.saved_texts.insert(document.to_owned(), text.to_owned());
+    for group in gui.groups.group_ids() {
+        if let Some(tabs) = gui.groups.tabs_mut(group) {
+            tabs.mark_dirty(document, false);
+        }
+    }
+    Ok(relative)
+}
+
+/// The project file a new name may be written to, after trust and root checks.
+fn save_target(gui: &Gui, requested: &str) -> Result<(PathBuf, String), String> {
+    let Some(session) = gui.project.as_ref() else {
+        return Err(tr("ui.project.none"));
+    };
+    if !session.may_write(&gui.permissions) {
+        return Err(tr("ui.error.project-not-trusted"));
+    }
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return Err(tr("ui.error.save-target-empty"));
+    }
+    let root = session.root();
+    let path = root
+        .resolve_for_creation(requested)
+        .map_err(|error| error.message())?;
+    let relative = path
+        .strip_prefix(root.as_path())
+        .map_err(|_| tr("ui.error.save-outside-root"))?
+        .to_string_lossy()
+        .into_owned();
+    Ok((path, relative))
+}
+
+/// Writes the focused document under a new name and continues there.
+fn apply_save_as(gui: &mut Gui, requested: &str) {
+    let Some((document, text)) = active_document(gui) else {
+        gui.message = tr("ui.status.no-editor");
+        update_status(gui);
+        return;
+    };
+    let (path, relative) = match save_target(gui, requested) {
+        Ok(found) => found,
+        Err(reason) => {
+            gui.message = tr_args("ui.error.not-saved", &[("reason", &reason)]);
+            update_status(gui);
+            return;
+        }
+    };
+    if path.exists() {
+        gui.message = tr_args(
+            "ui.error.not-saved",
+            &[("reason", &tr("ui.error.save-target-exists"))],
+        );
+        update_status(gui);
+        return;
+    }
+    if let Err(error) = crate::project::record::json::write_atomically(&path, &text) {
+        gui.message = tr_args("ui.error.not-saved", &[("reason", &error.to_string())]);
+        update_status(gui);
+        return;
+    }
+    remember_saved_text(gui, &relative, &text);
+    // Save As changes the document's identity: the old tab is closed and the new file is shown.
+    for group in gui.groups.group_ids() {
+        if let Some(tabs) = gui.groups.tabs_mut(group) {
+            tabs.close_document(&document);
+        }
+    }
+    gui.groups.pin(relative.clone());
+    if let Err(reason) = gui.groups.type_into(text) {
+        gui.message = tr_args("ui.error.not-saved", &[("reason", &reason)]);
+        update_status(gui);
+        return;
+    }
+    gui.sync_editors();
+    gui.message = tr_args("ui.status.saved-as", &[("path", &relative)]);
+    update_status(gui);
+}
+
+/// Writes a copy of the focused document without changing the active document.
+fn apply_save_copy(gui: &mut Gui, requested: &str) {
+    let Some((_document, text)) = active_document(gui) else {
+        gui.message = tr("ui.status.no-editor");
+        update_status(gui);
+        return;
+    };
+    let (path, relative) = match save_target(gui, requested) {
+        Ok(found) => found,
+        Err(reason) => {
+            gui.message = tr_args("ui.error.not-saved", &[("reason", &reason)]);
+            update_status(gui);
+            return;
+        }
+    };
+    if path.exists() {
+        gui.message = tr_args(
+            "ui.error.not-saved",
+            &[("reason", &tr("ui.error.save-target-exists"))],
+        );
+        update_status(gui);
+        return;
+    }
+    if let Err(error) = crate::project::record::json::write_atomically(&path, &text) {
+        gui.message = tr_args("ui.error.not-saved", &[("reason", &error.to_string())]);
+        update_status(gui);
+        return;
+    }
+    // The copy is a file on disk; it does not become the active document and no tab opens for it.
+    remember_saved_text(gui, &relative, &text);
+    gui.message = tr_args("ui.status.saved-copy", &[("path", &relative)]);
+    update_status(gui);
+}
+
+/// Hands the project root to the system's file manager through the host opener.
+fn reveal_project(gui: &mut Gui) -> String {
+    use crate::host::open_url::{OpenTarget, PlatformOpener, UrlOpener};
+
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let path = session.root().as_path().to_path_buf();
+    let opener = match PlatformOpener::for_this_platform() {
+        Ok(opener) => opener,
+        Err(refusal) => {
+            return tr_args("ui.error.reveal-refused", &[("reason", &refusal.message())]);
+        }
+    };
+    match opener.open(&OpenTarget::Path(path.clone())) {
+        Ok(outcome) if outcome.started_the_handler() => tr_args(
+            "ui.status.revealed",
+            &[("path", &path.display().to_string())],
+        ),
+        Ok(outcome) => tr_args("ui.error.reveal-refused", &[("reason", &outcome.message())]),
+        Err(refusal) => tr_args("ui.error.reveal-refused", &[("reason", &refusal.message())]),
+    }
+}
+
+/// Hands the focused editor's document to the system's file manager.
+///
+/// A file manager shows a directory rather than selecting a file portably, so the document's own
+/// directory is what is handed off. A document with no file on disk (a generated buffer) is
+/// refused rather than revealing a path that does not exist.
+fn reveal_current_file(gui: &mut Gui) -> String {
+    use crate::host::open_url::{OpenTarget, PlatformOpener, UrlOpener};
+
+    let Some(session) = gui.project.as_ref() else {
+        return tr("ui.project.none");
+    };
+    let Some(document) = active_document(gui).map(|(document, _)| document) else {
+        return tr("ui.error.no-current-document");
+    };
+    let path = if Path::new(&document).is_absolute() {
+        PathBuf::from(&document)
+    } else {
+        session.root().as_path().join(&document)
+    };
+    if !path.is_file() {
+        return tr_args(
+            "ui.error.symbol-not-jumped",
+            &[(
+                "reason",
+                "the focused document has no file on disk to reveal",
+            )],
+        );
+    }
+    let directory = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| path.clone());
+    let opener = match PlatformOpener::for_this_platform() {
+        Ok(opener) => opener,
+        Err(refusal) => {
+            return tr_args(
+                "ui.error.file-reveal-refused",
+                &[("reason", &refusal.message())],
+            );
+        }
+    };
+    match opener.open(&OpenTarget::Path(directory.clone())) {
+        Ok(outcome) if outcome.started_the_handler() => tr_args(
+            "ui.status.revealed",
+            &[("path", &directory.display().to_string())],
+        ),
+        Ok(outcome) => tr_args(
+            "ui.error.file-reveal-refused",
+            &[("reason", &outcome.message())],
+        ),
+        Err(refusal) => tr_args(
+            "ui.error.file-reveal-refused",
+            &[("reason", &refusal.message())],
+        ),
+    }
+}
+
+/// Copies the build log to the clipboard, the same call the Build panel's menu makes.
+fn build_copy_output(gui: &mut Gui) -> String {
+    use crate::host::clipboard::{ClipboardHost, ClipboardWrite, NativeClipboard};
+
+    let text = gui.build.rows().join("\n");
+    match NativeClipboard::new().write_text(&text) {
+        ClipboardWrite::Written => tr("ui.status.output-copied"),
+        ClipboardWrite::Refused { reason } => {
+            warn_failure("the build log could not be copied", &reason);
+            tr_args("ui.error.copy-refused", &[("reason", &reason)])
+        }
+    }
+}
+
+/// Starts the Application-output panel's program, the same call its context menu makes.
+fn run_panel_start(gui: &mut Gui) -> String {
+    let program = gui.run_program.clone();
+    let root = gui
+        .project
+        .as_ref()
+        .map(|project| project.root().as_path().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let message = match gui.run.start(program, root) {
+        Ok(()) => tr("ui.status.running"),
+        Err(reason) => reason,
+    };
+    refresh_run(gui);
+    message
+}
+
+/// Asks the running program to stop, the same call the panel's context menu makes.
+fn run_panel_stop(gui: &mut Gui) -> String {
+    if gui.run.stop() {
+        tr("ui.status.stop-requested")
+    } else {
+        tr("ui.status.not-running")
+    }
+}
+
+/// Submits a build of the open project, the same submission the Build panel's menu makes.
+///
+/// Without a project there is no manifest to name, and building the directory the designer happens
+/// to run in would be a different project than the one on screen — so it is refused by name.
+fn start_build(gui: &mut Gui, action: crate::app::build::compile::Action) -> String {
+    let Some(root) = gui
+        .project
+        .as_ref()
+        .map(|project| project.root().as_path().to_path_buf())
+    else {
+        return tr("ui.status.build-no-project");
+    };
+    let started = {
+        let Gui {
+            tasks,
+            build,
+            build_owner,
+            ..
+        } = &mut *gui;
+        build.start(tasks.executor(), *build_owner, &root, action)
+    };
+    match started {
+        Ok(()) => {
+            let rows = gui.build.rows();
+            set_list_rows(gui.build_list, rows);
+            tr("ui.status.building")
+        }
+        Err(reason) => reason,
+    }
+}
+
+/// Copies the cargo command the last build actually ran.
+fn build_copy_command(gui: &mut Gui) -> String {
+    use crate::host::clipboard::{ClipboardHost, ClipboardWrite, NativeClipboard};
+
+    let Some(command) = gui
+        .build
+        .rows()
+        .into_iter()
+        .find_map(|row| row.strip_prefix("command: ").map(str::to_owned))
+    else {
+        return tr("ui.error.build-command-unavailable");
+    };
+    match NativeClipboard::new().write_text(&command) {
+        ClipboardWrite::Written => {
+            tr_args("ui.status.build-command-copied", &[("command", &command)])
+        }
+        ClipboardWrite::Refused { reason } => {
+            warn_failure("the build command could not be copied", &reason);
+            tr_args("ui.error.copy-refused", &[("reason", &reason)])
+        }
+    }
+}
+
+/// Opens the first source location the build rows recorded.
+fn build_locate_first_error(gui: &mut Gui) -> String {
+    let Some(root) = project_root(gui) else {
+        return tr("ui.project.none");
+    };
+    let Some((path, line, column)) = gui.build.first_error_location() else {
+        return tr("ui.error.first-error-not-found");
+    };
+    let path = if Path::new(&path).is_absolute() {
+        PathBuf::from(&path)
+    } else {
+        root.join(&path)
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            return tr_args(
+                "ui.error.navigation-failed",
+                &[("reason", &error.to_string())],
+            );
+        }
+    };
+    let document = path
+        .strip_prefix(&root)
+        .map(|relative| relative.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+    let (line, column) = (line.saturating_sub(1), column.saturating_sub(1));
+    remember_saved_text(gui, &document, &text);
+    if !show_document_at(gui, &document, Some(&text), line, column, true) {
+        return tr("ui.source.no-editor");
+    }
+    tr_args(
+        "ui.status.first-error-opened",
+        &[("path", &document), ("line", &(line + 1).to_string())],
+    )
 }
 
 /// Opens the onboarding document in the focused editor group.
@@ -3295,28 +7791,166 @@ fn onboarding_text(registry: &Registry) -> String {
     text
 }
 
-fn apply_action(gui: &mut Gui, action: &str) {
-    if let Some(command) = action.strip_prefix("command:") {
-        run_command(gui, command);
-        return;
+/// Opens a generated help document in the focused editor group.
+fn open_help_document(gui: &mut Gui, name: &str, text: String) {
+    gui.workbench.set_mode(Mode::Code);
+    gui.groups.pin(name);
+    if gui.groups.text(name) != Some(text.as_str())
+        && let Err(reason) = gui.groups.type_into(text)
+    {
+        warn_failure("a help document could not be written", reason);
     }
-    if let Some(id) = action.strip_prefix("toggle:") {
-        if gui.panels.layout().shown().iter().any(|shown| shown == id) {
-            if let Err(error) = gui.panels.hide(id) {
-                warn_failure("a panel could not be hidden", error.message());
+    gui.sync_editors();
+    gui.message = tr("ui.status.ready");
+    update_status(gui);
+}
+
+/// The keyboard reference, built from the same keymap the window and audit use.
+fn shortcut_reference_text() -> String {
+    let keymap = crate::app::commands::shortcuts::built_in();
+    let mut text = format!("# {}\n\n", tr("ui.help.shortcuts"));
+    for binding in keymap.bindings() {
+        text.push_str(&format!(
+            "- `{}` — `{}`\n",
+            binding.chord(),
+            binding.command()
+        ));
+    }
+    text
+}
+
+/// The control catalogue reference, built from the captured contract.
+fn control_reference_text(catalog: Option<&Catalog>) -> String {
+    let mut text = format!("# {}\n\n", tr("ui.help.controls"));
+    let Some(catalog) = catalog else {
+        text.push_str(&tr("ui.help.controls-unavailable"));
+        text.push('\n');
+        return text;
+    };
+    text.push_str(&format!("{} kind(s)\n\n", catalog.len()));
+    for category in catalog.categories() {
+        text.push_str(&format!("## {category}\n\n"));
+        for descriptor in catalog.in_category(category) {
+            text.push_str(&format!(
+                "- `{}` — properties {}, events {}, commands {}, children {}\n",
+                descriptor.id,
+                descriptor.properties.len(),
+                descriptor.events.len(),
+                descriptor.commands.len(),
+                descriptor.children.len(),
+            ));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+/// `name=value&name=value` after the `?` in a menu action.
+///
+/// The menu's action string is the one surface that carries an argument; the registry still validates
+/// it, so a value the command does not accept is refused there rather than reaching a handler.
+fn parse_action_arguments(query: &str) -> BTreeMap<String, String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect()
+}
+
+/// Shows or hides one window panel.
+///
+/// A dock slot shows one panel at a time: the panels sharing this slot are hidden before the new one
+/// appears, so two panels cannot draw over each other.
+fn toggle_panel(gui: &mut Gui, id: &str) {
+    if gui.panels.layout().shown().iter().any(|shown| shown == id) {
+        if let Err(error) = gui.panels.hide(id) {
+            warn_failure("a panel could not be hidden", error.message());
+        } else {
+            remember_closed(gui, id);
+        }
+        gui.message = tr_args("ui.status.hidden", &[("id", id)]);
+    } else {
+        if let Some(area) = gui.panel_areas.get(id).copied() {
+            let siblings: Vec<String> = gui
+                .panel_areas
+                .iter()
+                .filter(|(other, other_area)| other.as_str() != id && **other_area == area)
+                .map(|(other, _)| other.clone())
+                .collect();
+            for sibling in siblings {
+                if gui
+                    .panels
+                    .layout()
+                    .shown()
+                    .iter()
+                    .any(|shown| shown == &sibling)
+                    && let Err(error) = gui.panels.hide(&sibling)
+                {
+                    warn_failure("a panel could not be hidden", error.message());
+                }
             }
-            gui.message = tr_args("ui.status.hidden", &[("id", id)]);
-        } else if gui.panels.show(id).is_ok() {
+        }
+        if gui.panels.show(id).is_ok() {
+            gui.closed_panels.retain(|other| other != id);
             gui.message = tr_args("ui.status.shown", &[("id", id)]);
         } else {
             gui.message = tr_args("ui.status.no-panel", &[("id", id)]);
         }
-        gui.sync_panels();
-        gui.sync_editors();
+        match id {
+            "inspection" => refresh_inspection(gui),
+            "vcs" => refresh_vcs(gui),
+            "project" => refresh_project(gui),
+            "dependencies" => refresh_dependencies(gui),
+            "breakpoints" => refresh_breakpoints(gui),
+            "stack" => refresh_stack(gui),
+            "variables" => refresh_variables(gui),
+            "actions" => refresh_actions(gui),
+            "notifications" => refresh_notifications(gui),
+            "application" => refresh_application(gui),
+            "history" => refresh_history(gui),
+            "extensions" => refresh_extensions(gui),
+            "tests" => refresh_tests(gui),
+            "tasks" => refresh_tasks(gui),
+            "build" => refresh_build(gui),
+            "run" => refresh_run(gui),
+            "terminal" => refresh_terminal(gui),
+            "preview" => refresh_preview(gui),
+            "hot" => refresh_hot(gui),
+            "states" => refresh_states(gui),
+            "items" => refresh_items(gui),
+            "components" => refresh_components(gui),
+            "timeline" => refresh_timeline(gui),
+            "ai" => refresh_ai(gui),
+            "source" => refresh_source(gui),
+            "layout" => refresh_layout_panel(gui),
+            _ => {}
+        }
+    }
+    gui.sync_panels();
+    gui.sync_editors();
+}
+
+fn apply_action(gui: &mut Gui, action: &str) {
+    if let Some(raw) = action.strip_prefix("command:") {
+        let (id, arguments) = match raw.split_once('?') {
+            Some((id, query)) => (id, parse_action_arguments(query)),
+            None => (raw, BTreeMap::new()),
+        };
+        let mut call = Call::to(id);
+        for (name, value) in arguments {
+            call = call.with(name, value);
+        }
+        run_call(gui, &call);
+        return;
+    }
+    if let Some(id) = action.strip_prefix("toggle:") {
+        toggle_panel(gui, id);
         return;
     }
     match action {
         "palette:open" => open_palette(gui),
+        "display:toolbar" => toggle_chrome(gui, true),
+        "display:status-bar" => toggle_chrome(gui, false),
         "palette:close" => {
             close_palette(gui);
             gui.message = tr("ui.status.palette-closed");
@@ -3361,12 +7995,53 @@ fn apply_action(gui: &mut Gui, action: &str) {
             gui.message = tr("ui.status.editor-split");
             gui.sync_editors();
         }
+        "group:split-down" => {
+            let document = gui
+                .groups
+                .tabs(gui.groups.focus())
+                .and_then(|tabs| tabs.active().map(|tab| tab.document().to_owned()));
+            gui.groups.split(Axis::TopBottom);
+            if let Some(document) = document {
+                gui.groups.another_view(document);
+            }
+            gui.message = tr("ui.status.editor-split");
+            gui.sync_editors();
+        }
         "group:next" => {
             gui.groups.focus_next();
             gui.message = tr_args(
                 "ui.status.focus-group",
                 &[("group", &gui.groups.focus().get().to_string())],
             );
+        }
+        "group:previous" => {
+            gui.groups.focus_previous();
+            gui.message = tr_args(
+                "ui.status.focus-group",
+                &[("group", &gui.groups.focus().get().to_string())],
+            );
+        }
+        "group:merge" => match gui.groups.close_focus_group() {
+            Ok(moved) => {
+                gui.message = tr_args("ui.status.group-merged", &[("moved", &moved.to_string())]);
+                gui.sync_editors();
+            }
+            Err(reason) => {
+                gui.message = tr_args("ui.status.group-not-merged", &[("reason", &reason)]);
+            }
+        },
+        "help:welcome" => open_onboarding(gui),
+        "help:shortcuts" => {
+            let text = shortcut_reference_text();
+            open_help_document(gui, "SHORTCUTS.md", text);
+        }
+        "help:commands" => {
+            let text = onboarding_text(&gui.registry);
+            open_help_document(gui, "COMMANDS.md", text);
+        }
+        "help:controls" => {
+            let text = control_reference_text(gui.widget_catalog.as_ref());
+            open_help_document(gui, "CONTROLS.md", text);
         }
         "quit" => {
             gui.message = tr("ui.status.closing");
@@ -3386,41 +8061,8 @@ fn wire_debug_button(button: &ButtonHandle, command: DebugCommand, gui: &Arc<Mut
     button.on_click(move || {
         let next = Arc::clone(&gui_for_click);
         if let Ok(mut gui) = next.lock() {
-            let accepted = match command {
-                DebugCommand::Start => {
-                    // The debuggee is generated from the same scene the tree and canvas show, so
-                    // the source map entries name real nodes. The selected node is the breakpoint
-                    // anchor; with no selection the second row (the demo panel) is used.
-                    let nodes: Vec<(NodeId, String)> = gui
-                        .scene
-                        .row_nodes()
-                        .into_iter()
-                        .filter_map(|node| gui.scene.name(node).map(|name| (node, name.to_owned())))
-                        .collect();
-                    let break_node = gui
-                        .scene
-                        .primary()
-                        .or_else(|| nodes.get(1).map(|(node, _)| *node))
-                        .or_else(|| nodes.first().map(|(node, _)| *node))
-                        .unwrap_or_else(|| NodeId::from_raw(0));
-                    gui.debug.start(nodes, break_node)
-                }
-                other => gui.debug.send(other),
-            };
-            gui.message = if accepted {
-                format!("debug: {}", command.name())
-            } else {
-                format!("debug: {} unavailable", command.name())
-            };
+            gui.message = debug_command(&mut gui, command);
             update_status(&gui);
-            crate::host::log::emit(
-                crate::host::log::Level::Info,
-                "app::run::workbench-debug",
-                &format!("debug {} requested (accepted {accepted})", command.name()),
-            );
-        }
-        if command == DebugCommand::Start {
-            schedule_debug_poll(&next);
         }
     });
 }
@@ -3474,6 +8116,17 @@ fn apply_debug_update(gui: &mut Gui, update: DebugUpdate) {
         "app::run::workbench-debug",
         &format!("debug: {}", update.status),
     );
+    // The three split panels read the same session the console does; they are filled whether or
+    // not they are visible so switching to one shows the last report, not a stale list.
+    let breakpoints = debug_section_rows(gui.debug.breakpoints());
+    let mut stack = gui.debug.threads();
+    stack.extend(gui.debug.frames());
+    let stack = debug_section_rows(stack);
+    let variables = debug_section_rows(gui.debug.variables());
+    let lists = (gui.breakpoints_list, gui.stack_list, gui.variables_list);
+    set_list_rows(lists.0, breakpoints);
+    set_list_rows(lists.1, stack);
+    set_list_rows(lists.2, variables);
     for row in &rows {
         crate::host::log::emit(
             crate::host::log::Level::Info,
@@ -3486,6 +8139,10 @@ fn apply_debug_update(gui: &mut Gui, update: DebugUpdate) {
 /// Opens the workbench window and runs it until the window closes or the deadline passes.
 pub(super) fn workbench_gui(
     layout_path: Option<PathBuf>,
+    project_path: Option<PathBuf>,
+    ai_journal: Option<PathBuf>,
+    lsp_program: Option<String>,
+    lsp_arguments: Vec<String>,
     exit_after: Duration,
     smoke: bool,
 ) -> bool {
@@ -3514,7 +8171,26 @@ pub(super) fn workbench_gui(
     // The models.
     let mut workbench = Workbench::new();
     workbench.set_mode(Mode::Design);
-    workbench.open_project("demo-project");
+    // The open project is read before the panels are registered: whether `panel.project` is shown
+    // follows from the session, not from a second configuration value.
+    let project = match project_path {
+        Some(directory) => match open_project(&directory) {
+            Ok(session) => {
+                if let Some(name) = session.name() {
+                    workbench.open_project(name);
+                }
+                Some(session)
+            }
+            Err(reason) => {
+                warn_failure("the project could not be opened", reason);
+                None
+            }
+        },
+        None => None,
+    };
+    if project.is_none() {
+        workbench.open_project("demo-project");
+    }
     workbench.open_document("src/main.rs");
     workbench.set_target("desktop");
 
@@ -3577,10 +8253,11 @@ pub(super) fn workbench_gui(
     };
 
     // The services the built-in panels need are the ones this slice actually has: a property
-    // schema and diagnostics come from models that exist. `document-tree` does not exist yet, so
-    // the Outline is registered but hidden instead of being shown without a backend (I-11). A
-    // panel whose service is missing stays registered but is not shown (T04.02's gate), and the
-    // log names it.
+    // schema and diagnostics come from models that exist. The Outline is the scene's object tree
+    // (F09), so it needs no service; the source outline (F07) is the separate `source` panel, whose
+    // document comes from the editor buffer and whose symbols come from `--lsp` (when given). A
+    // panel whose service is missing stays registered but is not shown (T04.02's gate), and the log
+    // names it.
     let mut services: BTreeSet<String> = ["property-schema", "diagnostics"]
         .into_iter()
         .map(str::to_owned)
@@ -3598,7 +8275,7 @@ pub(super) fn workbench_gui(
             warn_failure("an extra panel could not be registered", error.message());
         }
     }
-    for id in [
+    let mut show_ids = vec![
         "widgets",
         "pages",
         "assets",
@@ -3610,7 +8287,17 @@ pub(super) fn workbench_gui(
         "data",
         "theme",
         "debug",
-    ] {
+        "help",
+        "search",
+        "environments",
+        "targets",
+    ];
+    // The Project panel is shown when a project was opened; the Dependencies panel shares its dock
+    // slot with Environments/Version control and stays closed until asked for.
+    if project.is_some() {
+        show_ids.push("project");
+    }
+    for id in show_ids {
         show_panel_if_available(&mut panels, id, &services);
     }
     // §2.2's ledger: every required panel is accounted for, and the ones this slice does not have
@@ -3682,6 +8369,7 @@ pub(super) fn workbench_gui(
     }
 
     let rename_slot: Arc<Mutex<Option<RenameRequest>>> = Arc::new(Mutex::new(None));
+    let prompt_slot: Arc<Mutex<Option<Prompt>>> = Arc::new(Mutex::new(None));
     let gui = Arc::new(Mutex::new(Gui {
         workbench,
         panels,
@@ -3689,6 +8377,72 @@ pub(super) fn workbench_gui(
         default_layout,
         layout_path: layout_path.clone(),
         panel_widgets: BTreeMap::new(),
+        panel_areas: BTreeMap::new(),
+        inspection_list: 0,
+        vcs_list: 0,
+        vcs_menu: 0,
+        project,
+        saved_texts: BTreeMap::new(),
+        permissions: crate::host::permission::PermissionService::new(),
+        project_list: 0,
+        dependencies_list: 0,
+        breakpoints_list: 0,
+        stack_list: 0,
+        variables_list: 0,
+        actions_list: 0,
+        notifications: crate::app::run::workbench_notifications::Notifications::new(),
+        notifications_list: 0,
+        notifications_menu: 0,
+        notification_row: None,
+        application_list: 0,
+        extensions: crate::app::extension::Registry::new(),
+        extensions_usage: crate::app::extension::manager::Usage::new(),
+        extensions_list: 0,
+        history_list: 0,
+        states_list: 0,
+        states_source: None,
+        states: None,
+        items_list: 0,
+        components_list: 0,
+        timeline_list: 0,
+        ai_journal,
+        ai_list: 0,
+        source: crate::app::run::workbench_outline::SourceOutline::new(lsp_program, lsp_arguments),
+        source_list: 0,
+        source_field: 0,
+        source_filter: String::new(),
+        jump_back: Vec::new(),
+        jump_forward: Vec::new(),
+        selection_history: Vec::new(),
+        selection_history_document: String::new(),
+        closed_documents: Vec::new(),
+        pending_resource_cleanup: Vec::new(),
+        command_history: Vec::new(),
+        layout_list: 0,
+        tests: crate::app::run::workbench_tests::TestsState::new(),
+        tests_list: 0,
+        tests_menu: 0,
+        tasks: crate::app::run::workbench_tasks::Tasks::new(),
+        tasks_list: 0,
+        build: crate::app::run::workbench_build::BuildState::new(),
+        build_owner: crate::host::tasks::OwnerId::new(),
+        build_list: 0,
+        build_menu: 0,
+        run: crate::app::run::workbench_run::RunState::new(),
+        run_list: 0,
+        run_field: 0,
+        run_program: String::new(),
+        run_menu: 0,
+        terminal: crate::app::run::workbench_terminal::TerminalState::new(),
+        terminal_list: 0,
+        terminal_field: 0,
+        terminal_input: String::new(),
+        terminal_menu: 0,
+        preview_list: 0,
+        preview_menu: 0,
+        preview_json: false,
+        hot: crate::app::preview::hot_update::Updater::new("workbench"),
+        hot_list: 0,
         group_views: Vec::new(),
         status: 0,
         message: tr("ui.status.ready"),
@@ -3715,6 +8469,9 @@ pub(super) fn workbench_gui(
         widget_menu: 0,
         widgets_search: 0,
         widgets_list: 0,
+        search_field: 0,
+        search_list: 0,
+        search_hits: Vec::new(),
         messages: Vec::new(),
         messages_list: 0,
         diagnostic_row: None,
@@ -3756,23 +8513,38 @@ pub(super) fn workbench_gui(
         canvas_snapshot: Arc::new(Mutex::new(Arc::new(CanvasSnapshot {
             nodes: Arc::from(Vec::new()),
             marquee: None,
+            view: CanvasView::default(),
         }))),
+        canvas_view: CanvasView::default(),
         canvas_scheduled: Arc::new(AtomicBool::new(false)),
         canvas_revision: u64::MAX,
-        outline_rows: Vec::new(),
         outline_index: BTreeMap::new(),
         outline_content_revision: u64::MAX,
         outline_syncing: Arc::new(AtomicBool::new(false)),
+        syncing_editors: Arc::new(AtomicBool::new(false)),
         translatable: Vec::new(),
         toolbar: 0,
         toolbar_items: Vec::new(),
+        show_toolbar: true,
+        show_status: true,
+        layout_locked: false,
+        closed_panels: Vec::new(),
+        fullscreen: false,
+        zen: None,
+        self_weak: Weak::new(),
         context_menu: 0,
         scene_menu: 0,
         editor_menu: 0,
         rename_dialog: 0,
+        prompt_dialog: 0,
+        prompt_slot: Arc::clone(&prompt_slot),
         rename_slot: Arc::clone(&rename_slot),
     }));
+    if let Ok(mut state) = gui.lock() {
+        state.self_weak = Arc::downgrade(&gui);
+    }
     schedule_rename(Arc::clone(&gui), rename_slot);
+    schedule_prompt(Arc::clone(&gui), prompt_slot);
 
     // The interface catalogue is runtime data under `language/`; load it into the library's manager
     // and watch the directory so an edit appears without restarting (blue21 L-4 items 3/5).
@@ -3814,6 +8586,11 @@ pub(super) fn workbench_gui(
     // it binds, and the label is the identified vocabulary key (`menu.<id>.item.<command>`). This is
     // what blue21 L-2/T05.02 asked for — the same menu the catalog covers is the one the window paints.
     for menu in crate::app::commands::menu::built_in() {
+        // A menu of planned leaves is a ledger entry, not a surface: the native menu has no
+        // disabled switch, so painting it would show enabled entries with no handler.
+        if !menu.is_paintable() {
+            continue;
+        }
         let title_key = format!("menu.{}.title", menu.id());
         let handle_menu = handle.new_menu(&bar, &tr(&title_key), 0, 0, 0, 0);
         if let Ok(mut gui) = gui.lock() {
@@ -3842,6 +8619,17 @@ pub(super) fn workbench_gui(
                 // dangling enabled menu T05.08 forbids. `--app-menu` still lists it with its task.
                 crate::app::commands::menu::Item::Planned { .. } => {}
                 crate::app::commands::menu::Item::Submenu { id, title, items } => {
+                    // A branch with no command leaf is not painted, for the same reason as a menu
+                    // of planned leaves. The Panels branch is the one exception: its window-only
+                    // toggles are appended below and are not registry commands.
+                    let window_panels = menu.id() == "view" && id == "panels";
+                    if !window_panels
+                        && !items
+                            .iter()
+                            .any(crate::app::commands::menu::Item::is_paintable)
+                    {
+                        continue;
+                    }
                     // A real nested menu, not flattened leaves: the library creates the branch row
                     // and the child popup, and the host opens the child on `submenu_requested`
                     // (feedback C-4 / blue22 H-3).
@@ -3882,19 +8670,52 @@ pub(super) fn workbench_gui(
                     // The window-only panels belong in the registry's own Panels submenu, not
                     // flattened beside its branch row.
                     if menu.id() == "view" && id == "panels" {
-                        for (key, action) in [
-                            ("ui.panel.pages", "toggle:pages"),
-                            ("ui.panel.widgets", "toggle:widgets"),
-                            ("ui.panel.assets", "toggle:assets"),
-                            ("ui.panel.theme", "toggle:theme"),
-                            ("ui.panel.messages", "toggle:messages"),
-                            ("ui.panel.problems", "toggle:problems"),
-                            ("ui.panel.events", "toggle:events"),
-                            ("ui.panel.data", "toggle:data"),
-                            ("ui.panel.debug", "toggle:debug"),
+                        for (key, host) in [
+                            ("ui.panel.pages", "pages"),
+                            ("ui.panel.widgets", "widgets"),
+                            ("ui.panel.assets", "assets"),
+                            ("ui.panel.theme", "theme"),
+                            ("ui.panel.outline", "outline"),
+                            ("ui.panel.inspector", "inspector"),
+                            ("ui.panel.messages", "messages"),
+                            ("ui.panel.problems", "problems"),
+                            ("ui.panel.events", "events"),
+                            ("ui.panel.data", "data"),
+                            ("ui.panel.states", "states"),
+                            ("ui.panel.items", "items"),
+                            ("ui.panel.components", "components"),
+                            ("ui.panel.timeline", "timeline"),
+                            ("ui.panel.ai", "ai"),
+                            ("ui.panel.source-outline", "source"),
+                            ("ui.panel.layout", "layout"),
+                            ("ui.panel.debug", "debug"),
+                            ("ui.panel.environments", "environments"),
+                            ("ui.panel.targets", "targets"),
+                            ("ui.panel.inspection", "inspection"),
+                            ("ui.panel.vcs", "vcs"),
+                            ("ui.panel.project", "project"),
+                            ("ui.panel.dependencies", "dependencies"),
+                            ("ui.panel.breakpoints", "breakpoints"),
+                            ("ui.panel.stack", "stack"),
+                            ("ui.panel.variables", "variables"),
+                            ("ui.panel.actions", "actions"),
+                            ("ui.panel.notifications", "notifications"),
+                            ("ui.panel.application", "application"),
+                            ("ui.panel.history", "history"),
+                            ("ui.panel.extensions", "extensions"),
+                            ("ui.panel.tests", "tests"),
+                            ("ui.panel.tasks", "tasks"),
+                            ("ui.panel.build", "build"),
+                            ("ui.panel.run", "run"),
+                            ("ui.panel.terminal", "terminal"),
+                            ("ui.panel.preview", "preview"),
+                            ("ui.panel.hot", "hot"),
+                            ("ui.panel.help", "help"),
+                            ("ui.panel.search", "search"),
                         ] {
+                            let action = panel_action(host);
                             let item = handle.new_menu_item(&child_menu, &tr(key), None);
-                            menu_actions.insert(item.raw_id(), action.to_owned());
+                            menu_actions.insert(item.raw_id(), action);
                             if let Ok(mut gui) = gui.lock() {
                                 gui.translatable.push(Translatable {
                                     id: item.raw_id(),
@@ -3940,7 +8761,7 @@ pub(super) fn workbench_gui(
         match menu.id() {
             "file" => {
                 let item = handle.new_menu_item(&handle_menu, &tr("ui.menu.quit"), None);
-                menu_actions.insert(item.raw_id(), "quit".to_owned());
+                menu_actions.insert(item.raw_id(), "command:file.exit".to_owned());
                 if let Ok(mut gui) = gui.lock() {
                     gui.translatable.push(Translatable {
                         id: item.raw_id(),
@@ -3962,15 +8783,22 @@ pub(super) fn workbench_gui(
         (
             "ui.menu.layout",
             vec![
-                ("ui.menu.save-layout", "layout:save"),
-                ("ui.menu.reset-layout", "layout:reset"),
+                ("ui.menu.save-layout", "command:view.save-layout"),
+                ("ui.menu.load-layout", "command:view.layout-load"),
+                ("ui.menu.reset-layout", "command:view.reset-layout"),
+                ("ui.menu.lock-layout", "command:view.layout-lock"),
+                ("ui.menu.zen", "command:view.layout-zen"),
+                ("ui.menu.fullscreen", "command:view.layout-fullscreen"),
             ],
         ),
         (
             "ui.menu.editor",
             vec![
-                ("ui.menu.split-right", "group:split"),
-                ("ui.menu.next-group", "group:next"),
+                ("ui.menu.split-right", "command:view.split"),
+                ("ui.menu.split-down", "command:view.split-down"),
+                ("ui.menu.next-group", "command:view.next-group"),
+                ("ui.menu.previous-group", "command:view.previous-group"),
+                ("ui.menu.merge-group", "command:view.merge-group"),
             ],
         ),
     ] {
@@ -4005,10 +8833,10 @@ pub(super) fn workbench_gui(
         ("ui.panel.problems", "toggle:problems"),
         ("ui.panel.events", "toggle:events"),
         ("ui.panel.data", "toggle:data"),
-        ("ui.toolbar.split", "group:split"),
-        ("ui.toolbar.next-group", "group:next"),
-        ("ui.toolbar.save-layout", "layout:save"),
-        ("ui.toolbar.reset-layout", "layout:reset"),
+        ("ui.toolbar.split", "command:view.split"),
+        ("ui.toolbar.next-group", "command:view.next-group"),
+        ("ui.toolbar.save-layout", "command:view.save-layout"),
+        ("ui.toolbar.reset-layout", "command:view.reset-layout"),
     ];
     let tool_bar = handle.new_tool_bar(8, TOOLBAR_Y, WIDTH - 16, TOOLBAR_HEIGHT);
     let inserted = with_widget_mut(tool_bar.raw_id(), |widget| {
@@ -4051,11 +8879,7 @@ pub(super) fn workbench_gui(
     // language reload cannot make a right-click run the wrong command.
     let context_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
     let mut context_actions: BTreeMap<String, String> = BTreeMap::new();
-    for (key, action) in [
-        ("ui.context.clear", "clear"),
-        ("ui.context.reset", "reset"),
-        ("ui.context.inspect", "inspect"),
-    ] {
+    for (key, action) in INSPECTOR_MENU_KEYS {
         let label = tr(key);
         handle.new_menu_item(&context_menu, &label, None);
         context_actions.insert(label, action.to_owned());
@@ -4089,24 +8913,7 @@ pub(super) fn workbench_gui(
     // would be worse than its absence.
     let scene_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
     let mut scene_actions: BTreeMap<String, String> = BTreeMap::new();
-    for (key, action) in [
-        ("ui.context.select-parent", "select-parent"),
-        ("ui.context.select-child", "select-child"),
-        ("ui.context.rename", "rename"),
-        ("ui.context.wrap-container", "wrap-container"),
-        ("ui.context.move-out", "move-out"),
-        ("ui.context.move-into", "move-into"),
-        ("ui.context.copy-node", "copy-node"),
-        ("ui.context.paste-node", "paste-node"),
-        ("ui.context.toggle-lock", "toggle-lock"),
-        ("ui.context.toggle-hide", "toggle-hide"),
-        ("ui.context.raise", "raise"),
-        ("ui.context.raise-one", "raise-one"),
-        ("ui.context.lower-one", "lower-one"),
-        ("ui.context.send-to-back", "send-to-back"),
-        ("ui.context.duplicate", "duplicate"),
-        ("ui.context.delete", "delete"),
-    ] {
+    for (key, action) in SCENE_MENU_KEYS {
         let label = tr(key);
         handle.new_menu_item(&scene_menu, &label, None);
         scene_actions.insert(label, action.to_owned());
@@ -4159,13 +8966,7 @@ pub(super) fn workbench_gui(
     // the pointer, not on whichever tab happened to be active.
     let editor_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
     let mut editor_actions: BTreeMap<String, String> = BTreeMap::new();
-    for (key, action) in [
-        ("ui.context.editor.close", "close"),
-        ("ui.context.editor.close-others", "close-others"),
-        ("ui.context.editor.close-right", "close-right"),
-        ("ui.context.editor.split", "split"),
-        ("ui.context.editor.next-group", "next-group"),
-    ] {
+    for (key, action) in EDITOR_MENU_KEYS {
         let label = tr(key);
         handle.new_menu_item(&editor_menu, &label, None);
         editor_actions.insert(label, action.to_owned());
@@ -4190,11 +8991,7 @@ pub(super) fn workbench_gui(
     // under the pointer, and Copy works on that row rather than on whichever row was last selected.
     let diagnostic_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
     let mut diagnostic_actions: BTreeMap<String, String> = BTreeMap::new();
-    for (key, action) in [
-        ("ui.context.diagnostic.copy", "copy"),
-        ("ui.context.diagnostic.copy-all", "copy-all"),
-        ("ui.context.diagnostic.clear", "clear"),
-    ] {
+    for (key, action) in DIAGNOSTIC_MENU_KEYS {
         let label = tr(key);
         handle.new_menu_item(&diagnostic_menu, &label, None);
         diagnostic_actions.insert(label, action.to_owned());
@@ -4222,13 +9019,37 @@ pub(super) fn workbench_gui(
         let gui = gui.lock().expect("the workbench state is not poisoned");
         gui.scene.rows()
     };
+    let (project_items, dependency_items) = {
+        let gui = gui.lock().expect("the workbench state is not poisoned");
+        (project_rows(&gui.project), dependency_rows(&gui.project))
+    };
+    let action_items = {
+        let gui = gui.lock().expect("the workbench state is not poisoned");
+        crate::app::run::workbench_actions::rows(
+            &gui.registry,
+            &crate::app::commands::shortcuts::built_in(),
+        )
+    };
+    let application_items = {
+        let gui = gui.lock().expect("the workbench state is not poisoned");
+        application_rows(&gui)
+    };
+    // The inspection and version-control panels are filled when they are shown, not at startup:
+    // one runs the design checks and the other runs Git, and neither is in the first-run layout.
     let mut inspector_controls: Option<InspectorControls> = None;
     let mut events_controls: Option<EventControls> = None;
     let mut data_controls: Option<DataControls> = None;
     let mut pages_controls: Option<PageControls> = None;
     let mut outline_list: Option<u64> = None;
+    let mut source_list: Option<u64> = None;
+    let mut source_field: Option<u64> = None;
     let mut widgets_list: Option<u64> = None;
     let mut widgets_search: Option<u64> = None;
+    let mut help_list: Option<u64> = None;
+    let mut search_field: Option<u64> = None;
+    let mut search_list: Option<u64> = None;
+    let mut run_field: Option<u64> = None;
+    let mut terminal_field: Option<u64> = None;
     for (id, _title, rect, area) in [
         (
             "pages",
@@ -4237,8 +9058,23 @@ pub(super) fn workbench_gui(
             Area::LeftPanel { index: 0, count: 5 },
         ),
         (
+            // The project tree shares the Pages dock: both are project navigation, one at a time.
+            "project",
+            "Project",
+            (0, CONTENT_Y, 260, 180),
+            Area::LeftPanel { index: 0, count: 5 },
+        ),
+        (
             "outline",
             "Outline",
+            (0, 254, 260, 180),
+            Area::LeftPanel { index: 1, count: 5 },
+        ),
+        (
+            // The source outline is the same idea over a document than over the scene: it shares
+            // the object tree's dock slot, and one of the two is shown at a time.
+            "source",
+            "Source outline",
             (0, 254, 260, 180),
             Area::LeftPanel { index: 1, count: 5 },
         ),
@@ -4263,32 +9099,230 @@ pub(super) fn workbench_gui(
         (
             "inspector",
             "Inspector",
-            (WIDTH as i32 - 320, CONTENT_Y, 320, 280),
-            Area::RightPanel { index: 0, count: 3 },
+            (WIDTH as i32 - 320, CONTENT_Y, 320, 210),
+            Area::RightPanel { index: 0, count: 4 },
         ),
         (
             "data",
             "Data & State",
-            (WIDTH as i32 - 320, 358, 320, 280),
-            Area::RightPanel { index: 1, count: 3 },
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
+        ),
+        (
+            // The state machine shares the Data dock: the declaration belongs to the same page.
+            "states",
+            "States",
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
+        ),
+        (
+            // Collection contents belong to the same page as its state machine.
+            "items",
+            "Collection contents",
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
+        ),
+        (
+            // Components belong to the same page as its state machine and collections.
+            "components",
+            "Components",
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
+        ),
+        (
+            // Transitions belong to the same page as its state machine and collections.
+            "timeline",
+            "Timeline",
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
+        ),
+        (
+            // The AI session is a service view, not page content; it shares the service dock.
+            "ai",
+            "AI session",
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
+        ),
+        (
+            // The layout inspector reads the same page as the state and collection views.
+            "layout",
+            "Layout inspector",
+            (WIDTH as i32 - 320, 288, 320, 200),
+            Area::RightPanel { index: 1, count: 4 },
         ),
         (
             "theme",
             "Theme",
-            (WIDTH as i32 - 320, 646, 320, 180),
-            Area::RightPanel { index: 2, count: 3 },
+            (WIDTH as i32 - 320, 496, 320, 110),
+            Area::RightPanel { index: 2, count: 4 },
+        ),
+        (
+            // The debug console and its breakpoints/stack/variables views share one dock slot:
+            // one is shown at a time, and the View/Panels toggle switches between them.
+            "debug",
+            "Debug",
+            (WIDTH as i32 - 320, 614, 320, 146),
+            Area::RightPanel { index: 3, count: 4 },
+        ),
+        (
+            "breakpoints",
+            "Breakpoints",
+            (WIDTH as i32 - 320, 614, 320, 146),
+            Area::RightPanel { index: 3, count: 4 },
+        ),
+        (
+            "stack",
+            "Call stack",
+            (WIDTH as i32 - 320, 614, 320, 146),
+            Area::RightPanel { index: 3, count: 4 },
+        ),
+        (
+            "variables",
+            "Variables",
+            (WIDTH as i32 - 320, 614, 320, 146),
+            Area::RightPanel { index: 3, count: 4 },
+        ),
+        (
+            // Targets moved to the project dock so the debug group has its own sidebar slot.
+            "targets",
+            "Targets",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
         ),
         (
             "messages",
             "Messages",
-            (260, 645, 340, 120),
-            Area::BottomPanel { index: 0, count: 2 },
+            (260, 645, 133, 120),
+            Area::BottomPanel { index: 0, count: 5 },
+        ),
+        (
+            // Actions shares the output dock.
+            "actions",
+            "Actions",
+            (260, 645, 133, 120),
+            Area::BottomPanel { index: 0, count: 5 },
+        ),
+        (
+            // Notifications shares the output dock too.
+            "notifications",
+            "Notifications",
+            (260, 645, 133, 120),
+            Area::BottomPanel { index: 0, count: 5 },
+        ),
+        (
+            // Background tasks shares the output dock.
+            "tasks",
+            "Background tasks",
+            (260, 645, 133, 120),
+            Area::BottomPanel { index: 0, count: 5 },
         ),
         (
             "problems",
             "Problems",
-            (610, 645, 340, 120),
-            Area::BottomPanel { index: 1, count: 2 },
+            (401, 645, 133, 120),
+            Area::BottomPanel { index: 1, count: 5 },
+        ),
+        (
+            // The inspection panel shares the quality dock with Problems: one is shown at a
+            // time, and the View/Panels toggle switches between them.
+            "inspection",
+            "Inspection",
+            (401, 645, 133, 120),
+            Area::BottomPanel { index: 1, count: 5 },
+        ),
+        (
+            // Tests shares the quality dock too.
+            "tests",
+            "Tests",
+            (401, 645, 133, 120),
+            Area::BottomPanel { index: 1, count: 5 },
+        ),
+        (
+            "search",
+            "Search",
+            (542, 645, 133, 120),
+            Area::BottomPanel { index: 2, count: 5 },
+        ),
+        (
+            // Application output shares the editor-output dock with Search.
+            "run",
+            "Application output",
+            (542, 645, 133, 120),
+            Area::BottomPanel { index: 2, count: 5 },
+        ),
+        (
+            // The terminal shares the same output dock.
+            "terminal",
+            "Terminal",
+            (542, 645, 133, 120),
+            Area::BottomPanel { index: 2, count: 5 },
+        ),
+        (
+            // Preview and hot update share the project dock with the other service views.
+            "preview",
+            "Preview",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
+        ),
+        (
+            "hot",
+            "Hot update",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
+        ),
+        (
+            "environments",
+            "Environments",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
+        ),
+        (
+            // Version control shares the project dock with Environments.
+            "vcs",
+            "Version control",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
+        ),
+        (
+            // Dependencies shares the same project dock.
+            "dependencies",
+            "Dependencies",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
+        ),
+        (
+            "help",
+            "Help",
+            (824, 645, 136, 120),
+            Area::BottomPanel { index: 4, count: 5 },
+        ),
+        (
+            // Application structure shares the Help dock.
+            "application",
+            "Application structure",
+            (824, 645, 136, 120),
+            Area::BottomPanel { index: 4, count: 5 },
+        ),
+        (
+            // Extensions shares the Help dock too.
+            "extensions",
+            "Extensions",
+            (824, 645, 136, 120),
+            Area::BottomPanel { index: 4, count: 5 },
+        ),
+        (
+            // Build output shares the Help dock.
+            "build",
+            "Build output",
+            (824, 645, 136, 120),
+            Area::BottomPanel { index: 4, count: 5 },
+        ),
+        (
+            // History shares the project dock with the other repository views.
+            "history",
+            "History",
+            (683, 645, 133, 120),
+            Area::BottomPanel { index: 3, count: 5 },
         ),
     ] {
         let panel = handle.new_panel(rect.0, rect.1, rect.2, rect.3);
@@ -4312,21 +9346,67 @@ pub(super) fn workbench_gui(
         let list_id = if id == "inspector" || id == "data" || id == "assets" || id == "theme" {
             0
         } else {
-            // The widget library puts a search field above its list, so its rows start lower.
-            let top = if id == "widgets" {
+            // The widget library and the source outline put a field above their list, so their rows
+            // start lower.
+            let top = if id == "widgets"
+                || id == "search"
+                || id == "run"
+                || id == "terminal"
+                || id == "source"
+            {
                 rect.1 + 60
             } else {
                 rect.1 + 30
             };
-            let height = rect.3 - if id == "widgets" { 68 } else { 38 };
+            let height = rect.3
+                - if id == "widgets"
+                    || id == "search"
+                    || id == "run"
+                    || id == "terminal"
+                    || id == "source"
+                {
+                    68
+                } else {
+                    38
+                };
             let list = panel.new_list_box(rect.0 + 8, top, rect.2 - 16, height);
             let focus_name = match id {
                 "pages" => "pages list",
                 "outline" => "outline list",
+                "source" => "source outline list",
+                "layout" => "layout inspector list",
                 "widgets" => "widget library",
                 "events" => "events list",
                 "messages" => "messages list",
                 "problems" => "problems list",
+                "help" => "help topics",
+                "search" => "search results",
+                "environments" => "environments list",
+                "targets" => "targets list",
+                "inspection" => "inspection list",
+                "vcs" => "version-control list",
+                "project" => "project tree",
+                "dependencies" => "dependencies list",
+                "breakpoints" => "breakpoints list",
+                "stack" => "call stack list",
+                "variables" => "variables list",
+                "actions" => "actions list",
+                "notifications" => "notifications list",
+                "application" => "application structure list",
+                "history" => "history list",
+                "extensions" => "extensions list",
+                "tests" => "tests list",
+                "tasks" => "background tasks list",
+                "build" => "build output list",
+                "run" => "application output list",
+                "terminal" => "terminal output",
+                "preview" => "preview list",
+                "hot" => "hot update list",
+                "states" => "states list",
+                "items" => "collection contents list",
+                "components" => "components list",
+                "timeline" => "timeline list",
+                "ai" => "ai session list",
                 _ => "panel list",
             };
             watch_focus(list.raw_id(), focus_name);
@@ -4334,6 +9414,53 @@ pub(super) fn workbench_gui(
         };
         let mut inner = BoxLayout::new(Orientation::Vertical, 4, 8);
         let mut extra_widgets: Vec<u64> = Vec::new();
+        if id == "help" {
+            // The Help panel is a list of real help documents, not a static text block: each row
+            // opens the same content the commands and catalog produce.
+            let topics = vec![
+                tr("ui.help.welcome"),
+                tr("ui.help.shortcuts"),
+                tr("ui.help.commands"),
+                tr("ui.help.controls"),
+            ];
+            set_list_rows(list_id, topics);
+            help_list = Some(list_id);
+        }
+        if id == "search" {
+            // The Search panel queries the documents the editor already has open; it is not a
+            // second index and cannot show a file the window has not read.
+            let field = panel.new_line_edit("", rect.0 + 8, rect.1 + 30, rect.2 - 16, 26);
+            field.set_placeholder(&tr("ui.placeholder.search"));
+            watch_focus(field.raw_id(), "search field");
+            inner.add_widget(field.raw_id(), 0);
+            inner.set_constraints(field.raw_id(), LayoutConstraints::new(26, Some(26)));
+            inner.set_size_policy(field.raw_id(), SizePolicy::Fixed);
+            extra_widgets.push(field.raw_id());
+            search_field = Some(field.raw_id());
+        }
+        if id == "terminal" {
+            // The field is the terminal's stdin: Return sends the line to the shell and clears it.
+            let field = panel.new_line_edit("", rect.0 + 8, rect.1 + 30, rect.2 - 16, 26);
+            field.set_placeholder(&tr("ui.placeholder.terminal"));
+            watch_focus(field.raw_id(), "terminal input");
+            inner.add_widget(field.raw_id(), 0);
+            inner.set_constraints(field.raw_id(), LayoutConstraints::new(26, Some(26)));
+            inner.set_size_policy(field.raw_id(), SizePolicy::Fixed);
+            extra_widgets.push(field.raw_id());
+            terminal_field = Some(field.raw_id());
+        }
+        if id == "run" {
+            // The program is the path the person names; this build does not guess an artifact path
+            // from a package name. The field is a real `LineEdit` and its text is the run config.
+            let field = panel.new_line_edit("", rect.0 + 8, rect.1 + 30, rect.2 - 16, 26);
+            field.set_placeholder(&tr("ui.placeholder.program"));
+            watch_focus(field.raw_id(), "run program");
+            inner.add_widget(field.raw_id(), 0);
+            inner.set_constraints(field.raw_id(), LayoutConstraints::new(26, Some(26)));
+            inner.set_size_policy(field.raw_id(), SizePolicy::Fixed);
+            extra_widgets.push(field.raw_id());
+            run_field = Some(field.raw_id());
+        }
         if id == "widgets" {
             // The search field is the catalog's own search, not a second filter: typing narrows the
             // same 270-row contract list an empty query shows.
@@ -4345,6 +9472,18 @@ pub(super) fn workbench_gui(
             inner.set_size_policy(field.raw_id(), SizePolicy::Fixed);
             extra_widgets.push(field.raw_id());
             widgets_search = Some(field.raw_id());
+        }
+        if id == "source" {
+            // The filter narrows the rows the last refresh read; it never re-requests symbols, so
+            // typing costs one list rebuild and no server round trip.
+            let field = panel.new_line_edit("", rect.0 + 8, rect.1 + 30, rect.2 - 16, 26);
+            field.set_placeholder(&tr("ui.placeholder.source-filter"));
+            watch_focus(field.raw_id(), "source outline filter");
+            inner.add_widget(field.raw_id(), 0);
+            inner.set_constraints(field.raw_id(), LayoutConstraints::new(26, Some(26)));
+            inner.set_size_policy(field.raw_id(), SizePolicy::Fixed);
+            extra_widgets.push(field.raw_id());
+            source_field = Some(field.raw_id());
         }
         if list_id != 0 {
             inner.add_widget(list_id, 1);
@@ -4626,7 +9765,12 @@ pub(super) fn workbench_gui(
             let gallery = handle
                 .mount_widget_by_name(
                     "image_gallery",
-                    Rect::new(rect.0 + 8, rect.1 + 30, rect.2 - 16, rect.3 - 58),
+                    Rect::new(
+                        rect.0 + 8,
+                        rect.1 + 30,
+                        rect.2 - 16,
+                        rect.3.saturating_sub(58).max(24),
+                    ),
                     "",
                 )
                 .expect("the library registers the image gallery widget");
@@ -4707,7 +9851,12 @@ pub(super) fn workbench_gui(
             let curve = handle
                 .mount_widget_by_name(
                     "bezier_curve_editor",
-                    Rect::new(rect.0 + 8, rect.1 + 94, rect.2 - 16, rect.3 - 140),
+                    Rect::new(
+                        rect.0 + 8,
+                        rect.1 + 94,
+                        rect.2 - 16,
+                        rect.3.saturating_sub(140).max(40),
+                    ),
                     "",
                 )
                 .expect("the library registers the bezier curve editor");
@@ -4803,9 +9952,19 @@ pub(super) fn workbench_gui(
             "outline" => outline_items.clone(),
             "widgets" => widget_rows.clone(),
             "messages" => vec![tr("ui.status.ready")],
+            "project" => project_items.clone(),
+            "dependencies" => dependency_items.clone(),
+            "actions" => action_items.clone(),
+            "application" => application_items.clone(),
             // The Events, Data and Pages lists are filled from their models once the controls exist;
             // the Inspector and Data panels own a property grid instead of a list.
-            "events" | "data" | "pages" | "inspector" | "assets" | "theme" => Vec::new(),
+            "events" | "data" | "pages" | "inspector" | "assets" | "theme" | "help" | "search"
+            | "inspection" | "vcs" | "breakpoints" | "stack" | "variables" | "notifications"
+            | "history" | "extensions" | "tests" | "tasks" | "build" | "run" | "terminal"
+            | "preview" | "hot" | "states" | "items" | "components" | "timeline" | "ai"
+            | "source" => Vec::new(),
+            "environments" => environment_rows(),
+            "targets" => target_rows(),
             _ => vec![tr("ui.status.no-problems")],
         };
         for item in items {
@@ -4816,11 +9975,18 @@ pub(super) fn workbench_gui(
         if id == "outline" {
             outline_list = Some(list_id);
         }
+        if id == "source" {
+            source_list = Some(list_id);
+        }
         if id == "widgets" {
             widgets_list = Some(list_id);
         }
+        if id == "search" {
+            search_list = Some(list_id);
+        }
         if let Ok(mut gui) = gui.lock() {
             gui.placements.push((panel.raw_id(), area));
+            gui.panel_areas.insert(id.to_owned(), area);
             let entry = gui.panel_widgets.entry(id.to_owned()).or_default();
             entry.push(panel.raw_id());
             entry.push(list_id);
@@ -4828,6 +9994,84 @@ pub(super) fn workbench_gui(
             if id == "messages" {
                 gui.messages_list = list_id;
                 gui.messages = vec![tr("ui.status.ready")];
+            }
+            if id == "inspection" {
+                gui.inspection_list = list_id;
+            }
+            if id == "vcs" {
+                gui.vcs_list = list_id;
+            }
+            if id == "project" {
+                gui.project_list = list_id;
+            }
+            if id == "dependencies" {
+                gui.dependencies_list = list_id;
+            }
+            if id == "breakpoints" {
+                gui.breakpoints_list = list_id;
+            }
+            if id == "stack" {
+                gui.stack_list = list_id;
+            }
+            if id == "variables" {
+                gui.variables_list = list_id;
+            }
+            if id == "actions" {
+                gui.actions_list = list_id;
+            }
+            if id == "notifications" {
+                gui.notifications_list = list_id;
+            }
+            if id == "application" {
+                gui.application_list = list_id;
+            }
+            if id == "history" {
+                gui.history_list = list_id;
+            }
+            if id == "extensions" {
+                gui.extensions_list = list_id;
+            }
+            if id == "tests" {
+                gui.tests_list = list_id;
+            }
+            if id == "tasks" {
+                gui.tasks_list = list_id;
+            }
+            if id == "build" {
+                gui.build_list = list_id;
+            }
+            if id == "run" {
+                gui.run_list = list_id;
+            }
+            if id == "terminal" {
+                gui.terminal_list = list_id;
+            }
+            if id == "preview" {
+                gui.preview_list = list_id;
+            }
+            if id == "hot" {
+                gui.hot_list = list_id;
+            }
+            if id == "states" {
+                gui.states_list = list_id;
+            }
+            if id == "items" {
+                gui.items_list = list_id;
+            }
+            if id == "components" {
+                gui.components_list = list_id;
+            }
+            if id == "timeline" {
+                gui.timeline_list = list_id;
+            }
+            if id == "ai" {
+                gui.ai_list = list_id;
+            }
+            if id == "source" {
+                gui.source_list = list_id;
+            }
+            if id == "layout" {
+                gui.layout_list = list_id;
             }
         }
     }
@@ -4858,6 +10102,442 @@ pub(super) fn workbench_gui(
                 {
                     warn_failure("the diagnostics context menu could not open", payload);
                 }
+            }
+        });
+    }
+
+    // The Notifications list's context menu: dismiss the row under the pointer.
+    let notifications_list = match gui.lock() {
+        Ok(gui) => gui.notifications_list,
+        Err(_) => 0,
+    };
+    if notifications_list != 0 {
+        let notifications_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let dismiss = handle.new_menu_item(
+            &notifications_menu,
+            &tr("ui.context.notification.dismiss"),
+            None,
+        );
+        {
+            let state = Arc::clone(&gui);
+            notifications_menu.on_triggered(move |_label| {
+                if let Ok(mut gui) = state.lock()
+                    && let Some(index) = gui.notification_row
+                    && gui.notifications.dismiss(index)
+                {
+                    refresh_notifications(&mut gui);
+                }
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.notifications_menu = notifications_menu.raw_id();
+            gui.translatable.push(Translatable {
+                id: dismiss.raw_id(),
+                key: "ui.context.notification.dismiss".to_owned(),
+                kind: LabelKind::Text,
+            });
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(
+            notifications_list,
+            "context_menu_requested",
+            move |payload| {
+                let Some((x, y)) = point_of(payload) else {
+                    return;
+                };
+                let Some(index) = list_row_at(notifications_list, x, y) else {
+                    return;
+                };
+                if let Ok(mut gui) = menu_gui.lock() {
+                    gui.notification_row = Some(index);
+                    let _ = rust_widgets::list_box_set_current_index(notifications_list, index);
+                    if gui.notifications_menu != 0
+                        && !MenuHandle::from_raw(gui.notifications_menu).open_at(
+                            x,
+                            y,
+                            Rect::new(0, 0, WIDTH, HEIGHT),
+                        )
+                    {
+                        warn_failure("the notifications context menu could not open", payload);
+                    }
+                }
+            },
+        );
+    }
+
+    // The Version-control list's context menu: re-read Git now. The panel reads on show, so this is
+    // the way to refresh a panel that stayed open while the repository changed (principle #22: a
+    // stale read must not pass itself off as the current one).
+    let vcs_list = match gui.lock() {
+        Ok(gui) => gui.vcs_list,
+        Err(_) => 0,
+    };
+    if vcs_list != 0 {
+        let vcs_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let refresh = handle.new_menu_item(&vcs_menu, &tr("ui.context.vcs.refresh"), None);
+        {
+            let state = Arc::clone(&gui);
+            vcs_menu.on_triggered(move |_label| {
+                if let Ok(mut gui) = state.lock() {
+                    gui.message = vcs_refresh(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.vcs_menu = vcs_menu.raw_id();
+            gui.translatable.push(Translatable {
+                id: refresh.raw_id(),
+                key: "ui.context.vcs.refresh".to_owned(),
+                kind: LabelKind::Text,
+            });
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(vcs_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            if let Ok(gui) = menu_gui.lock()
+                && gui.vcs_menu != 0
+                && !MenuHandle::from_raw(gui.vcs_menu).open_at(x, y, Rect::new(0, 0, WIDTH, HEIGHT))
+            {
+                warn_failure("the version-control context menu could not open", payload);
+            }
+        });
+    }
+
+    // The Tests list's context menu: run (or re-run) the suite on a worker thread.
+    let tests_list = match gui.lock() {
+        Ok(gui) => gui.tests_list,
+        Err(_) => 0,
+    };
+    if tests_list != 0 {
+        let tests_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let mut tests_actions: BTreeMap<String, String> = BTreeMap::new();
+        for (key, action) in [
+            ("ui.context.tests.run", "run"),
+            ("ui.context.tests.run-failed", "run-failed"),
+            ("ui.context.tests.stop", "stop"),
+        ] {
+            let label = tr(key);
+            let item = handle.new_menu_item(&tests_menu, &label, None);
+            tests_actions.insert(label, action.to_owned());
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: item.raw_id(),
+                    key: key.to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
+        }
+        {
+            let state = Arc::clone(&gui);
+            tests_menu.on_triggered(move |label| {
+                let Some(action) = tests_actions.get(&label).cloned() else {
+                    return;
+                };
+                if let Ok(mut gui) = state.lock() {
+                    gui.message = match action.as_str() {
+                        "run" => tests_run(&mut gui),
+                        "run-failed" => tests_run_failed(&mut gui),
+                        "stop" => tests_stop(&mut gui),
+                        _ => return,
+                    };
+                    update_status(&gui);
+                }
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.tests_menu = tests_menu.raw_id();
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(tests_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            if let Ok(gui) = menu_gui.lock()
+                && gui.tests_menu != 0
+                && !MenuHandle::from_raw(gui.tests_menu).open_at(
+                    x,
+                    y,
+                    Rect::new(0, 0, WIDTH, HEIGHT),
+                )
+            {
+                warn_failure("the tests context menu could not open", payload);
+            }
+        });
+    }
+
+    // The Build-output list's context menu: build, or cancel the running build.
+    let build_list = match gui.lock() {
+        Ok(gui) => gui.build_list,
+        Err(_) => 0,
+    };
+    if build_list != 0 {
+        let build_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let mut build_actions: BTreeMap<String, String> = BTreeMap::new();
+        for (key, action) in [
+            ("ui.context.build.run", "run"),
+            ("ui.context.build.check", "check"),
+            ("ui.context.build.rebuild", "rebuild"),
+            ("ui.context.build.clean", "clean"),
+            ("ui.context.build.cancel", "cancel"),
+            ("ui.context.build.copy-all", "copy-all"),
+            ("ui.context.build.first-error", "first-error"),
+        ] {
+            let label = tr(key);
+            let item = handle.new_menu_item(&build_menu, &label, None);
+            build_actions.insert(label, action.to_owned());
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: item.raw_id(),
+                    key: key.to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
+        }
+        {
+            let state = Arc::clone(&gui);
+            let actions = build_actions.clone();
+            build_menu.on_triggered(move |label| {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                if let Ok(mut gui) = state.lock() {
+                    match action.as_str() {
+                        // One submission, whether it arrives from this menu or from `build.run`.
+                        "run" => {
+                            gui.message =
+                                start_build(&mut gui, crate::app::build::compile::Action::Build)
+                        }
+                        "check" => {
+                            gui.message =
+                                start_build(&mut gui, crate::app::build::compile::Action::Check)
+                        }
+                        "rebuild" => {
+                            gui.message =
+                                start_build(&mut gui, crate::app::build::compile::Action::Rebuild)
+                        }
+                        "clean" => {
+                            gui.message =
+                                start_build(&mut gui, crate::app::build::compile::Action::Clean)
+                        }
+                        "cancel" => gui.message = build_cancel(&mut gui),
+                        "copy-all" => gui.message = build_copy_output(&mut gui),
+                        "first-error" => gui.message = build_locate_first_error(&mut gui),
+                        _ => {}
+                    }
+                    update_status(&gui);
+                }
+                schedule_build_poll(&state);
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.build_menu = build_menu.raw_id();
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(build_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            if let Ok(gui) = menu_gui.lock()
+                && gui.build_menu != 0
+                && !MenuHandle::from_raw(gui.build_menu).open_at(
+                    x,
+                    y,
+                    Rect::new(0, 0, WIDTH, HEIGHT),
+                )
+            {
+                warn_failure("the build context menu could not open", payload);
+            }
+        });
+    }
+
+    // The Application-output list's context menu: start the named program, or stop the running one.
+    let run_list = match gui.lock() {
+        Ok(gui) => gui.run_list,
+        Err(_) => 0,
+    };
+    if run_list != 0 {
+        let run_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let mut run_actions: BTreeMap<String, String> = BTreeMap::new();
+        for (key, action) in [
+            ("ui.context.run.start", "start"),
+            ("ui.context.run.stop", "stop"),
+            ("ui.context.run.clear", "clear"),
+            ("ui.context.run.copy-all", "copy-all"),
+        ] {
+            let label = tr(key);
+            let item = handle.new_menu_item(&run_menu, &label, None);
+            run_actions.insert(label, action.to_owned());
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: item.raw_id(),
+                    key: key.to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
+        }
+        {
+            let state = Arc::clone(&gui);
+            let actions = run_actions.clone();
+            run_menu.on_triggered(move |label| {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                if let Ok(mut gui) = state.lock() {
+                    match action.as_str() {
+                        "start" => gui.message = run_panel_start(&mut gui),
+                        "stop" => gui.message = run_panel_stop(&mut gui),
+                        "clear" => gui.message = run_panel_clear(&mut gui),
+                        "copy-all" => gui.message = run_panel_copy(&mut gui),
+                        _ => {}
+                    }
+                    update_status(&gui);
+                }
+                schedule_run_poll(&state);
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.run_menu = run_menu.raw_id();
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(run_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            if let Ok(gui) = menu_gui.lock()
+                && gui.run_menu != 0
+                && !MenuHandle::from_raw(gui.run_menu).open_at(x, y, Rect::new(0, 0, WIDTH, HEIGHT))
+            {
+                warn_failure("the run context menu could not open", payload);
+            }
+        });
+    }
+
+    // The Terminal list's context menu: start a shell session, or stop it.
+    let terminal_list = match gui.lock() {
+        Ok(gui) => gui.terminal_list,
+        Err(_) => 0,
+    };
+    if terminal_list != 0 {
+        let terminal_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let mut terminal_actions: BTreeMap<String, String> = BTreeMap::new();
+        for (key, action) in [
+            ("ui.context.terminal.start", "start"),
+            ("ui.context.terminal.stop", "stop"),
+        ] {
+            let label = tr(key);
+            let item = handle.new_menu_item(&terminal_menu, &label, None);
+            terminal_actions.insert(label, action.to_owned());
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: item.raw_id(),
+                    key: key.to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
+        }
+        {
+            let state = Arc::clone(&gui);
+            let actions = terminal_actions.clone();
+            terminal_menu.on_triggered(move |label| {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                if let Ok(mut gui) = state.lock() {
+                    match action.as_str() {
+                        "start" => gui.message = terminal_start(&mut gui),
+                        "stop" => gui.message = terminal_stop(&mut gui),
+                        _ => {}
+                    }
+                    update_status(&gui);
+                }
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.terminal_menu = terminal_menu.raw_id();
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(terminal_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            if let Ok(gui) = menu_gui.lock()
+                && gui.terminal_menu != 0
+                && !MenuHandle::from_raw(gui.terminal_menu).open_at(
+                    x,
+                    y,
+                    Rect::new(0, 0, WIDTH, HEIGHT),
+                )
+            {
+                warn_failure("the terminal context menu could not open", payload);
+            }
+        });
+    }
+
+    // The Preview list's context menu: start or stop the preview service (no process is spawned).
+    let preview_list = match gui.lock() {
+        Ok(gui) => gui.preview_list,
+        Err(_) => 0,
+    };
+    if preview_list != 0 {
+        let preview_menu = handle.new_menu(&bar, "", 0, 0, 0, 0);
+        let mut preview_actions: BTreeMap<String, String> = BTreeMap::new();
+        for (key, action) in [
+            ("ui.context.preview.start", "start"),
+            ("ui.context.preview.stop", "stop"),
+        ] {
+            let label = tr(key);
+            let item = handle.new_menu_item(&preview_menu, &label, None);
+            preview_actions.insert(label, action.to_owned());
+            if let Ok(mut gui) = gui.lock() {
+                gui.translatable.push(Translatable {
+                    id: item.raw_id(),
+                    key: key.to_owned(),
+                    kind: LabelKind::Text,
+                });
+            }
+        }
+        {
+            let state = Arc::clone(&gui);
+            let actions = preview_actions.clone();
+            preview_menu.on_triggered(move |label| {
+                let Some(action) = actions.get(&label).cloned() else {
+                    return;
+                };
+                if let Ok(mut gui) = state.lock() {
+                    match action.as_str() {
+                        "start" => {
+                            gui.message = preview_start(&mut gui);
+                        }
+                        "stop" => {
+                            gui.message = preview_stop(&mut gui);
+                        }
+                        _ => {}
+                    }
+                    refresh_preview(&mut gui);
+                    update_status(&gui);
+                }
+            });
+        }
+        if let Ok(mut gui) = gui.lock() {
+            gui.preview_menu = preview_menu.raw_id();
+        }
+        let menu_gui = Arc::clone(&gui);
+        subscribe_string(preview_list, "context_menu_requested", move |payload| {
+            let Some((x, y)) = point_of(payload) else {
+                return;
+            };
+            if let Ok(gui) = menu_gui.lock()
+                && gui.preview_menu != 0
+                && !MenuHandle::from_raw(gui.preview_menu).open_at(
+                    x,
+                    y,
+                    Rect::new(0, 0, WIDTH, HEIGHT),
+                )
+            {
+                warn_failure("the preview context menu could not open", payload);
             }
         });
     }
@@ -5087,6 +10767,76 @@ pub(super) fn workbench_gui(
             }
         });
     }
+    if let Some(list_id) = help_list {
+        let help_gui = Arc::clone(&gui);
+        subscribe_index(list_id, "item_activated", move |index| {
+            if let Ok(mut gui) = help_gui.lock() {
+                let action = match index {
+                    0 => "help:welcome",
+                    1 => "help:shortcuts",
+                    2 => "help:commands",
+                    _ => "help:controls",
+                };
+                apply_action(&mut gui, action);
+            }
+        });
+    }
+    if let Some(field_id) = search_field {
+        if let Ok(mut gui) = gui.lock() {
+            gui.search_field = field_id;
+        }
+        let search_gui = Arc::clone(&gui);
+        subscribe_string(field_id, "text_changed", move |query| {
+            if let Ok(mut gui) = search_gui.lock() {
+                run_search(&mut gui, query);
+            }
+        });
+    }
+    if let Some(field_id) = run_field {
+        if let Ok(mut gui) = gui.lock() {
+            gui.run_field = field_id;
+        }
+        let run_gui = Arc::clone(&gui);
+        subscribe_string(field_id, "text_changed", move |text| {
+            if let Ok(mut gui) = run_gui.lock() {
+                gui.run_program = text.to_owned();
+            }
+        });
+    }
+    if let Some(field_id) = terminal_field {
+        if let Ok(mut gui) = gui.lock() {
+            gui.terminal_field = field_id;
+        }
+        let terminal_gui = Arc::clone(&gui);
+        subscribe_string(field_id, "text_changed", move |text| {
+            if let Ok(mut gui) = terminal_gui.lock() {
+                gui.terminal_input = text.to_owned();
+            }
+        });
+        let enter_gui = Arc::clone(&gui);
+        subscribe_unit(field_id, "return_pressed", move || {
+            if let Ok(mut gui) = enter_gui.lock() {
+                let line = format!("{}\n", gui.terminal_input);
+                if gui.terminal.write(&line) {
+                    gui.terminal_input.clear();
+                    if gui.terminal_field != 0 {
+                        rust_widgets::app::LineEditHandle::from_raw(gui.terminal_field).clear();
+                    }
+                }
+            }
+        });
+    }
+    if let Some(list_id) = search_list {
+        if let Ok(mut gui) = gui.lock() {
+            gui.search_list = list_id;
+        }
+        let search_gui = Arc::clone(&gui);
+        subscribe_index(list_id, "item_activated", move |index| {
+            if let Ok(mut gui) = search_gui.lock() {
+                activate_search_hit(&mut gui, index as usize);
+            }
+        });
+    }
     if let Some(field_id) = widgets_search {
         if let Ok(mut gui) = gui.lock() {
             gui.widgets_search = field_id;
@@ -5098,6 +10848,31 @@ pub(super) fn workbench_gui(
         subscribe_string(field_id, "text_changed", move |query| {
             if let Ok(mut gui) = search_gui.lock() {
                 filter_widgets(&mut gui, query);
+            }
+        });
+    }
+    if let Some(field_id) = source_field {
+        if let Ok(mut gui) = gui.lock() {
+            gui.source_field = field_id;
+        }
+        let filter_gui = Arc::clone(&gui);
+        subscribe_string(field_id, "text_changed", move |query| {
+            if let Ok(mut gui) = filter_gui.lock() {
+                gui.source_filter = query.to_owned();
+                let list = gui.source_list;
+                let filter = gui.source_filter.clone();
+                let rows = gui.source.render(&filter);
+                set_list_rows(list, rows);
+            }
+        });
+    }
+    // Activating a source-outline row is a jump, not a selection: the row's symbol is where the
+    // caret goes, and moving the highlight with the arrow keys must not move it.
+    if let Some(list_id) = source_list {
+        let list_gui = Arc::clone(&gui);
+        subscribe_index(list_id, "item_activated", move |index| {
+            if let Ok(mut gui) = list_gui.lock() {
+                jump_to_source(&mut gui, index as usize);
             }
         });
     }
@@ -5547,8 +11322,10 @@ pub(super) fn workbench_gui(
         gui.debug_rows = debug_row_labels.clone();
         gui.placements.push((
             debug_panel.raw_id(),
-            Area::RightPanel { index: 2, count: 3 },
+            Area::RightPanel { index: 3, count: 4 },
         ));
+        gui.panel_areas
+            .insert("debug".to_owned(), Area::RightPanel { index: 3, count: 4 });
         let entry = gui.panel_widgets.entry("debug".to_owned()).or_default();
         entry.extend([
             debug_panel.raw_id(),
@@ -5631,7 +11408,16 @@ pub(super) fn workbench_gui(
         }
         {
             let gui = Arc::clone(&gui);
+            // The guard is read *before* the lock: `set_current_index` emits while the caller
+            // already holds the `Gui`, so asking the `Gui` for the flag would deadlock first.
+            let syncing = match gui.lock() {
+                Ok(gui) => Arc::clone(&gui.syncing_editors),
+                Err(poisoned) => Arc::clone(&poisoned.into_inner().syncing_editors),
+            };
             subscribe_index(tab_strip.raw_id(), "current_changed", move |index| {
+                if syncing.load(Ordering::SeqCst) {
+                    return;
+                }
                 if let Ok(mut gui) = gui.lock() {
                     let Some(id) = gui.groups.group_ids().get(group).copied() else {
                         return;
@@ -5837,7 +11623,7 @@ pub(super) fn workbench_gui(
                     canvas.mouse_moved.connect(move |point: Arc<Point>| {
                         let state = Arc::clone(&gui);
                         if let Ok(mut gui) = state.lock()
-                            && let Some(design) = canvas_point(gui.canvas_panel, point.x, point.y)
+                            && let Some(design) = canvas_point(&gui, point.x, point.y)
                         {
                             let previous = gui.pointer;
                             gui.pointer = Some(design);
@@ -5877,7 +11663,7 @@ pub(super) fn workbench_gui(
                 return;
             };
             if let Ok(mut gui) = gui.lock() {
-                let Some(design) = canvas_point(gui.canvas_panel, x, y) else {
+                let Some(design) = canvas_point(&gui, x, y) else {
                     return;
                 };
                 let Some(node) = gui.scene.hit(design.0, design.1) else {
@@ -6017,6 +11803,111 @@ pub(super) fn workbench_gui(
             if let Ok(mut gui) = smoke_gui.lock() {
                 apply_action(&mut gui, "toggle:outline");
                 apply_action(&mut gui, "toggle:events");
+                apply_action(&mut gui, "toggle:states");
+                apply_action(&mut gui, "toggle:items");
+                apply_action(&mut gui, "toggle:components");
+                apply_action(&mut gui, "toggle:ai");
+                apply_action(&mut gui, "toggle:source");
+                apply_action(&mut gui, "toggle:layout");
+                // A planned command must answer honestly instead of "resolved".
+                run_command(&mut gui, "file.save");
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!("workbench smoke: planned command message {:?}", gui.message),
+                );
+                // A handled command runs, and says what it did (no history here, so it says that).
+                run_command(&mut gui, "edit.undo");
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!("workbench smoke: undo command message {:?}", gui.message),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: layout panel shown {}",
+                        gui.panels
+                            .layout()
+                            .shown()
+                            .iter()
+                            .any(|id| id.as_str() == "layout")
+                    ),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!("workbench smoke: ai panel journal {:?}", gui.ai_journal),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: source outline document {:?}",
+                        gui.source.document()
+                    ),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: source outline server configured {}, failure {:?}",
+                        gui.source.is_configured(),
+                        gui.source.failure()
+                    ),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: source outline symbols {}",
+                        gui.source.symbol_count()
+                    ),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: source outline mapping {:?}",
+                        gui.source.mapping()
+                    ),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: source outline associated symbols {}",
+                        gui.source.associated_symbols()
+                    ),
+                );
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: source outline node rows {}",
+                        gui.source.node_count()
+                    ),
+                );
+                if let Some(row) = gui.source.first_target() {
+                    jump_to_source(&mut gui, row);
+                    crate::host::log::emit(
+                        crate::host::log::Level::Info,
+                        "app::run::workbench",
+                        &format!(
+                            "workbench smoke: source outline jumped row {row}: {}",
+                            gui.message
+                        ),
+                    );
+                }
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: states panel source {:?}",
+                        gui.states_source
+                    ),
+                );
                 apply_action(&mut gui, "group:split");
                 apply_action(&mut gui, "layout:save");
                 apply_action(&mut gui, "group:next");
@@ -6217,7 +12108,11 @@ fn schedule_menu(gui: Arc<Mutex<Gui>>, actions: Arc<BTreeMap<u64, String>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{onboarding_text, sample_asset_images};
+    use super::{
+        control_reference_text, dependency_rows, environment_rows, find_hits, onboarding_text,
+        project_rows, sample_asset_images, shortcut_reference_text, target_rows, tr,
+    };
+    use crate::app::canvas::widget_catalog::Catalog;
     use crate::app::commands::command::built_in;
 
     #[test]
@@ -6227,6 +12122,122 @@ mod tests {
         for asset in &assets {
             assert!(asset.image.is_some(), "{} has no pixels", asset.path);
             assert_eq!((asset.width, asset.height), (96, 72));
+        }
+    }
+
+    #[test]
+    fn search_finds_literal_ranges_per_line() {
+        let text = "alpha\nbeta alpha\n";
+        let mut hits = Vec::new();
+        let mut labels = Vec::new();
+        find_hits("demo.rs", text, "alpha", 10, &mut hits, &mut labels);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].document, "demo.rs");
+        assert_eq!(hits[0].offset, 0);
+        assert_eq!(hits[1].offset, 11);
+        assert_eq!(hits[1].length, 5);
+        assert!(labels[1].contains("demo.rs:2:"), "{labels:?}");
+    }
+
+    #[test]
+    fn the_help_references_are_built_from_live_tables() {
+        let shortcuts = shortcut_reference_text();
+        assert!(shortcuts.contains("edit.undo"), "{shortcuts}");
+
+        let catalog = Catalog::from_host_contract("desktop").expect("the host catalog");
+        let controls = control_reference_text(Some(&catalog));
+        assert!(controls.contains("button"), "{controls}");
+        assert!(
+            control_reference_text(None).contains(&tr("ui.help.controls-unavailable")),
+            "the unavailable message is used when there is no catalog"
+        );
+    }
+
+    #[test]
+    fn the_environments_panel_reports_local_facts_and_tools() {
+        let rows = environment_rows();
+        // Four host facts plus the five local desktop tools; nothing else is claimed.
+        assert_eq!(rows.len(), 4 + 5, "{rows:?}");
+        for key in [
+            "ui.environment.backend",
+            "ui.environment.platform",
+            "ui.environment.dependency",
+            "ui.environment.language",
+        ] {
+            assert!(
+                rows.iter()
+                    .any(|row| row.starts_with(&format!("{}: ", tr(key)))),
+                "{key} is not reported: {rows:?}"
+            );
+        }
+        assert!(
+            rows.iter().all(|row| !row.is_empty()),
+            "an empty row is not a fact: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(crate::probe::DEPENDENCY_VERSION)),
+            "the pinned dependency is reported: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn the_targets_panel_reports_the_six_required_facts() {
+        let rows = target_rows();
+        assert_eq!(rows.len(), 6, "{rows:?}");
+        for key in [
+            "ui.target.profiles",
+            "ui.target.target",
+            "ui.target.toolchain",
+            "ui.target.sdk",
+            "ui.target.devices",
+            "ui.target.certification",
+        ] {
+            assert!(
+                rows.iter()
+                    .any(|row| row.starts_with(&format!("{}: ", tr(key)))),
+                "{key} is not reported: {rows:?}"
+            );
+        }
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(&tr("ui.target.verified"))),
+            "the certification level is stated: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn the_project_panels_say_when_no_project_is_open() {
+        let none = tr("ui.project.none");
+        assert_eq!(project_rows(&None), vec![none.clone()]);
+        assert_eq!(dependency_rows(&None), vec![none]);
+    }
+
+    #[test]
+    fn every_panel_has_its_own_identified_title_key() {
+        use crate::app::locale::vocabulary::WINDOW_KEYS;
+        use std::collections::BTreeSet;
+
+        // The built-ins named by `panel_key`'s other arms, plus every extra panel the window adds.
+        let ids = ["messages", "problems", "outline", "inspector"]
+            .into_iter()
+            .chain(super::EXTRA_PANELS.iter().map(|(id, _, _)| *id));
+        let mut seen = BTreeSet::new();
+        let mut keys = BTreeSet::new();
+        for id in ids {
+            assert!(seen.insert(id), "{id} is registered twice");
+            let key = super::panel_key(id);
+            if id != "outline" {
+                assert_ne!(
+                    key, "ui.panel.outline",
+                    "{id} falls back to the outline key, so its title would be wrong"
+                );
+            }
+            assert!(
+                WINDOW_KEYS.contains(&key),
+                "{id} names {key}, which is not an identified window key"
+            );
+            assert!(keys.insert(key), "{key} is the title of two panels");
         }
     }
 
@@ -6242,5 +12253,252 @@ mod tests {
                 command.id()
             );
         }
+    }
+    #[test]
+    fn the_window_handles_exactly_the_registered_commands() {
+        use std::collections::BTreeSet;
+
+        let registry = crate::app::commands::command::built_in();
+        let registered: BTreeSet<String> = registry
+            .commands()
+            .map(|command| command.id().to_string())
+            .collect();
+        let handled: BTreeSet<String> = super::HANDLED_COMMANDS
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect();
+        assert_eq!(
+            handled, registered,
+            "a registered command the window cannot run is a claim it cannot keep, and a handler \
+             for an unregistered id cannot be reached through the registry"
+        );
+    }
+
+    #[test]
+    fn every_command_the_menu_exposes_has_a_handler_in_this_window() {
+        for menu in crate::app::commands::menu::built_in() {
+            // `commands()` answers `(title, command)`.
+            for (title, command) in menu.commands() {
+                assert!(
+                    super::HANDLED_COMMANDS.contains(&command.as_str()),
+                    "{title:?} binds {command}, which this window cannot run"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_default_shortcut_is_handled_or_named_by_the_menu_ledger() {
+        for binding in crate::app::commands::shortcuts::built_in().bindings() {
+            let command = binding.command();
+            let handled = super::HANDLED_COMMANDS.contains(&command);
+            let planned = crate::app::commands::menu::planned_task(command);
+            assert!(
+                handled || planned.is_some(),
+                "{command} is bound to a key but is neither handled nor in the menu ledger"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unhandled_command_names_the_task_that_will_implement_it() {
+        assert_eq!(
+            crate::app::commands::menu::planned_task("file.new-project").as_deref(),
+            Some("T02.02")
+        );
+        assert!(
+            crate::app::commands::menu::planned_task("build.run").is_none(),
+            "an implemented command is not a planned leaf"
+        );
+        assert!(
+            crate::app::commands::menu::planned_task("edit.undo").is_none(),
+            "undo is implemented, so it is a command leaf"
+        );
+        assert_eq!(
+            crate::app::commands::menu::planned_task("file.close"),
+            None,
+            "a command leaf is not a planned leaf"
+        );
+    }
+
+    #[test]
+    fn every_ledger_panel_with_a_host_is_shown_by_the_one_command() {
+        for panel in crate::app::shell::panels::REQUIRED_PANELS {
+            let Some(host) = panel.host_id() else {
+                continue;
+            };
+            assert_eq!(
+                super::panel_action(host),
+                format!("command:view.panel-show?panel={}", panel.id()),
+                "{host} does not bind the panel command"
+            );
+        }
+        // The built-in Messages list is not a §2.2 panel, so it keeps the window's own toggle.
+        assert_eq!(super::panel_action("messages"), "toggle:messages");
+    }
+
+    #[test]
+    fn the_panel_command_offers_exactly_the_ledger_ids() {
+        use crate::app::commands::command::{CommandId, ParamType, built_in};
+
+        let registry = built_in();
+        let id = CommandId::parse("view.panel-show").expect("the id follows 域.动作");
+        let command = registry.command(&id).expect("the command is registered");
+        let ParamType::Choice(choices) = command.params()[0].kind() else {
+            panic!("the panel parameter is a choice");
+        };
+        let ledger: Vec<String> = crate::app::shell::panels::REQUIRED_PANELS
+            .iter()
+            .map(|panel| panel.id().to_owned())
+            .collect();
+        assert_eq!(choices, &ledger);
+    }
+
+    #[test]
+    fn a_quick_open_query_resolves_an_exact_path_or_the_best_fuzzy_match() {
+        let entries = vec![
+            "pages/main.json".to_owned(),
+            "src/generated/ui_default.rs".to_owned(),
+            "src/generated/ui_stripped.rs".to_owned(),
+        ];
+        assert_eq!(
+            super::resolve_open_path(&entries, "pages/main.json").as_deref(),
+            Some("pages/main.json")
+        );
+        assert_eq!(
+            super::resolve_open_path(&entries, "  pages/main.json  ").as_deref(),
+            Some("pages/main.json")
+        );
+        assert_eq!(
+            super::resolve_open_path(&entries, "ui_stripped").as_deref(),
+            Some("src/generated/ui_stripped.rs")
+        );
+        assert_eq!(super::resolve_open_path(&entries, "zzz"), None);
+        assert_eq!(super::resolve_open_path(&entries, "   "), None);
+    }
+
+    #[test]
+    fn the_go_to_line_field_accepts_line_or_line_column() {
+        assert_eq!(super::parse_goto("42"), Ok((42, None)));
+        assert_eq!(super::parse_goto("42:7"), Ok((42, Some(7))));
+        assert_eq!(super::parse_goto("  42 : 7  "), Ok((42, Some(7))));
+        assert!(super::parse_goto("0").is_err(), "lines are 1-based");
+        assert!(super::parse_goto("1:0").is_err(), "columns are 1-based");
+        assert!(super::parse_goto("x").is_err());
+        assert!(super::parse_goto("42:x").is_err());
+        assert!(super::parse_goto("").is_err());
+    }
+
+    #[test]
+    fn a_workspace_symbol_query_prefers_an_exact_name_then_the_best_fuzzy_match() {
+        use crate::app::run::workbench_outline::WorkspaceSymbol;
+
+        let symbols = vec![
+            WorkspaceSymbol {
+                name: "build_page".to_owned(),
+                uri: "file:///src/a.rs".to_owned(),
+                line: 0,
+                character: 0,
+            },
+            WorkspaceSymbol {
+                name: "build".to_owned(),
+                uri: "file:///src/b.rs".to_owned(),
+                line: 4,
+                character: 2,
+            },
+        ];
+        let exact = super::best_workspace_symbol(&symbols, "build").expect("the exact name");
+        assert_eq!(exact.name, "build");
+        let fuzzy = super::best_workspace_symbol(&symbols, "bld").expect("a fuzzy name");
+        assert_eq!(fuzzy.name, "build");
+        assert!(super::best_workspace_symbol(&symbols, "zzz").is_none());
+    }
+
+    #[test]
+    fn a_source_file_names_the_module_its_tests_live_in() {
+        assert_eq!(
+            super::test_module_filter("src/app/run/workbench_gui.rs"),
+            Some("app::run::workbench_gui".to_owned())
+        );
+        assert_eq!(
+            super::test_module_filter("src/foo/mod.rs"),
+            Some("foo".to_owned())
+        );
+        assert_eq!(super::test_module_filter("src/lib.rs"), None);
+        assert_eq!(super::test_module_filter("src/main.rs"), None);
+        assert_eq!(super::test_module_filter("tests/integration.rs"), None);
+        assert_eq!(super::test_module_filter("README.md"), None);
+    }
+
+    #[test]
+    fn an_unreferenced_resource_is_the_only_cleanup_candidate() {
+        use crate::project::lifecycle::session::ProjectSession;
+
+        let directory = std::env::temp_dir().join(format!(
+            "rustage-resource-cleanup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(directory.join("pages")).expect("pages");
+        std::fs::create_dir_all(directory.join("assets")).expect("assets");
+        std::fs::write(
+            directory.join("project.json"),
+            r#"{
+  "format": 2,
+  "project": { "id": "p1a19fce34b8-a6bd9-0000", "name": "cleanup" },
+  "pages": [ { "document": "pages/main.json", "title": "main" } ],
+  "resources": [ { "path": "assets/used.png" }, { "path": "assets/unused.png" } ],
+  "targets": [],
+  "generated": [],
+  "startup": "pages/main.json",
+  "network": { "services": [] }
+}"#,
+        )
+        .expect("project file");
+        std::fs::write(
+            directory.join("pages/main.json"),
+            r#"{
+  "format": 6,
+  "page": { "id": 1, "name": "main", "root": 1 },
+  "nodes": [
+    { "id": 1, "type": "window", "children": [2], "properties": [], "layout": null },
+    { "id": 2, "type": "image", "children": [], "properties": [
+        { "name": "source", "value": { "asset": "assets/used.png" } }
+    ], "layout": null }
+  ],
+  "states": null,
+  "collections": [],
+  "components": { "definitions": [], "instances": [], "variants": [] },
+  "motion": { "motions": [] }
+}"#,
+        )
+        .expect("page file");
+        std::fs::write(directory.join("assets/used.png"), b"used").expect("used asset");
+        std::fs::write(directory.join("assets/unused.png"), b"unused").expect("unused asset");
+
+        let session = ProjectSession::open(directory.join("project.json")).expect("a project");
+        let candidates = super::unused_resources(&session).expect("a readable project");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(candidates, vec!["assets/unused.png".to_owned()]);
+    }
+
+    #[test]
+    fn a_command_history_row_names_the_clock_time() {
+        assert_eq!(super::history_row(0, "a"), "00:00:00 a");
+        assert_eq!(super::history_row(3_661_000, "b"), "01:01:01 b");
+        assert_eq!(super::history_row(86_401_000, "c"), "00:00:01 c");
+    }
+
+    #[test]
+    fn a_menu_action_carries_its_argument_after_the_question_mark() {
+        let arguments = super::parse_action_arguments("panel=panel.pages&other=x");
+        assert_eq!(
+            arguments.get("panel").map(String::as_str),
+            Some("panel.pages")
+        );
+        assert_eq!(arguments.get("other").map(String::as_str), Some("x"));
     }
 }

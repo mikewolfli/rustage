@@ -644,8 +644,8 @@ impl Editor {
     ///
     /// A valid value replaces the stored one and clears any problem; a refusal stores the text and
     /// the reason and leaves the valid value exactly as it was.
-    pub fn set(&mut self, node: NodeId, name: PropertyName, text: &str) -> Result<(), String> {
-        let Some(kind) = self.schema.kind_of(&name).cloned() else {
+    pub fn set(&mut self, node: NodeId, name: &PropertyName, text: &str) -> Result<(), String> {
+        let Some(kind) = self.schema.kind_of(name).cloned() else {
             return Err(format!("{} is not a described property", name.as_str()));
         };
         match kind.parse(text) {
@@ -653,12 +653,12 @@ impl Editor {
                 self.values.insert((node, name.clone()), value);
                 self.kinds.insert(name.clone(), kind);
                 self.pending.remove(&(node, name.clone()));
-                self.problems.remove(&(node, name));
+                self.problems.remove(&(node, name.clone()));
                 Ok(())
             }
             Err(reason) => {
                 self.pending.insert((node, name.clone()), text.to_owned());
-                self.problems.insert((node, name), reason.clone());
+                self.problems.insert((node, name.clone()), reason.clone());
                 Err(reason)
             }
         }
@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn a_valid_number_is_accepted_and_stored() {
         let mut editor = editor();
-        assert_eq!(editor.set(node(1), name("width"), "120"), Ok(()));
+        assert_eq!(editor.set(node(1), &name("width"), "120"), Ok(()));
         assert_eq!(
             editor.value(node(1), &name("width")),
             Some(&PropertyValue::Number(120.0))
@@ -752,9 +752,9 @@ mod tests {
     #[test]
     fn a_number_out_of_range_is_refused_and_the_valid_value_is_unchanged() {
         let mut editor = editor();
-        editor.set(node(1), name("width"), "120").expect("valid");
+        editor.set(node(1), &name("width"), "120").expect("valid");
         let reason = editor
-            .set(node(1), name("width"), "5000")
+            .set(node(1), &name("width"), "5000")
             .expect_err("out of range");
         assert!(reason.contains("above the maximum"));
         assert_eq!(
@@ -772,7 +772,7 @@ mod tests {
     #[test]
     fn a_property_the_schema_does_not_describe_is_refused_without_touching_anything() {
         let mut editor = editor();
-        assert!(editor.set(node(1), name("colour"), "red").is_err());
+        assert!(editor.set(node(1), &name("colour"), "red").is_err());
         assert!(editor.value(node(1), &name("colour")).is_none());
         assert!(editor.pending(node(1), &name("colour")).is_none());
     }
@@ -781,9 +781,9 @@ mod tests {
     fn an_enum_accepts_a_variant_and_refuses_anything_else() {
         let mut editor = editor();
         editor
-            .set(node(1), name("variant"), "primary")
+            .set(node(1), &name("variant"), "primary")
             .expect("a variant");
-        assert!(editor.set(node(1), name("variant"), "loud").is_err());
+        assert!(editor.set(node(1), &name("variant"), "loud").is_err());
         assert_eq!(
             editor.value(node(1), &name("variant")),
             Some(&PropertyValue::Variant("primary".to_owned()))
@@ -793,8 +793,8 @@ mod tests {
     #[test]
     fn text_over_the_limit_is_refused() {
         let mut editor = editor();
-        assert!(editor.set(node(1), name("label"), "ok").is_ok());
-        assert!(editor.set(node(1), name("label"), "far too long").is_err());
+        assert!(editor.set(node(1), &name("label"), "ok").is_ok());
+        assert!(editor.set(node(1), &name("label"), "far too long").is_err());
         assert_eq!(
             editor.value(node(1), &name("label")),
             Some(&PropertyValue::Text("ok".to_owned()))
@@ -805,10 +805,10 @@ mod tests {
     fn a_colour_and_an_asset_are_parsed_as_their_own_families() {
         let mut editor = editor();
         editor
-            .set(node(1), name("tint"), "#112233")
+            .set(node(1), &name("tint"), "#112233")
             .expect("a colour");
         editor
-            .set(node(1), name("icon"), "assets/a.svg")
+            .set(node(1), &name("icon"), "assets/a.svg")
             .expect("an asset");
         assert_eq!(
             editor
@@ -822,16 +822,16 @@ mod tests {
                 .map(PropertyValue::family),
             Some("asset")
         );
-        assert!(editor.set(node(1), name("tint"), "red").is_err());
-        assert!(editor.set(node(1), name("icon"), "").is_err());
+        assert!(editor.set(node(1), &name("tint"), "red").is_err());
+        assert!(editor.set(node(1), &name("icon"), "").is_err());
     }
 
     #[test]
     fn a_later_valid_edit_clears_the_problem() {
         let mut editor = editor();
-        assert!(editor.set(node(1), name("width"), "oops").is_err());
+        assert!(editor.set(node(1), &name("width"), "oops").is_err());
         assert!(editor.problem(node(1), &name("width")).is_some());
-        editor.set(node(1), name("width"), "10").expect("valid");
+        editor.set(node(1), &name("width"), "10").expect("valid");
         assert!(editor.problem(node(1), &name("width")).is_none());
         assert!(editor.pending(node(1), &name("width")).is_none());
     }
@@ -893,10 +893,10 @@ mod tests {
 
         let mut editor = Editor::new(schema);
         editor
-            .set(node(1), name("state"), "checked")
+            .set(node(1), &name("state"), "checked")
             .expect("a published token");
         let reason = editor
-            .set(node(1), name("state"), "half")
+            .set(node(1), &name("state"), "half")
             .expect_err("not a published token");
         assert!(reason.contains("not one of"), "{reason}");
         assert_eq!(
@@ -1043,7 +1043,7 @@ mod tests {
             },
         ));
         editor
-            .set(node(1), text.clone(), "kept")
+            .set(node(1), &text, "kept")
             .expect("text is accepted");
 
         // Another control declares the same property with the same type: the edit survives.

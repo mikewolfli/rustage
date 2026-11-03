@@ -50,6 +50,12 @@ pub(super) enum Command {
     Continue,
     /// Step over one line.
     Step,
+    /// Step into the call on the current line.
+    StepIn,
+    /// Step out of the current frame.
+    StepOut,
+    /// Pause a running program.
+    Pause,
     /// End the session and terminate the adapter.
     Stop,
 }
@@ -61,8 +67,40 @@ impl Command {
             Self::Start => "start",
             Self::Continue => "continue",
             Self::Step => "step over",
+            Self::StepIn => "step into",
+            Self::StepOut => "step out",
+            Self::Pause => "pause",
             Self::Stop => "stop",
         }
+    }
+}
+
+/// The structured parts of one report, in the order the panel shows them.
+///
+/// [`Update::new`] turns these into the flat row list in one place, so the split panels and the
+/// existing debug list cannot drift apart.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+struct Sections {
+    adapter: Vec<String>,
+    breakpoints: Vec<String>,
+    threads: Vec<String>,
+    frames: Vec<String>,
+    variables: Vec<String>,
+    source: Vec<String>,
+}
+
+impl Sections {
+    /// The panel rows: every section in panel order, concatenated in this one place.
+    fn rows(&self) -> Vec<String> {
+        self.adapter
+            .iter()
+            .chain(&self.breakpoints)
+            .chain(&self.threads)
+            .chain(&self.frames)
+            .chain(&self.variables)
+            .chain(&self.source)
+            .cloned()
+            .collect()
     }
 }
 
@@ -73,13 +111,62 @@ pub(super) struct Update {
     pub phase: &'static str,
     /// The one-line status.
     pub status: String,
-    /// The rows the panel shows.
+    /// The adapter line(s).
+    pub adapter: Vec<String>,
+    /// The breakpoint line(s).
+    pub breakpoints: Vec<String>,
+    /// The `thread …` line(s).
+    pub threads: Vec<String>,
+    /// The `frame …` line(s).
+    pub frames: Vec<String>,
+    /// The scope line and the `variable …` line(s).
+    pub variables: Vec<String>,
+    /// The `source …` line.
+    pub source: Vec<String>,
+    /// The rows the panel shows: exactly the sections above, in that order.
     pub rows: Vec<String>,
+}
+
+impl Update {
+    /// Builds a report whose rows are exactly its sections, in panel order.
+    fn new(phase: &'static str, status: String, sections: Sections) -> Self {
+        let rows = sections.rows();
+        Self {
+            phase,
+            status,
+            adapter: sections.adapter,
+            breakpoints: sections.breakpoints,
+            threads: sections.threads,
+            frames: sections.frames,
+            variables: sections.variables,
+            source: sections.source,
+            rows,
+        }
+    }
+
+    /// A report that carries one message row instead of sections (failures and session end).
+    fn message(phase: &'static str, status: String, row: String) -> Self {
+        Self {
+            phase,
+            status,
+            adapter: Vec::new(),
+            breakpoints: Vec::new(),
+            threads: Vec::new(),
+            frames: Vec::new(),
+            variables: Vec::new(),
+            source: Vec::new(),
+            rows: vec![row],
+        }
+    }
 }
 
 /// The panel's view of one session and the channels that connect it to the worker.
 pub(super) struct DebugState {
     rows: Vec<String>,
+    breakpoints: Vec<String>,
+    threads: Vec<String>,
+    frames: Vec<String>,
+    variables: Vec<String>,
     commands: Option<Sender<Command>>,
     updates: Receiver<Update>,
     live: bool,
@@ -91,6 +178,10 @@ impl DebugState {
         let (_sender, updates) = channel();
         Self {
             rows: vec!["no debug session; press Start".to_owned()],
+            breakpoints: Vec::new(),
+            threads: Vec::new(),
+            frames: Vec::new(),
+            variables: Vec::new(),
             commands: None,
             updates,
             live: false,
@@ -143,14 +234,43 @@ impl DebugState {
             }
         }
         if let Some(update) = &last {
-            self.rows = update.rows.clone();
+            self.apply(update);
         }
         last
+    }
+
+    /// Mirrors one report into the rows and the sections the split panels read.
+    fn apply(&mut self, update: &Update) {
+        self.rows = update.rows.clone();
+        self.breakpoints = update.breakpoints.clone();
+        self.threads = update.threads.clone();
+        self.frames = update.frames.clone();
+        self.variables = update.variables.clone();
     }
 
     /// The rows the list currently shows.
     pub(super) fn rows(&self) -> Vec<String> {
         self.rows.clone()
+    }
+
+    /// The breakpoint line(s).
+    pub(super) fn breakpoints(&self) -> Vec<String> {
+        self.breakpoints.clone()
+    }
+
+    /// The `thread …` line(s).
+    pub(super) fn threads(&self) -> Vec<String> {
+        self.threads.clone()
+    }
+
+    /// The `frame …` line(s).
+    pub(super) fn frames(&self) -> Vec<String> {
+        self.frames.clone()
+    }
+
+    /// The scope line and the `variable …` line(s).
+    pub(super) fn variables(&self) -> Vec<String> {
+        self.variables.clone()
     }
 
     /// Whether a worker is still running.
@@ -175,11 +295,11 @@ fn worker(
     let mut worker = match Worker::start(updates.clone(), nodes, break_node) {
         Ok(worker) => worker,
         Err(reason) => {
-            let _ = updates.send(Update {
-                phase: "failed",
-                status: format!("session failed: {reason}"),
-                rows: vec![format!("failed: {reason}")],
-            });
+            let _ = updates.send(Update::message(
+                "failed",
+                format!("session failed: {reason}"),
+                format!("failed: {reason}"),
+            ));
             return;
         }
     };
@@ -188,11 +308,11 @@ fn worker(
             Ok(Command::Start) => {}
             Ok(Command::Continue) => {
                 if let Err(reason) = worker.resume("continue") {
-                    let _ = worker.updates.send(Update {
-                        phase: "failed",
-                        status: format!("continue failed: {reason}"),
-                        rows: vec![format!("failed: {reason}")],
-                    });
+                    let _ = worker.updates.send(Update::message(
+                        "failed",
+                        format!("continue failed: {reason}"),
+                        format!("failed: {reason}"),
+                    ));
                     worker.stop();
                     return;
                 }
@@ -202,11 +322,53 @@ fn worker(
             }
             Ok(Command::Step) => {
                 if let Err(reason) = worker.resume("next") {
-                    let _ = worker.updates.send(Update {
-                        phase: "failed",
-                        status: format!("step failed: {reason}"),
-                        rows: vec![format!("failed: {reason}")],
-                    });
+                    let _ = worker.updates.send(Update::message(
+                        "failed",
+                        format!("step failed: {reason}"),
+                        format!("failed: {reason}"),
+                    ));
+                    worker.stop();
+                    return;
+                }
+                if !worker.is_live() {
+                    return;
+                }
+            }
+            Ok(Command::StepIn) => {
+                if let Err(reason) = worker.resume("stepIn") {
+                    let _ = worker.updates.send(Update::message(
+                        "failed",
+                        format!("step in failed: {reason}"),
+                        format!("failed: {reason}"),
+                    ));
+                    worker.stop();
+                    return;
+                }
+                if !worker.is_live() {
+                    return;
+                }
+            }
+            Ok(Command::StepOut) => {
+                if let Err(reason) = worker.resume("stepOut") {
+                    let _ = worker.updates.send(Update::message(
+                        "failed",
+                        format!("step out failed: {reason}"),
+                        format!("failed: {reason}"),
+                    ));
+                    worker.stop();
+                    return;
+                }
+                if !worker.is_live() {
+                    return;
+                }
+            }
+            Ok(Command::Pause) => {
+                if let Err(reason) = worker.resume("pause") {
+                    let _ = worker.updates.send(Update::message(
+                        "failed",
+                        format!("pause failed: {reason}"),
+                        format!("failed: {reason}"),
+                    ));
                     worker.stop();
                     return;
                 }
@@ -216,11 +378,11 @@ fn worker(
             }
             Ok(Command::Stop) => {
                 worker.stop();
-                let _ = worker.updates.send(Update {
-                    phase: "ended",
-                    status: "session ended".to_owned(),
-                    rows: vec!["session ended".to_owned()],
-                });
+                let _ = worker.updates.send(Update::message(
+                    "ended",
+                    "session ended".to_owned(),
+                    "session ended".to_owned(),
+                ));
                 return;
             }
             Err(_) => {
@@ -542,20 +704,20 @@ impl Worker {
                             let status = code
                                 .map(|code| format!("exited with code {code}"))
                                 .unwrap_or_else(|| "exited without a code".to_owned());
-                            let _ = self.updates.send(Update {
-                                phase: "exited",
+                            let _ = self.updates.send(Update::new(
+                                "exited",
                                 status,
-                                rows: self.base_rows(),
-                            });
+                                self.base_sections(),
+                            ));
                             return Ok(());
                         }
                         "terminated" => {
                             self.live = false;
-                            let _ = self.updates.send(Update {
-                                phase: "exited",
-                                status: "terminated".to_owned(),
-                                rows: self.base_rows(),
-                            });
+                            let _ = self.updates.send(Update::new(
+                                "exited",
+                                "terminated".to_owned(),
+                                self.base_sections(),
+                            ));
                             return Ok(());
                         }
                         "breakpoint" => {
@@ -593,73 +755,77 @@ impl Worker {
 
     /// Reads threads, the top frame, its first scope and that scope's variables, then reports.
     fn refresh(&mut self, reason: &str, line: Option<u32>) -> Result<(), String> {
-        let mut rows = self.base_rows();
+        let mut sections = self.base_sections();
         let threads = self.threads()?;
         let thread = self
             .thread
             .or_else(|| threads.first().map(|(id, _)| *id))
             .unwrap_or(1);
         for (id, name) in &threads {
-            rows.push(format!("thread {id} {name}"));
+            sections.threads.push(format!("thread {id} {name}"));
         }
         let frames = self.stack(thread)?;
         for (index, (_id, name, file, frame_line, column)) in frames.iter().enumerate() {
-            rows.push(format!(
+            sections.frames.push(format!(
                 "frame {index} {name} at {}:{frame_line}:{column}",
                 file.as_deref().map(short).unwrap_or("no source")
             ));
         }
         if let Some((frame_id, _name, file, frame_line, column)) = frames.first() {
             let (scope, variables) = self.locals(*frame_id)?;
-            rows.push(scope);
+            sections.variables.push(scope);
             // The panel shows one representative local so the source row still fits; the log
             // carries every row the adapter returned.
             if let Some(variable) = variables.first() {
-                rows.push(format!("variable {}", variable.render()));
+                sections
+                    .variables
+                    .push(format!("variable {}", variable.render()));
             }
-            rows.push(format!(
+            sections.source.push(format!(
                 "source {}:{frame_line}:{column}{}",
                 file.as_deref().map(short).unwrap_or("no source"),
                 self.describe_position(file.as_deref(), *frame_line)
             ));
-            let _ = self.updates.send(Update {
-                phase: "stopped",
-                status: format!(
+            let _ = self.updates.send(Update::new(
+                "stopped",
+                format!(
                     "stopped: {reason} at line {} (thread {thread})",
                     line.or(Some(*frame_line)).unwrap_or(0)
                 ),
-                rows,
-            });
+                sections,
+            ));
         } else {
-            rows.push("no stack frames reported".to_owned());
-            let _ = self.updates.send(Update {
-                phase: "stopped",
-                status: format!("stopped: {reason} (thread {thread})"),
-                rows,
-            });
+            sections.frames.push("no stack frames reported".to_owned());
+            let _ = self.updates.send(Update::new(
+                "stopped",
+                format!("stopped: {reason} (thread {thread})"),
+                sections,
+            ));
         }
         Ok(())
     }
 
-    fn base_rows(&self) -> Vec<String> {
-        let mut rows = vec![format!(
+    /// The adapter and breakpoint lines the panel shows in every report.
+    fn base_sections(&self) -> Sections {
+        let mut sections = Sections::default();
+        sections.adapter.push(format!(
             "adapter {}: {}",
             self.adapter.name,
             self.adapter.capabilities.render()
-        )];
+        ));
         for point in self.book.points() {
             match &point.anchor {
-                Anchor::Source { file, line } => rows.push(format!(
+                Anchor::Source { file, line } => sections.breakpoints.push(format!(
                     "breakpoint {} at {}:{line}: {}{}",
                     point.id,
                     short(file),
                     point.binding.render(),
                     self.describe_position(Some(file), *line)
                 )),
-                Anchor::Node { .. } => rows.push(point.render()),
+                Anchor::Node { .. } => sections.breakpoints.push(point.render()),
             }
         }
-        rows
+        sections
     }
 
     /// What the source map says about a stopped position: the node whose generated construct
@@ -1005,8 +1171,60 @@ fn line_offsets(text: &str) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::DebugState;
+    use super::{DebugState, Sections, Update};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_new_session_has_no_sections() {
+        let state = DebugState::new();
+        assert!(state.breakpoints().is_empty());
+        assert!(state.threads().is_empty());
+        assert!(state.frames().is_empty());
+        assert!(state.variables().is_empty());
+        assert_eq!(
+            state.rows(),
+            vec!["no debug session; press Start".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_sections_are_the_rows() {
+        let sections = Sections {
+            adapter: vec!["adapter gdb: breakpoints".to_owned()],
+            breakpoints: vec!["breakpoint 1 at main.rs:7: bound at 7:5".to_owned()],
+            threads: vec!["thread 1 main".to_owned()],
+            frames: vec!["frame 0 node_2 at main.rs:7:5".to_owned()],
+            variables: vec![
+                "scope Locals (1 variable(s))".to_owned(),
+                "variable n: i32 = 41".to_owned(),
+            ],
+            source: vec!["source main.rs:7:5 -> node 2".to_owned()],
+        };
+        let expected: Vec<String> = sections
+            .adapter
+            .iter()
+            .chain(&sections.breakpoints)
+            .chain(&sections.threads)
+            .chain(&sections.frames)
+            .chain(&sections.variables)
+            .chain(&sections.source)
+            .cloned()
+            .collect();
+        let update = Update::new(
+            "stopped",
+            "stopped: breakpoint".to_owned(),
+            sections.clone(),
+        );
+        assert_eq!(update.rows, expected, "rows are the sections, concatenated");
+
+        let mut state = DebugState::new();
+        state.apply(&update);
+        assert_eq!(state.breakpoints(), sections.breakpoints);
+        assert_eq!(state.threads(), sections.threads);
+        assert_eq!(state.frames(), sections.frames);
+        assert_eq!(state.variables(), sections.variables);
+        assert_eq!(state.rows(), expected);
+    }
 
     #[test]
     fn the_generated_source_maps_the_break_line_back_to_its_node() {

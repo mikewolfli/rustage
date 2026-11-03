@@ -67,15 +67,37 @@ mod target;
 mod target_i18n;
 mod vcs;
 mod workbench;
+mod workbench_actions;
+mod workbench_ai;
+mod workbench_application;
+mod workbench_build;
+mod workbench_components;
 mod workbench_debug;
+mod workbench_dependencies;
 mod workbench_events;
+mod workbench_extensions;
 mod workbench_gui;
+mod workbench_history;
+mod workbench_hot;
 mod workbench_inspect;
+mod workbench_inspection;
+mod workbench_items;
 mod workbench_layout;
+mod workbench_layout_panel;
+mod workbench_notifications;
+mod workbench_outline;
 mod workbench_pages;
 mod workbench_palette;
+mod workbench_preview;
 mod workbench_property;
+mod workbench_run;
 mod workbench_scene;
+mod workbench_states;
+mod workbench_tasks;
+mod workbench_terminal;
+mod workbench_tests;
+mod workbench_timeline;
+mod workbench_vcs;
 use application::*;
 use build::*;
 use collection::*;
@@ -311,6 +333,10 @@ pub fn run(command: Command) {
         Command::WorkbenchGui(options) => {
             if !workbench_gui::workbench_gui(
                 options.layout.clone(),
+                options.project.clone(),
+                options.ai_journal.clone(),
+                options.lsp.clone(),
+                options.lsp_arguments.clone(),
                 options.exit_after,
                 options.smoke,
             ) {

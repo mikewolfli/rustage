@@ -140,7 +140,7 @@ v0.3 编制时的上游取证停在 2.8.x；本地检出已演进到 rust_widget
 | 渲染路径 | 现役画面路径是 CPU 软件光栅（`SoftwarePaintBackend`）；`wgpu` 后端为保留管线（模块自述 "Reserved: no production caller"）。性能门槛与宣称不得以 GPU 加速为前提 |
 | 互斥 profile | desktop/tablet/mobile/embedded/mini 五档互斥，`desktop` 默认启用 `designer`、图表、打印/PDF、彩色 emoji；图表/打印/PDF 仅 desktop；`mini` 为 no_std（约 28 核心控件）。容量预算三档：Device 4096 控件/4096 纹理/2 MiB 字形缓存/256 事件队列，Surface 512/2048/1 MiB/128，Minimal 64/1024/256 KiB/64 |
 | 设计器契约 | `designer` feature（= `serde_json` + `declarative-view`）提供 JSON 工程 → 确定性 Rust 生成：一次工程固定产出双产物 `src/generated/ui_default.rs`（desktop/tablet/mobile 共用 Node+ViewEngine 模板）与 `ui_stripped.rs`（mini/embedded 命令式模板）；产物首行 `GENERATED_MARKER`；`GenerationReport`/`GenerationGap` 五类原因（unsupported/capacity-overflow/cross-profile/unresolvable-event/incompatible-wire）不静默丢弃；`--check` 退出码 0/1/2；模式 1/模式 2 行为一致性与 manifest 往返各有库侧门禁 |
-| 身份与映射 | `TreeIndex` 提供只读 key/path ↔ ObjectId 查询，并明确 "`ObjectId` is not a `NodeId`"；**上游无 NodeId 持久化与源码 span 映射**（上游 blue26 B26.04 待办，对应本计划 T15.03 与 C-SOURCE-MAP） |
+| 身份与映射 | `TreeIndex` 提供只读 key/path ↔ ObjectId 查询并明确 "`ObjectId` is not a `NodeId`"；4.0.0 的 `GenerationReport::node_anchors` 给出设计 id、行/列与字节偏移（侧信道，不写入生成文件），`json::JsonViewSession` 提供跨更新的控件身份；**NodeId 的持久化与跨视图重定位仍归宿主**（T15.03/T15.06，C-SOURCE-MAP） |
 | 能力清单 | `PropertySchema`（value_kind/accepted_tokens/约束，默认值来自新建实例实测）+ `EventSchema`（payload 形状由 signal 派生并有门禁）+ 命令 schema；`DesignerManifest` 手写序列化、按名排序、导出→读回→再导出字节一致 |
 | 事件与绑定 | signal-slot（connect/disconnect/block/priority、`ConnectionHandle`/`ConnectionScope`）；`EventSignalRef`/`EventSignalBinder` 按名订阅；数据绑定 `Binding<T>`/`BindingPipeline` 与 `bind_widget_property(_two_way/_validated)`；连线规则 `WIRE_RULES`（命令仅接受无载荷事件） |
 | 样式与主题 | `WidgetStyle` 全 Option 字段 + `merge` 只填空缺 + `theme_derived` 整体替换；CSS 解析器（类型/类/伪类选择器）与 `css_trace` 获胜规则追踪缝存在，但**无 CSS 生成**——模式 2 在生成期内联样式属性；主题 `ThemeManager` 支持亮暗切换、交叉淡入、8 种系统强调色、JSON 主题文件（themes/*.json 由预设生成防漂移） |
@@ -159,7 +159,7 @@ v0.3 编制时的上游取证停在 2.8.x；本地检出已演进到 rust_widget
 `platform_diagnostics` 12 位探针（F01/T01.08）、CSS 解析与 `css_trace`（F11/T11.03）、
 声明式 view 层（F14/T14.01–T14.03）、i18n 复数/RTL/审计（F24）、`mobile-services` 三态规则（F18/T18.06）。
 
-**上游提供缝，宿主补完：** NodeId 持久化与 span 映射（T15.03，P-SOURCEMAP；上游仅 TreeIndex 只读查询）、
+**上游提供缝，宿主补完：** NodeId 持久化与跨视图 span 映射（T15.03/T15.06，P-SOURCEMAP；上游 4.0.0 已提供 `node_anchors` 与 `JsonViewSession` 的稳定身份）、
 生成区/手写区文件级保护（库层无此机制，宿主 T15.01/T06.06）、页面路由与状态机（库无全局状态机，宿主 F13）、
 会话恢复宿主实现（F04/T04.05）、构建/运行/调试/VCS/AI/扩展全链（上游 blue26 §3 明确留给宿主的清单）。
 
@@ -168,9 +168,7 @@ v0.3 编制时的上游取证停在 2.8.x；本地检出已演进到 rust_widget
 命令参数 schema（B26.03）、可编辑布局描述与布局 schema/诊断（B26.05，`json/layout_schema.rs`）、
 profile 精确可用性探测（B26.06，四级 `VerificationLevel`）、增量更新失败观测（`ApplyReport`）。
 
-**上游半落地，宿主跟踪缺口不代替实现：** 稳定 NodeId/source-map（B26.04 仅运行时 `TreeIndex` 落地；
-生成物逐节点锚点仍缺 = RW-42）、布局 schema 未接生成器（RW-47）。宿主任务表在相应任务标注依赖，
-不自行维护猜测表。
+**上游半落地，宿主跟踪缺口不代替实现（2026-11-03 复核，4.0.0）：** RW-42（逐节点锚点）与 RW-43（JSON↔ViewEngine）已在 4.0.0 落地（`GenerationReport::node_anchors`、`json::JsonViewSession`），RW-47 的**诊断**与**根容器求解**也已接通（`json/layout_schema.rs` → `GenerationReport::layout_issues`、`JsonProject::layout_declaration`）。仍缺：默认产物不带已求解坐标（RW-111）、每节点尺寸约束无字段（RW-109）、嵌套容器只支持根层。宿主任务表在相应任务标注依赖，不自行维护猜测表。
 
 #### 1.6.3 外部参照：借鉴单位是工作流，不是菜单
 
@@ -194,7 +192,8 @@ P-DEP 当前固定 4.0.0（`1a30785`）。T00.01 已按决策 U1 完成多轮升
 证据见 [`log-20261029-11.md`](../log/archived/log-20261029-11.md)）；3.1.0→3.2.0→3.2.1（2026-11-01，
 证据见 [`log-20261101-2.md`](../log/log-20261101-2.md)）；3.2.1→4.0.0（2026-11-03，
 证据见 [`log-20261103-1.md`](../log/log-20261103-1.md)，`probe::` 19/19、macOS 四 profile `--lib`
-与 GUI 有界会话通过）。Windows xwin 在 4.0.0 被上游 RW-101 阻断，支持矩阵按“不拿旧修订证据冒充新修订”
+与 GUI 有界会话、Linux 五 profile `--lib` 与 `linux-native` GUI 有界会话通过）。Windows xwin 在 4.0.0
+被上游 RW-101 阻断，支持矩阵按“不拿旧修订证据冒充新修订”
 原则同步重估（[`support-matrix.json`](support-matrix.json)）。上游后续小版本升级沿用同一流程；
 不因本地检出更新而自动宣称宿主已升级。
 
@@ -563,7 +562,7 @@ T19.09/T19.10/T21.09/F28 与对应旅程明确延期，不要求先开发重型�
 | 任务 | 实施与交付物 | 前置 | 级别/投入 | 最低验收 |
 |---|---|---|---|---|
 | T05.01 | 类型化命令注册/上下文/参数/权限/撤销和任务元数据 | T00.08、T03.02、T01.05 | P0/L | 未授权/无效参数无法绕过菜单调用执行 |
-| T05.02 | §3 菜单树、平台原生菜单适配与禁用原因呈现（2026-11-01：窗口只绘制已注册的叶命令，`Item::Planned` 仅作为台账；GUI 控件库面板插入走真实契约，证据见 `docs/log/log-20261101-2.md`） | T05.01、T04.01 | P1/M | 每已实现叶项绑定唯一命令 ID |
+| T05.02 | §3 菜单树、平台原生菜单适配与禁用原因呈现（2026-11-01：窗口只绘制已注册的叶命令，`Item::Planned` 仅作为台账；2026-11-03：`HANDLED_COMMANDS` 与注册命令集合相等，未实现命令注销且不绑键；视图/布局/编辑区动作、`view.panel-show` 与视图/显示组的工具栏/状态栏/缩放、视图/工作区组的载入/锁定/专注/全屏、画布缩放/网格/标尺、运行启停、构建取消/复制输出、预览启停、VCS 刷新、终端启停、运行测试、运行输出清除/复制、帮助参考、工程校验/扫描/迁移预览/引用检查、调试启停/继续/单步、选择折叠/多光标、七种视图模式、项目路径复制/显示、面板隐藏/恢复、预览重建、编辑文本/选择、跳转到行、快速打开文件、文件/工作区符号跳转、在当前文件管理器中定位当前文件、代码定义/声明/类型定义/实现/引用与前进/后退、结构选择扩大/缩小、折叠/展开与大纲/面包屑、关闭已保存文档、构建检查/重建/复制实际命令/定位首个错误、测试失败重跑/停止、重新打开关闭的文档、编辑区组菜单与移动标签页、调试暂停/单步进入/跳出、内联提示/书签、文件保存/全部保存/另存为/保存副本与工程信任、当前文件测试、未引用资源清理、操作历史/关闭工程/复制节点 ID、编辑菜单的剪贴板/查找组与导航/设计组已并入注册表（136 条命令），面板菜单动作可携带 §2.2 面板参数，证据见 `docs/log/log-20261103-1.md` §51–§100） | T05.01、T04.01 | P1/M | 每已实现叶项绑定唯一命令 ID |
 | T05.03 | 快捷键层级、弦键、冲突检测、用户覆盖/导入导出 | T05.01 | P1/M | 输入法/文本输入不被误触发全局命令 |
 | T05.04 | 命令面板、模糊检索、最近使用、参数补全、帮助 | T05.02、T05.03 | P1/M | 禁用原因可查，命令可从键盘发现 |
 | T05.05 | 全局焦点路由、上下文菜单、工具栏与菜单状态统一 | T05.02、T04.02 | P1/L | 同命令各入口行为一致，无重复执行 |
@@ -707,7 +706,7 @@ T19.09/T19.10/T21.09/F28 与对应旅程明确延期，不要求先开发重型�
 | 任务 | 实施与交付物 | 前置 | 级别/投入 | 最低验收 |
 |---|---|---|---|---|
 | T14.01 | 预览服务/UI 线程、会话归属、实例销毁与重建；实例装载复用库声明式 view 层（`ViewEngine::mount/update`，diff-patch 保留焦点/滚动等内部状态） | T09.02、T01.04 | P0/L | 停止后无悬挂实例或进程 |
-| T14.02 | 模型 diff、CSS/绑定更新、文件监视、防抖/来源标识；UI 即时更新走 view 层补丁路径；库 JSON 运行时引擎为 Reserved 且不保留控件身份（G-406 未落地），不得作为预览身份依据 | T14.01、T11.07、T13.04、T03.05 | P0/L | UI/已有绑定修改不启动 cargo |
+| T14.02 | 模型 diff、CSS/绑定更新、文件监视、防抖/来源标识；UI 即时更新走 view 层补丁路径；库 JSON 运行时引擎经 `json::JsonViewSession` 保留控件身份（G-406 已在 4.0.0 落地，RW-43 关闭），预览与生成共用同一份库 JSON 声明（log §47） | T14.01、T11.07、T13.04、T03.05 | P0/L | UI/已有绑定修改不启动 cargo |
 | T14.03 | 状态保留：输入/焦点/滚动/选中与不兼容重建提示 | T14.02 | P0/L | NodeId/类型兼容才恢复，不套用旧实例状态 |
 | T14.04 | 多视口矩阵、尺寸/方向/主题/语言/样例配置 | T14.03、T10.05、T13.01 | P1/L | 各视口共享文档，运行会话状态隔离 |
 | T14.05 | 设计选择/交互模式、运行实例/布局树、事件与数据检查器、节点/源码定位 | T14.04 | P1/M | 显示设计值/计算值/运行值及版本；只读检查不触发业务，原生外部进程仅开放真实适配能力 |

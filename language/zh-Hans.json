@@ -1,6 +1,69 @@
 {
   "language": "zh-Hans",
   "translations": {
+    "cmd.build.cancel.category": {
+      "message": "构建"
+    },
+    "cmd.build.cancel.description": {
+      "message": "请求正在运行的构建停止"
+    },
+    "cmd.build.cancel.title": {
+      "message": "取消构建"
+    },
+    "cmd.build.check.category": {
+      "message": "构建"
+    },
+    "cmd.build.check.description": {
+      "message": "对工程做类型检查，不产出二进制"
+    },
+    "cmd.build.check.title": {
+      "message": "检查"
+    },
+    "cmd.build.clean.category": {
+      "message": "构建"
+    },
+    "cmd.build.clean.description": {
+      "message": "移除本包产物，不执行构建"
+    },
+    "cmd.build.clean.title": {
+      "message": "清理"
+    },
+    "cmd.build.copy-command.category": {
+      "message": "构建"
+    },
+    "cmd.build.copy-command.description": {
+      "message": "复制上一次构建实际运行的 cargo 命令"
+    },
+    "cmd.build.copy-command.title": {
+      "message": "复制构建命令"
+    },
+    "cmd.build.copy-output.category": {
+      "message": "构建"
+    },
+    "cmd.build.copy-output.description": {
+      "message": "将构建日志复制到剪贴板"
+    },
+    "cmd.build.copy-output.title": {
+      "message": "复制构建输出"
+    },
+    "cmd.build.locate-first-error.category": {
+      "message": "构建"
+    },
+    "cmd.build.locate-first-error.description": {
+      "message": "打开构建输出指出的第一个源码位置"
+    },
+    "cmd.build.locate-first-error.title": {
+      "message": "转到首个错误"
+    },
+    "cmd.build.rebuild.category": {
+      "message": "构建"
+    },
+    "cmd.build.rebuild.description": {
+      "message": "先清理本包的产物，再重新构建"
+    },
+    "cmd.build.rebuild.title": {
+      "message": "重新构建"
+    },
     "cmd.build.run.category": {
       "message": "构建"
     },
@@ -9,6 +72,258 @@
     },
     "cmd.build.run.title": {
       "message": "运行"
+    },
+    "cmd.code.bookmark-toggle.category": {
+      "message": "代码"
+    },
+    "cmd.code.bookmark-toggle.description": {
+      "message": "在光标行添加或移除书签"
+    },
+    "cmd.code.bookmark-toggle.title": {
+      "message": "切换书签"
+    },
+    "cmd.code.breadcrumbs.category": {
+      "message": "代码"
+    },
+    "cmd.code.breadcrumbs.description": {
+      "message": "列出包含光标位置的符号"
+    },
+    "cmd.code.breadcrumbs.title": {
+      "message": "显示面包屑"
+    },
+    "cmd.code.fold-all.category": {
+      "message": "代码"
+    },
+    "cmd.code.fold-all.description": {
+      "message": "折叠文档中的每个多行块"
+    },
+    "cmd.code.fold-all.title": {
+      "message": "全部折叠"
+    },
+    "cmd.code.fold.category": {
+      "message": "代码"
+    },
+    "cmd.code.fold.description": {
+      "message": "折叠光标所在的块"
+    },
+    "cmd.code.fold.title": {
+      "message": "折叠块"
+    },
+    "cmd.code.inlay-hints.category": {
+      "message": "代码"
+    },
+    "cmd.code.inlay-hints.description": {
+      "message": "显示或隐藏内联提示，但不丢弃数据"
+    },
+    "cmd.code.inlay-hints.title": {
+      "message": "切换内联提示"
+    },
+    "cmd.code.outline.category": {
+      "message": "代码"
+    },
+    "cmd.code.outline.description": {
+      "message": "显示源码大纲面板"
+    },
+    "cmd.code.outline.title": {
+      "message": "显示大纲"
+    },
+    "cmd.code.unfold-all.category": {
+      "message": "代码"
+    },
+    "cmd.code.unfold-all.description": {
+      "message": "展开每个已折叠区域"
+    },
+    "cmd.code.unfold-all.title": {
+      "message": "全部展开"
+    },
+    "cmd.code.unfold.category": {
+      "message": "代码"
+    },
+    "cmd.code.unfold.description": {
+      "message": "展开光标所在的折叠区域"
+    },
+    "cmd.code.unfold.title": {
+      "message": "展开块"
+    },
+    "cmd.debug.continue.category": {
+      "message": "调试"
+    },
+    "cmd.debug.continue.description": {
+      "message": "继续到下一个断点或结束"
+    },
+    "cmd.debug.continue.title": {
+      "message": "继续"
+    },
+    "cmd.debug.pause.category": {
+      "message": "调试"
+    },
+    "cmd.debug.pause.description": {
+      "message": "暂停正在运行的调试目标"
+    },
+    "cmd.debug.pause.title": {
+      "message": "暂停"
+    },
+    "cmd.debug.start.category": {
+      "message": "调试"
+    },
+    "cmd.debug.start.description": {
+      "message": "以选中节点为断点锚点启动会话"
+    },
+    "cmd.debug.start.title": {
+      "message": "开始调试"
+    },
+    "cmd.debug.step-in.category": {
+      "message": "调试"
+    },
+    "cmd.debug.step-in.description": {
+      "message": "进入当前行的调用"
+    },
+    "cmd.debug.step-in.title": {
+      "message": "单步进入"
+    },
+    "cmd.debug.step-out.category": {
+      "message": "调试"
+    },
+    "cmd.debug.step-out.description": {
+      "message": "跳出当前栈帧"
+    },
+    "cmd.debug.step-out.title": {
+      "message": "单步跳出"
+    },
+    "cmd.debug.step.category": {
+      "message": "调试"
+    },
+    "cmd.debug.step.description": {
+      "message": "在会话中单步越过一行"
+    },
+    "cmd.debug.step.title": {
+      "message": "单步跳过"
+    },
+    "cmd.debug.stop.category": {
+      "message": "调试"
+    },
+    "cmd.debug.stop.description": {
+      "message": "结束会话并终止适配器"
+    },
+    "cmd.debug.stop.title": {
+      "message": "停止调试"
+    },
+    "cmd.design.actual-size.category": {
+      "message": "设计"
+    },
+    "cmd.design.actual-size.description": {
+      "message": "以 1 屏幕像素对应 1 设计像素显示设计面"
+    },
+    "cmd.design.actual-size.title": {
+      "message": "实际尺寸"
+    },
+    "cmd.design.fit.category": {
+      "message": "设计"
+    },
+    "cmd.design.fit.description": {
+      "message": "缩放到设计面适应当前控件"
+    },
+    "cmd.design.fit.title": {
+      "message": "适合画布"
+    },
+    "cmd.design.grid.category": {
+      "message": "设计"
+    },
+    "cmd.design.grid.description": {
+      "message": "显示或隐藏设计网格"
+    },
+    "cmd.design.grid.title": {
+      "message": "显示网格"
+    },
+    "cmd.design.rulers.category": {
+      "message": "设计"
+    },
+    "cmd.design.rulers.description": {
+      "message": "显示或隐藏设计面边缘的标尺"
+    },
+    "cmd.design.rulers.title": {
+      "message": "显示标尺"
+    },
+    "cmd.edit.copy-node-id.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.copy-node-id.description": {
+      "message": "复制所选设计节点的稳定 ID"
+    },
+    "cmd.edit.copy-node-id.title": {
+      "message": "复制节点 ID"
+    },
+    "cmd.edit.copy.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.copy.description": {
+      "message": "将编辑器选区复制到剪贴板"
+    },
+    "cmd.edit.copy.title": {
+      "message": "复制"
+    },
+    "cmd.edit.cut.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.cut.description": {
+      "message": "将编辑器选区剪切到剪贴板"
+    },
+    "cmd.edit.cut.title": {
+      "message": "剪切"
+    },
+    "cmd.edit.find-next.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.find-next.description": {
+      "message": "定位到当前搜索的下一个匹配项"
+    },
+    "cmd.edit.find-next.title": {
+      "message": "查找下一个"
+    },
+    "cmd.edit.find-previous.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.find-previous.description": {
+      "message": "定位到当前搜索的上一个匹配项"
+    },
+    "cmd.edit.find-previous.title": {
+      "message": "查找上一个"
+    },
+    "cmd.edit.find-selection.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.find-selection.description": {
+      "message": "在焦点编辑器中搜索选中的文本"
+    },
+    "cmd.edit.find-selection.title": {
+      "message": "在选区中查找"
+    },
+    "cmd.edit.find.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.find.description": {
+      "message": "在焦点编辑器中打开查找栏"
+    },
+    "cmd.edit.find.title": {
+      "message": "查找"
+    },
+    "cmd.edit.history-view.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.history-view.description": {
+      "message": "按从新到旧显示本窗口执行过的命令"
+    },
+    "cmd.edit.history-view.title": {
+      "message": "操作历史"
+    },
+    "cmd.edit.paste.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.paste.description": {
+      "message": "在光标处粘贴剪贴板内容"
+    },
+    "cmd.edit.paste.title": {
+      "message": "粘贴"
     },
     "cmd.edit.redo.category": {
       "message": "编辑"
@@ -19,6 +334,168 @@
     "cmd.edit.redo.title": {
       "message": "重做"
     },
+    "cmd.edit.replace.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.replace.description": {
+      "message": "打开带替换字段的查找栏"
+    },
+    "cmd.edit.replace.title": {
+      "message": "替换"
+    },
+    "cmd.edit.select-all.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-all.description": {
+      "message": "全选当前编辑器中的文档"
+    },
+    "cmd.edit.select-all.title": {
+      "message": "全选"
+    },
+    "cmd.edit.select-clear.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-clear.description": {
+      "message": "将编辑器选区折叠到光标处"
+    },
+    "cmd.edit.select-clear.title": {
+      "message": "取消选择"
+    },
+    "cmd.edit.select-cursor-above.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-cursor-above.description": {
+      "message": "在主光标上一行添加光标"
+    },
+    "cmd.edit.select-cursor-above.title": {
+      "message": "在上方添加光标"
+    },
+    "cmd.edit.select-cursor-below.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-cursor-below.description": {
+      "message": "在主光标下一行添加光标"
+    },
+    "cmd.edit.select-cursor-below.title": {
+      "message": "在下方添加光标"
+    },
+    "cmd.edit.select-expand.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-expand.description": {
+      "message": "把编辑器选择扩大到下一个结构单元"
+    },
+    "cmd.edit.select-expand.title": {
+      "message": "扩大选择"
+    },
+    "cmd.edit.select-next-occurrence.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-next-occurrence.description": {
+      "message": "在选区的下一个出现位置添加光标"
+    },
+    "cmd.edit.select-next-occurrence.title": {
+      "message": "选择下一个出现项"
+    },
+    "cmd.edit.select-occurrences.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-occurrences.description": {
+      "message": "在选区的每个出现位置添加光标"
+    },
+    "cmd.edit.select-occurrences.title": {
+      "message": "选择所有出现项"
+    },
+    "cmd.edit.select-shrink.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.select-shrink.description": {
+      "message": "恢复上一次扩大前的选择"
+    },
+    "cmd.edit.select-shrink.title": {
+      "message": "缩小选择"
+    },
+    "cmd.edit.text-comment.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-comment.description": {
+      "message": "切换所选行的行注释"
+    },
+    "cmd.edit.text-comment.title": {
+      "message": "切换注释"
+    },
+    "cmd.edit.text-delete.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-delete.description": {
+      "message": "删除所选行"
+    },
+    "cmd.edit.text-delete.title": {
+      "message": "删除行"
+    },
+    "cmd.edit.text-duplicate.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-duplicate.description": {
+      "message": "复制所选行"
+    },
+    "cmd.edit.text-duplicate.title": {
+      "message": "复制行"
+    },
+    "cmd.edit.text-indent.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-indent.description": {
+      "message": "将所选行增加一级缩进"
+    },
+    "cmd.edit.text-indent.title": {
+      "message": "增加缩进"
+    },
+    "cmd.edit.text-join.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-join.description": {
+      "message": "将所选行合并为一行"
+    },
+    "cmd.edit.text-join.title": {
+      "message": "合并行"
+    },
+    "cmd.edit.text-move-down.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-move-down.description": {
+      "message": "将所选行下移"
+    },
+    "cmd.edit.text-move-down.title": {
+      "message": "下移行"
+    },
+    "cmd.edit.text-move-up.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-move-up.description": {
+      "message": "将所选行上移"
+    },
+    "cmd.edit.text-move-up.title": {
+      "message": "上移行"
+    },
+    "cmd.edit.text-outdent.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-outdent.description": {
+      "message": "将所选行减少一级缩进"
+    },
+    "cmd.edit.text-outdent.title": {
+      "message": "减少缩进"
+    },
+    "cmd.edit.text-sort.category": {
+      "message": "编辑"
+    },
+    "cmd.edit.text-sort.description": {
+      "message": "按升序排列所选行"
+    },
+    "cmd.edit.text-sort.title": {
+      "message": "排序行"
+    },
     "cmd.edit.undo.category": {
       "message": "编辑"
     },
@@ -27,6 +504,33 @@
     },
     "cmd.edit.undo.title": {
       "message": "撤销"
+    },
+    "cmd.file.close-others.category": {
+      "message": "文件"
+    },
+    "cmd.file.close-others.description": {
+      "message": "关闭焦点编辑器组中的其他文档"
+    },
+    "cmd.file.close-others.title": {
+      "message": "关闭其他"
+    },
+    "cmd.file.close-project.category": {
+      "message": "文件"
+    },
+    "cmd.file.close-project.description": {
+      "message": "在工程文档没有未保存修改后关闭工程"
+    },
+    "cmd.file.close-project.title": {
+      "message": "关闭工程"
+    },
+    "cmd.file.close-saved.category": {
+      "message": "文件"
+    },
+    "cmd.file.close-saved.description": {
+      "message": "关闭每个没有未保存改动的文档"
+    },
+    "cmd.file.close-saved.title": {
+      "message": "关闭已保存"
     },
     "cmd.file.close.category": {
       "message": "文件"
@@ -40,11 +544,47 @@
     "cmd.file.close.title": {
       "message": "关闭"
     },
+    "cmd.file.copy-path.category": {
+      "message": "文件"
+    },
+    "cmd.file.copy-path.description": {
+      "message": "将打开项目的根路径复制到剪贴板"
+    },
+    "cmd.file.copy-path.title": {
+      "message": "复制项目路径"
+    },
+    "cmd.file.exit.category": {
+      "message": "文件"
+    },
+    "cmd.file.exit.description": {
+      "message": "关闭窗口并结束会话"
+    },
+    "cmd.file.exit.title": {
+      "message": "退出"
+    },
+    "cmd.file.open-reopen.category": {
+      "message": "文件"
+    },
+    "cmd.file.open-reopen.description": {
+      "message": "重新打开最近关闭的文档"
+    },
+    "cmd.file.open-reopen.title": {
+      "message": "重新打开关闭的文档"
+    },
+    "cmd.file.reveal.category": {
+      "message": "文件"
+    },
+    "cmd.file.reveal.description": {
+      "message": "将项目根目录交给系统文件管理器"
+    },
+    "cmd.file.reveal.title": {
+      "message": "在文件管理器中显示"
+    },
     "cmd.file.save-all.category": {
       "message": "文件"
     },
     "cmd.file.save-all.description": {
-      "message": "写出所有有未保存更改的文档"
+      "message": "写回每个来自磁盘的已打开文档"
     },
     "cmd.file.save-all.title": {
       "message": "全部保存"
@@ -53,19 +593,55 @@
       "message": "文件"
     },
     "cmd.file.save-as.description": {
-      "message": "将文档写到另一个文件"
+      "message": "把当前文档写到新的工程路径"
     },
     "cmd.file.save-as.title": {
       "message": "另存为"
+    },
+    "cmd.file.save-copy.category": {
+      "message": "文件"
+    },
+    "cmd.file.save-copy.description": {
+      "message": "写出一份副本，不改变当前文档身份"
+    },
+    "cmd.file.save-copy.title": {
+      "message": "保存副本"
     },
     "cmd.file.save.category": {
       "message": "文件"
     },
     "cmd.file.save.description": {
-      "message": "将当前文档写回磁盘"
+      "message": "把当前文档写回它打开时的文件"
     },
     "cmd.file.save.title": {
       "message": "保存"
+    },
+    "cmd.help.commands.category": {
+      "message": "帮助"
+    },
+    "cmd.help.commands.description": {
+      "message": "在编辑器标签页中打开命令参考"
+    },
+    "cmd.help.commands.title": {
+      "message": "命令参考"
+    },
+    "cmd.help.controls.category": {
+      "message": "帮助"
+    },
+    "cmd.help.controls.description": {
+      "message": "在编辑器标签页中打开控件参考"
+    },
+    "cmd.help.controls.title": {
+      "message": "控件参考"
+    },
+    "cmd.help.shortcuts.category": {
+      "message": "帮助"
+    },
+    "cmd.help.shortcuts.description": {
+      "message": "在编辑器标签页中打开快捷键参考"
+    },
+    "cmd.help.shortcuts.title": {
+      "message": "键盘快捷键"
     },
     "cmd.keys.show.category": {
       "message": "视图"
@@ -76,23 +652,500 @@
     "cmd.keys.show.title": {
       "message": "键盘快捷键"
     },
-    "cmd.panel.close.category": {
+    "cmd.nav.code-back.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-back.description": {
+      "message": "返回上一个跳转位置"
+    },
+    "cmd.nav.code-back.title": {
+      "message": "后退"
+    },
+    "cmd.nav.code-declaration.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-declaration.description": {
+      "message": "移动到光标下符号的声明处"
+    },
+    "cmd.nav.code-declaration.title": {
+      "message": "转到声明"
+    },
+    "cmd.nav.code-definition.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-definition.description": {
+      "message": "移动到光标下符号的定义处"
+    },
+    "cmd.nav.code-definition.title": {
+      "message": "转到定义"
+    },
+    "cmd.nav.code-forward.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-forward.description": {
+      "message": "移动到下一个跳转位置"
+    },
+    "cmd.nav.code-forward.title": {
+      "message": "前进"
+    },
+    "cmd.nav.code-implementation.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-implementation.description": {
+      "message": "移动到光标下符号的实现处"
+    },
+    "cmd.nav.code-implementation.title": {
+      "message": "转到实现"
+    },
+    "cmd.nav.code-references.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-references.description": {
+      "message": "列出光标下符号的每一处引用"
+    },
+    "cmd.nav.code-references.title": {
+      "message": "查找引用"
+    },
+    "cmd.nav.code-type-definition.category": {
+      "message": "导航"
+    },
+    "cmd.nav.code-type-definition.description": {
+      "message": "移动到该符号类型的定义处"
+    },
+    "cmd.nav.code-type-definition.title": {
+      "message": "转到类型定义"
+    },
+    "cmd.nav.design-child.category": {
+      "message": "导航"
+    },
+    "cmd.nav.design-child.description": {
+      "message": "选中当前设计节点的第一个子节点"
+    },
+    "cmd.nav.design-child.title": {
+      "message": "选择首个子节点"
+    },
+    "cmd.nav.design-next-sibling.category": {
+      "message": "导航"
+    },
+    "cmd.nav.design-next-sibling.description": {
+      "message": "按树序选中当前设计节点的下一个同级节点"
+    },
+    "cmd.nav.design-next-sibling.title": {
+      "message": "选择下一个同级节点"
+    },
+    "cmd.nav.design-parent.category": {
+      "message": "导航"
+    },
+    "cmd.nav.design-parent.description": {
+      "message": "选中当前设计节点的父节点"
+    },
+    "cmd.nav.design-parent.title": {
+      "message": "选择父节点"
+    },
+    "cmd.nav.design-previous-sibling.category": {
+      "message": "导航"
+    },
+    "cmd.nav.design-previous-sibling.description": {
+      "message": "按树序选中当前设计节点的上一个同级节点"
+    },
+    "cmd.nav.design-previous-sibling.title": {
+      "message": "选择上一个同级节点"
+    },
+    "cmd.nav.file-symbol.category": {
+      "message": "导航"
+    },
+    "cmd.nav.file-symbol.description": {
+      "message": "跳转到当前编辑器文档中的符号"
+    },
+    "cmd.nav.file-symbol.title": {
+      "message": "跳转到文件中的符号"
+    },
+    "cmd.nav.goto-line.category": {
+      "message": "导航"
+    },
+    "cmd.nav.goto-line.description": {
+      "message": "将光标移到焦点编辑器的指定行（与列）"
+    },
+    "cmd.nav.goto-line.title": {
+      "message": "跳转到行"
+    },
+    "cmd.nav.open-file.category": {
+      "message": "导航"
+    },
+    "cmd.nav.open-file.description": {
+      "message": "按完整路径或模糊查询打开项目文件"
+    },
+    "cmd.nav.open-file.title": {
+      "message": "打开文件"
+    },
+    "cmd.nav.reveal-current-file.category": {
+      "message": "导航"
+    },
+    "cmd.nav.reveal-current-file.description": {
+      "message": "把当前编辑器的文档交给系统文件管理器"
+    },
+    "cmd.nav.reveal-current-file.title": {
+      "message": "在文件管理器中定位当前文件"
+    },
+    "cmd.nav.workspace-symbol.category": {
+      "message": "导航"
+    },
+    "cmd.nav.workspace-symbol.description": {
+      "message": "通过语言服务器搜索工程符号"
+    },
+    "cmd.nav.workspace-symbol.title": {
+      "message": "跳转到工作区中的符号"
+    },
+    "cmd.preview.rebuild.category": {
+      "message": "预览"
+    },
+    "cmd.preview.rebuild.description": {
+      "message": "从启动页面的库文档挂载或更新预览"
+    },
+    "cmd.preview.rebuild.title": {
+      "message": "重建预览界面"
+    },
+    "cmd.preview.start.category": {
+      "message": "预览"
+    },
+    "cmd.preview.start.description": {
+      "message": "启动预览服务并报告就绪状态"
+    },
+    "cmd.preview.start.title": {
+      "message": "启动预览"
+    },
+    "cmd.preview.stop.category": {
+      "message": "预览"
+    },
+    "cmd.preview.stop.description": {
+      "message": "停止预览服务"
+    },
+    "cmd.preview.stop.title": {
+      "message": "停止预览"
+    },
+    "cmd.project.check-references.category": {
+      "message": "项目"
+    },
+    "cmd.project.check-references.description": {
+      "message": "列出所有项目引用及其解析结果"
+    },
+    "cmd.project.check-references.title": {
+      "message": "检查引用"
+    },
+    "cmd.project.check.category": {
+      "message": "项目"
+    },
+    "cmd.project.check.description": {
+      "message": "报告项目文件的格式、身份与引用"
+    },
+    "cmd.project.check.title": {
+      "message": "校验项目"
+    },
+    "cmd.project.clean-resources.category": {
+      "message": "工程"
+    },
+    "cmd.project.clean-resources.description": {
+      "message": "列出没有页面引用的已声明资源，确认后移除声明"
+    },
+    "cmd.project.clean-resources.title": {
+      "message": "清理未引用资源"
+    },
+    "cmd.project.migration.category": {
+      "message": "项目"
+    },
+    "cmd.project.migration.description": {
+      "message": "报告格式版本与写入时会执行的迁移步骤"
+    },
+    "cmd.project.migration.title": {
+      "message": "迁移预览"
+    },
+    "cmd.project.rescan.category": {
+      "message": "项目"
+    },
+    "cmd.project.rescan.description": {
+      "message": "重新读取项目结构到项目面板"
+    },
+    "cmd.project.rescan.title": {
+      "message": "重新扫描项目"
+    },
+    "cmd.project.trust.category": {
+      "message": "工程"
+    },
+    "cmd.project.trust.description": {
+      "message": "记录本会话可以写入当前工程"
+    },
+    "cmd.project.trust.title": {
+      "message": "信任工程"
+    },
+    "cmd.run.clear.category": {
+      "message": "运行"
+    },
+    "cmd.run.clear.description": {
+      "message": "清除应用输出面板"
+    },
+    "cmd.run.clear.title": {
+      "message": "清除运行输出"
+    },
+    "cmd.run.copy-output.category": {
+      "message": "运行"
+    },
+    "cmd.run.copy-output.description": {
+      "message": "将应用输出复制到剪贴板"
+    },
+    "cmd.run.copy-output.title": {
+      "message": "复制运行输出"
+    },
+    "cmd.run.start.category": {
+      "message": "运行"
+    },
+    "cmd.run.start.description": {
+      "message": "在项目目录中启动已配置的程序"
+    },
+    "cmd.run.start.title": {
+      "message": "运行应用"
+    },
+    "cmd.run.stop.category": {
+      "message": "运行"
+    },
+    "cmd.run.stop.description": {
+      "message": "请求正在运行的程序停止"
+    },
+    "cmd.run.stop.title": {
+      "message": "停止应用"
+    },
+    "cmd.terminal.start.category": {
+      "message": "终端"
+    },
+    "cmd.terminal.start.description": {
+      "message": "在项目目录中启动 shell 会话"
+    },
+    "cmd.terminal.start.title": {
+      "message": "启动终端"
+    },
+    "cmd.terminal.stop.category": {
+      "message": "终端"
+    },
+    "cmd.terminal.stop.description": {
+      "message": "请求正在运行的 shell 会话停止"
+    },
+    "cmd.terminal.stop.title": {
+      "message": "停止终端"
+    },
+    "cmd.test.run-current-file.category": {
+      "message": "测试"
+    },
+    "cmd.test.run-current-file.description": {
+      "message": "运行模块路径属于当前文档的测试"
+    },
+    "cmd.test.run-current-file.title": {
+      "message": "运行当前文件的测试"
+    },
+    "cmd.test.run-failed.category": {
+      "message": "测试"
+    },
+    "cmd.test.run-failed.description": {
+      "message": "只运行上一次失败的测试"
+    },
+    "cmd.test.run-failed.title": {
+      "message": "重跑失败测试"
+    },
+    "cmd.test.run-stop.category": {
+      "message": "测试"
+    },
+    "cmd.test.run-stop.description": {
+      "message": "请求正在运行的测试停止"
+    },
+    "cmd.test.run-stop.title": {
+      "message": "停止测试"
+    },
+    "cmd.test.run.category": {
+      "message": "测试"
+    },
+    "cmd.test.run.description": {
+      "message": "发现并运行项目测试"
+    },
+    "cmd.test.run.title": {
+      "message": "运行测试"
+    },
+    "cmd.vcs.refresh.category": {
+      "message": "版本控制"
+    },
+    "cmd.vcs.refresh.description": {
+      "message": "立即重新读取仓库状态"
+    },
+    "cmd.vcs.refresh.title": {
+      "message": "刷新版本控制"
+    },
+    "cmd.view.display-status-bar.category": {
       "message": "视图"
     },
-    "cmd.panel.close.description": {
-      "message": "用键盘隐藏面板"
+    "cmd.view.display-status-bar.description": {
+      "message": "显示或隐藏状态栏，并重排内容区"
     },
-    "cmd.panel.close.title": {
-      "message": "关闭面板"
+    "cmd.view.display-status-bar.title": {
+      "message": "状态栏"
     },
-    "cmd.tree.activate.category": {
+    "cmd.view.display-toolbar.category": {
       "message": "视图"
     },
-    "cmd.tree.activate.description": {
-      "message": "打开选中的树项目"
+    "cmd.view.display-toolbar.description": {
+      "message": "显示或隐藏工具栏，并重排编辑区"
     },
-    "cmd.tree.activate.title": {
-      "message": "激活"
+    "cmd.view.display-toolbar.title": {
+      "message": "工具栏"
+    },
+    "cmd.view.display-zoom-in.category": {
+      "message": "视图"
+    },
+    "cmd.view.display-zoom-in.description": {
+      "message": "放大焦点编辑器的文本"
+    },
+    "cmd.view.display-zoom-in.title": {
+      "message": "放大"
+    },
+    "cmd.view.display-zoom-out.category": {
+      "message": "视图"
+    },
+    "cmd.view.display-zoom-out.description": {
+      "message": "缩小焦点编辑器的文本"
+    },
+    "cmd.view.display-zoom-out.title": {
+      "message": "缩小"
+    },
+    "cmd.view.display-zoom-reset.category": {
+      "message": "视图"
+    },
+    "cmd.view.display-zoom-reset.description": {
+      "message": "将焦点编辑器的文本恢复默认大小"
+    },
+    "cmd.view.display-zoom-reset.title": {
+      "message": "重置缩放"
+    },
+    "cmd.view.layout-fullscreen.category": {
+      "message": "视图"
+    },
+    "cmd.view.layout-fullscreen.description": {
+      "message": "请求平台窗口进入或退出全屏"
+    },
+    "cmd.view.layout-fullscreen.title": {
+      "message": "全屏"
+    },
+    "cmd.view.layout-load.category": {
+      "message": "视图"
+    },
+    "cmd.view.layout-load.description": {
+      "message": "无需重启即应用已保存的布局文件"
+    },
+    "cmd.view.layout-load.title": {
+      "message": "载入布局"
+    },
+    "cmd.view.layout-lock.category": {
+      "message": "视图"
+    },
+    "cmd.view.layout-lock.description": {
+      "message": "锁定或解锁布局，阻止保存、载入与重置"
+    },
+    "cmd.view.layout-lock.title": {
+      "message": "锁定布局"
+    },
+    "cmd.view.layout-zen.category": {
+      "message": "视图"
+    },
+    "cmd.view.layout-zen.description": {
+      "message": "隐藏所有停靠面板与窗口装饰，退出时恢复"
+    },
+    "cmd.view.layout-zen.title": {
+      "message": "专注模式"
+    },
+    "cmd.view.merge-group.category": {
+      "message": "视图"
+    },
+    "cmd.view.merge-group.description": {
+      "message": "将焦点组的视图并入相邻组并关闭该组"
+    },
+    "cmd.view.merge-group.title": {
+      "message": "合并编辑器组"
+    },
+    "cmd.view.mode-code.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-code.description": {
+      "message": "将工作台切换到代码模式"
+    },
+    "cmd.view.mode-code.title": {
+      "message": "代码模式"
+    },
+    "cmd.view.mode-debug.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-debug.description": {
+      "message": "将工作台切换到调试模式"
+    },
+    "cmd.view.mode-debug.title": {
+      "message": "调试模式"
+    },
+    "cmd.view.mode-design.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-design.description": {
+      "message": "将工作台切换到设计模式"
+    },
+    "cmd.view.mode-design.title": {
+      "message": "设计模式"
+    },
+    "cmd.view.mode-project.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-project.description": {
+      "message": "将工作台切换到工程模式"
+    },
+    "cmd.view.mode-project.title": {
+      "message": "工程模式"
+    },
+    "cmd.view.mode-release.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-release.description": {
+      "message": "将工作台切换到发布模式"
+    },
+    "cmd.view.mode-release.title": {
+      "message": "发布模式"
+    },
+    "cmd.view.mode-test.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-test.description": {
+      "message": "将工作台切换到测试模式"
+    },
+    "cmd.view.mode-test.title": {
+      "message": "测试模式"
+    },
+    "cmd.view.mode-welcome.category": {
+      "message": "视图"
+    },
+    "cmd.view.mode-welcome.description": {
+      "message": "将工作台切换到欢迎模式"
+    },
+    "cmd.view.mode-welcome.title": {
+      "message": "欢迎模式"
+    },
+    "cmd.view.move-tab.category": {
+      "message": "视图"
+    },
+    "cmd.view.move-tab.description": {
+      "message": "把当前编辑组的活动标签页移动到下一编辑组"
+    },
+    "cmd.view.move-tab.title": {
+      "message": "移动标签页到下一组"
+    },
+    "cmd.view.next-group.category": {
+      "message": "视图"
+    },
+    "cmd.view.next-group.description": {
+      "message": "将键盘焦点移到下一个编辑器组"
+    },
+    "cmd.view.next-group.title": {
+      "message": "下一个编辑器组"
     },
     "cmd.view.palette.category": {
       "message": "视图"
@@ -102,6 +1155,81 @@
     },
     "cmd.view.palette.title": {
       "message": "命令面板"
+    },
+    "cmd.view.panel-hide-current.category": {
+      "message": "视图"
+    },
+    "cmd.view.panel-hide-current.description": {
+      "message": "隐藏当前拥有键盘焦点的面板"
+    },
+    "cmd.view.panel-hide-current.title": {
+      "message": "隐藏当前面板"
+    },
+    "cmd.view.panel-restore.category": {
+      "message": "视图"
+    },
+    "cmd.view.panel-restore.description": {
+      "message": "显示最近隐藏的面板"
+    },
+    "cmd.view.panel-restore.title": {
+      "message": "恢复关闭的面板"
+    },
+    "cmd.view.panel-show.category": {
+      "message": "视图"
+    },
+    "cmd.view.panel-show.description": {
+      "message": "显示面板，并隐藏与其共享停靠位的面板"
+    },
+    "cmd.view.panel-show.param.panel.help": {
+      "message": "要显示的 §2.2 面板"
+    },
+    "cmd.view.panel-show.title": {
+      "message": "显示面板"
+    },
+    "cmd.view.previous-group.category": {
+      "message": "视图"
+    },
+    "cmd.view.previous-group.description": {
+      "message": "将键盘焦点移到上一个编辑器组"
+    },
+    "cmd.view.previous-group.title": {
+      "message": "上一个编辑器组"
+    },
+    "cmd.view.reset-layout.category": {
+      "message": "视图"
+    },
+    "cmd.view.reset-layout.description": {
+      "message": "恢复窗口启动时的布局"
+    },
+    "cmd.view.reset-layout.title": {
+      "message": "重置布局"
+    },
+    "cmd.view.save-layout.category": {
+      "message": "视图"
+    },
+    "cmd.view.save-layout.description": {
+      "message": "将面板与编辑器组写入布局文件"
+    },
+    "cmd.view.save-layout.title": {
+      "message": "保存布局"
+    },
+    "cmd.view.split-down.category": {
+      "message": "视图"
+    },
+    "cmd.view.split-down.description": {
+      "message": "将焦点编辑器组拆分为上下两个窗格"
+    },
+    "cmd.view.split-down.title": {
+      "message": "向下拆分编辑器"
+    },
+    "cmd.view.split.category": {
+      "message": "视图"
+    },
+    "cmd.view.split.description": {
+      "message": "拆分当前编辑器组，并在新组中显示该文档"
+    },
+    "cmd.view.split.title": {
+      "message": "拆分编辑器"
     },
     "cmd.view.welcome.category": {
       "message": "视图"
@@ -133,17 +1261,95 @@
     "diag.command.unknown": {
       "message": "没有命令 {id}"
     },
+    "menu.build.item.build.cancel": {
+      "message": "取消"
+    },
+    "menu.build.item.build.check": {
+      "message": "检查"
+    },
+    "menu.build.item.build.clean": {
+      "message": "清理"
+    },
+    "menu.build.item.build.copy-command": {
+      "message": "复制构建命令"
+    },
+    "menu.build.item.build.copy-output": {
+      "message": "复制输出"
+    },
+    "menu.build.item.build.locate-first-error": {
+      "message": "转到首个错误"
+    },
+    "menu.build.item.build.rebuild": {
+      "message": "重新构建"
+    },
     "menu.build.item.build.run": {
       "message": "运行"
     },
     "menu.build.title": {
       "message": "构建"
     },
+    "menu.debug.item.debug.continue": {
+      "message": "继续"
+    },
+    "menu.debug.item.debug.pause": {
+      "message": "暂停"
+    },
+    "menu.debug.item.debug.start": {
+      "message": "开始调试"
+    },
+    "menu.debug.item.debug.step": {
+      "message": "单步跳过"
+    },
+    "menu.debug.item.debug.step-in": {
+      "message": "单步进入"
+    },
+    "menu.debug.item.debug.step-out": {
+      "message": "单步跳出"
+    },
+    "menu.debug.item.debug.stop": {
+      "message": "停止调试"
+    },
+    "menu.debug.title": {
+      "message": "调试"
+    },
+    "menu.design.item.design.actual-size": {
+      "message": "实际尺寸"
+    },
+    "menu.design.item.design.fit": {
+      "message": "适合画布"
+    },
+    "menu.design.item.design.grid": {
+      "message": "显示网格"
+    },
+    "menu.design.item.design.rulers": {
+      "message": "显示标尺"
+    },
+    "menu.design.title": {
+      "message": "设计"
+    },
     "menu.edit.item.edit.copy": {
       "message": "复制"
     },
+    "menu.edit.item.edit.copy-node-id": {
+      "message": "复制节点 ID"
+    },
     "menu.edit.item.edit.cut": {
       "message": "剪切"
+    },
+    "menu.edit.item.edit.find": {
+      "message": "查找"
+    },
+    "menu.edit.item.edit.find-next": {
+      "message": "查找下一个"
+    },
+    "menu.edit.item.edit.find-previous": {
+      "message": "查找上一个"
+    },
+    "menu.edit.item.edit.find-selection": {
+      "message": "在选区中查找"
+    },
+    "menu.edit.item.edit.history-view": {
+      "message": "操作历史"
     },
     "menu.edit.item.edit.paste": {
       "message": "粘贴"
@@ -151,8 +1357,65 @@
     "menu.edit.item.edit.redo": {
       "message": "重做"
     },
+    "menu.edit.item.edit.replace": {
+      "message": "替换"
+    },
+    "menu.edit.item.edit.select-all": {
+      "message": "全选"
+    },
+    "menu.edit.item.edit.select-clear": {
+      "message": "取消选择"
+    },
+    "menu.edit.item.edit.select-cursor-above": {
+      "message": "在上方添加光标"
+    },
+    "menu.edit.item.edit.select-cursor-below": {
+      "message": "在下方添加光标"
+    },
+    "menu.edit.item.edit.select-expand": {
+      "message": "扩大选择"
+    },
+    "menu.edit.item.edit.select-next-occurrence": {
+      "message": "选择下一个出现项"
+    },
+    "menu.edit.item.edit.select-occurrences": {
+      "message": "选择所有出现项"
+    },
+    "menu.edit.item.edit.select-shrink": {
+      "message": "缩小选择"
+    },
     "menu.edit.item.edit.undo": {
       "message": "撤销"
+    },
+    "menu.edit.submenu.text.item.edit.text-comment": {
+      "message": "切换注释"
+    },
+    "menu.edit.submenu.text.item.edit.text-delete": {
+      "message": "删除行"
+    },
+    "menu.edit.submenu.text.item.edit.text-duplicate": {
+      "message": "复制行"
+    },
+    "menu.edit.submenu.text.item.edit.text-indent": {
+      "message": "增加缩进"
+    },
+    "menu.edit.submenu.text.item.edit.text-join": {
+      "message": "合并行"
+    },
+    "menu.edit.submenu.text.item.edit.text-move-down": {
+      "message": "下移行"
+    },
+    "menu.edit.submenu.text.item.edit.text-move-up": {
+      "message": "上移行"
+    },
+    "menu.edit.submenu.text.item.edit.text-outdent": {
+      "message": "减少缩进"
+    },
+    "menu.edit.submenu.text.item.edit.text-sort": {
+      "message": "排序行"
+    },
+    "menu.edit.submenu.text.title": {
+      "message": "文本"
     },
     "menu.edit.title": {
       "message": "编辑"
@@ -160,11 +1423,29 @@
     "menu.file.item.file.close": {
       "message": "关闭"
     },
+    "menu.file.item.file.close-others": {
+      "message": "关闭其他"
+    },
+    "menu.file.item.file.close-project": {
+      "message": "关闭工程"
+    },
+    "menu.file.item.file.close-saved": {
+      "message": "关闭已保存"
+    },
+    "menu.file.item.file.copy-path": {
+      "message": "复制项目路径"
+    },
     "menu.file.item.file.new-project": {
       "message": "新建项目"
     },
     "menu.file.item.file.open-project": {
       "message": "打开项目"
+    },
+    "menu.file.item.file.open-reopen": {
+      "message": "重新打开关闭的文档"
+    },
+    "menu.file.item.file.reveal": {
+      "message": "在文件管理器中显示"
     },
     "menu.file.item.file.save": {
       "message": "保存"
@@ -175,8 +1456,179 @@
     "menu.file.item.file.save-as": {
       "message": "另存为"
     },
+    "menu.file.item.file.save-copy": {
+      "message": "保存副本"
+    },
     "menu.file.title": {
       "message": "文件"
+    },
+    "menu.help.item.help.commands": {
+      "message": "命令参考"
+    },
+    "menu.help.item.help.controls": {
+      "message": "控件参考"
+    },
+    "menu.help.item.help.shortcuts": {
+      "message": "键盘快捷键"
+    },
+    "menu.help.title": {
+      "message": "帮助"
+    },
+    "menu.navigate.item.nav.design-child": {
+      "message": "选择首个子节点"
+    },
+    "menu.navigate.item.nav.design-next-sibling": {
+      "message": "选择下一个同级节点"
+    },
+    "menu.navigate.item.nav.design-parent": {
+      "message": "选择父节点"
+    },
+    "menu.navigate.item.nav.design-previous-sibling": {
+      "message": "选择上一个同级节点"
+    },
+    "menu.navigate.item.nav.file-symbol": {
+      "message": "跳转到文件中的符号"
+    },
+    "menu.navigate.item.nav.goto-line": {
+      "message": "跳转到行"
+    },
+    "menu.navigate.item.nav.open-file": {
+      "message": "打开文件"
+    },
+    "menu.navigate.item.nav.reveal-current-file": {
+      "message": "在文件管理器中定位当前文件"
+    },
+    "menu.navigate.item.nav.workspace-symbol": {
+      "message": "跳转到工作区中的符号"
+    },
+    "menu.navigate.submenu.code.item.code.bookmark-toggle": {
+      "message": "切换书签"
+    },
+    "menu.navigate.submenu.code.item.code.breadcrumbs": {
+      "message": "显示面包屑"
+    },
+    "menu.navigate.submenu.code.item.code.fold": {
+      "message": "折叠块"
+    },
+    "menu.navigate.submenu.code.item.code.fold-all": {
+      "message": "全部折叠"
+    },
+    "menu.navigate.submenu.code.item.code.inlay-hints": {
+      "message": "切换内联提示"
+    },
+    "menu.navigate.submenu.code.item.code.outline": {
+      "message": "显示大纲"
+    },
+    "menu.navigate.submenu.code.item.code.unfold": {
+      "message": "展开块"
+    },
+    "menu.navigate.submenu.code.item.code.unfold-all": {
+      "message": "全部展开"
+    },
+    "menu.navigate.submenu.code.item.nav.code-back": {
+      "message": "后退"
+    },
+    "menu.navigate.submenu.code.item.nav.code-declaration": {
+      "message": "转到声明"
+    },
+    "menu.navigate.submenu.code.item.nav.code-definition": {
+      "message": "转到定义"
+    },
+    "menu.navigate.submenu.code.item.nav.code-forward": {
+      "message": "前进"
+    },
+    "menu.navigate.submenu.code.item.nav.code-implementation": {
+      "message": "转到实现"
+    },
+    "menu.navigate.submenu.code.item.nav.code-references": {
+      "message": "查找引用"
+    },
+    "menu.navigate.submenu.code.item.nav.code-type-definition": {
+      "message": "转到类型定义"
+    },
+    "menu.navigate.submenu.code.title": {
+      "message": "代码"
+    },
+    "menu.navigate.title": {
+      "message": "导航"
+    },
+    "menu.preview.item.preview.rebuild": {
+      "message": "重建预览界面"
+    },
+    "menu.preview.item.preview.start": {
+      "message": "启动预览"
+    },
+    "menu.preview.item.preview.stop": {
+      "message": "停止预览"
+    },
+    "menu.preview.title": {
+      "message": "预览"
+    },
+    "menu.project.item.project.check": {
+      "message": "校验项目"
+    },
+    "menu.project.item.project.check-references": {
+      "message": "检查引用"
+    },
+    "menu.project.item.project.clean-resources": {
+      "message": "清理未引用资源"
+    },
+    "menu.project.item.project.migration": {
+      "message": "迁移预览"
+    },
+    "menu.project.item.project.rescan": {
+      "message": "重新扫描项目"
+    },
+    "menu.project.item.project.trust": {
+      "message": "信任工程"
+    },
+    "menu.project.title": {
+      "message": "项目"
+    },
+    "menu.run.item.run.clear": {
+      "message": "清除输出"
+    },
+    "menu.run.item.run.copy-output": {
+      "message": "复制输出"
+    },
+    "menu.run.item.run.start": {
+      "message": "运行应用"
+    },
+    "menu.run.item.run.stop": {
+      "message": "停止应用"
+    },
+    "menu.run.title": {
+      "message": "运行"
+    },
+    "menu.terminal.item.terminal.start": {
+      "message": "启动终端"
+    },
+    "menu.terminal.item.terminal.stop": {
+      "message": "停止终端"
+    },
+    "menu.terminal.title": {
+      "message": "终端"
+    },
+    "menu.test.item.test.run": {
+      "message": "运行测试"
+    },
+    "menu.test.item.test.run-current-file": {
+      "message": "运行当前文件的测试"
+    },
+    "menu.test.item.test.run-failed": {
+      "message": "重跑失败测试"
+    },
+    "menu.test.item.test.run-stop": {
+      "message": "停止测试"
+    },
+    "menu.test.title": {
+      "message": "测试"
+    },
+    "menu.vcs.item.vcs.refresh": {
+      "message": "刷新版本控制"
+    },
+    "menu.vcs.title": {
+      "message": "版本控制"
     },
     "menu.view.item.keys.show": {
       "message": "键盘快捷键"
@@ -187,11 +1639,77 @@
     "menu.view.item.tree.activate": {
       "message": "激活树项目"
     },
+    "menu.view.item.view.display-status-bar": {
+      "message": "状态栏"
+    },
+    "menu.view.item.view.display-toolbar": {
+      "message": "工具栏"
+    },
+    "menu.view.item.view.display-zoom-in": {
+      "message": "放大"
+    },
+    "menu.view.item.view.display-zoom-out": {
+      "message": "缩小"
+    },
+    "menu.view.item.view.display-zoom-reset": {
+      "message": "重置缩放"
+    },
     "menu.view.item.view.palette": {
       "message": "命令面板"
     },
+    "menu.view.item.view.panel-hide-current": {
+      "message": "隐藏当前面板"
+    },
+    "menu.view.item.view.panel-restore": {
+      "message": "恢复关闭的面板"
+    },
     "menu.view.item.view.welcome": {
       "message": "欢迎"
+    },
+    "menu.view.submenu.editor.item.view.merge-group": {
+      "message": "合并编辑组"
+    },
+    "menu.view.submenu.editor.item.view.move-tab": {
+      "message": "移动标签页到下一组"
+    },
+    "menu.view.submenu.editor.item.view.next-group": {
+      "message": "下一编辑组"
+    },
+    "menu.view.submenu.editor.item.view.previous-group": {
+      "message": "上一编辑组"
+    },
+    "menu.view.submenu.editor.item.view.split": {
+      "message": "分栏"
+    },
+    "menu.view.submenu.editor.item.view.split-down": {
+      "message": "向下分栏"
+    },
+    "menu.view.submenu.editor.title": {
+      "message": "编辑区"
+    },
+    "menu.view.submenu.modes.item.view.mode-code": {
+      "message": "代码"
+    },
+    "menu.view.submenu.modes.item.view.mode-debug": {
+      "message": "调试"
+    },
+    "menu.view.submenu.modes.item.view.mode-design": {
+      "message": "设计"
+    },
+    "menu.view.submenu.modes.item.view.mode-project": {
+      "message": "工程"
+    },
+    "menu.view.submenu.modes.item.view.mode-release": {
+      "message": "发布"
+    },
+    "menu.view.submenu.modes.item.view.mode-test": {
+      "message": "测试"
+    },
+    "menu.view.submenu.modes.item.view.mode-welcome": {
+      "message": "欢迎"
+    },
+    "menu.view.submenu.modes.title": {
+      "message": "模式"
     },
     "menu.view.submenu.panels.item.panel.inspector": {
       "message": "检查器"
@@ -219,6 +1737,9 @@
     },
     "shell.version": {
       "message": "rustage {version}"
+    },
+    "ui.ai.no-journal": {
+      "message": "未配置 AI 会话 journal；用 --ai-journal <路径> 启动"
     },
     "ui.assets.note": {
       "message": "示例资产 · 缩略图已缓存"
@@ -262,6 +1783,9 @@
     "ui.button.stop": {
       "message": "停止"
     },
+    "ui.button.switch-theme": {
+      "message": "切换"
+    },
     "ui.button.theme": {
       "message": "主题"
     },
@@ -271,71 +1795,59 @@
     "ui.button.values": {
       "message": "值"
     },
-    "ui.button.switch-theme": {
-      "message": "切换"
+    "ui.components.no-page": {
+      "message": "工程没有声明任何页面"
     },
-    "ui.canvas": {
-      "message": "设计画布"
+    "ui.components.no-project": {
+      "message": "未打开工程；组件属于页面文档"
+    },
+    "ui.components.unreadable": {
+      "message": "工程文档无法读取，因此没有页面"
+    },
+    "ui.components.unreadable-at": {
+      "message": "页面无法读取：{reason}"
+    },
+    "ui.context.build.cancel": {
+      "message": "取消构建"
+    },
+    "ui.context.build.check": {
+      "message": "检查"
+    },
+    "ui.context.build.clean": {
+      "message": "清理"
+    },
+    "ui.context.build.copy-all": {
+      "message": "复制构建日志"
+    },
+    "ui.context.build.first-error": {
+      "message": "转到首个错误"
+    },
+    "ui.context.build.rebuild": {
+      "message": "重新构建"
+    },
+    "ui.context.build.run": {
+      "message": "构建"
     },
     "ui.context.clear": {
       "message": "清除输入"
     },
-    "ui.context.inspect": {
-      "message": "检查值"
-    },
-    "ui.context.reset": {
-      "message": "重置属性"
-    },
-    "ui.context.select-parent": {
-      "message": "选择父节点"
-    },
-    "ui.context.select-child": {
-      "message": "选择子节点"
-    },
-    "ui.context.rename": {
-      "message": "重命名"
-    },
-    "ui.context.wrap-container": {
-      "message": "包装为容器"
-    },
-    "ui.context.move-out": {
-      "message": "移出容器"
-    },
     "ui.context.copy-node": {
       "message": "复制节点"
-    },
-    "ui.context.move-into": {
-      "message": "移入上一层容器"
-    },
-    "ui.context.paste-node": {
-      "message": "粘贴"
     },
     "ui.context.delete": {
       "message": "删除"
     },
-    "ui.context.favorite": {
-      "message": "切换收藏"
+    "ui.context.diagnostic.clear": {
+      "message": "清空消息"
+    },
+    "ui.context.diagnostic.copy": {
+      "message": "复制消息"
+    },
+    "ui.context.diagnostic.copy-all": {
+      "message": "复制全部消息"
     },
     "ui.context.duplicate": {
       "message": "复制节点"
-    },
-    "ui.context.toggle-hide": {
-      "message": "隐藏或显示"
-    },
-    "ui.context.toggle-lock": {
-      "message": "锁定或解锁"
-    },
-    "ui.context.raise": {
-      "message": "置顶"
-    },
-    "ui.context.raise-one": {
-      "message": "上移一层"
-    },
-    "ui.context.lower-one": {
-      "message": "下移一层"
-    },
-    "ui.context.send-to-back": {
-      "message": "置底"
     },
     "ui.context.editor.close": {
       "message": "关闭标签页"
@@ -346,20 +1858,98 @@
     "ui.context.editor.close-right": {
       "message": "关闭右侧标签页"
     },
-    "ui.context.editor.split": {
-      "message": "拆分编辑器"
-    },
     "ui.context.editor.next-group": {
       "message": "下一个编辑器组"
     },
-    "ui.context.diagnostic.copy": {
-      "message": "复制消息"
+    "ui.context.editor.split": {
+      "message": "拆分编辑器"
     },
-    "ui.context.diagnostic.copy-all": {
-      "message": "复制全部消息"
+    "ui.context.favorite": {
+      "message": "切换收藏"
     },
-    "ui.context.diagnostic.clear": {
-      "message": "清空消息"
+    "ui.context.inspect": {
+      "message": "检查值"
+    },
+    "ui.context.lower-one": {
+      "message": "下移一层"
+    },
+    "ui.context.move-into": {
+      "message": "移入上一层容器"
+    },
+    "ui.context.move-out": {
+      "message": "移出容器"
+    },
+    "ui.context.notification.dismiss": {
+      "message": "忽略该通知"
+    },
+    "ui.context.paste-node": {
+      "message": "粘贴"
+    },
+    "ui.context.preview.start": {
+      "message": "启动预览"
+    },
+    "ui.context.preview.stop": {
+      "message": "停止预览"
+    },
+    "ui.context.raise": {
+      "message": "置顶"
+    },
+    "ui.context.raise-one": {
+      "message": "上移一层"
+    },
+    "ui.context.rename": {
+      "message": "重命名"
+    },
+    "ui.context.reset": {
+      "message": "重置属性"
+    },
+    "ui.context.run.clear": {
+      "message": "清空输出"
+    },
+    "ui.context.run.copy-all": {
+      "message": "复制全部输出"
+    },
+    "ui.context.run.start": {
+      "message": "运行程序"
+    },
+    "ui.context.run.stop": {
+      "message": "停止程序"
+    },
+    "ui.context.select-child": {
+      "message": "选择子节点"
+    },
+    "ui.context.select-parent": {
+      "message": "选择父节点"
+    },
+    "ui.context.send-to-back": {
+      "message": "置底"
+    },
+    "ui.context.terminal.start": {
+      "message": "启动终端"
+    },
+    "ui.context.terminal.stop": {
+      "message": "停止终端"
+    },
+    "ui.context.tests.run": {
+      "message": "运行测试"
+    },
+    "ui.context.tests.run-failed": {
+      "message": "重跑失败测试"
+    },
+    "ui.context.tests.stop": {
+      "message": "停止测试"
+    },
+    "ui.context.toggle-hide": {
+      "message": "隐藏或显示"
+    },
+    "ui.context.toggle-lock": {
+      "message": "锁定或解锁"
+    },
+    "ui.context.vcs.refresh": {
+      "message": "刷新版本控制"
+    },
+    "ui.context.wrap-container": {
+      "message": "包装为容器"
     },
     "ui.data.dataset": {
       "message": "数据集"
@@ -367,14 +1957,119 @@
     "ui.data.diagnostic": {
       "message": "诊断"
     },
+    "ui.debug.no-session": {
+      "message": "没有调试会话；在“调试”面板中启动"
+    },
+    "ui.dialog.clean-resources-label": {
+      "message": "输入 delete 以移除列出的声明"
+    },
+    "ui.dialog.clean-resources-title": {
+      "message": "清理未引用资源"
+    },
+    "ui.dialog.file-symbol-label": {
+      "message": "符号名"
+    },
+    "ui.dialog.file-symbol-title": {
+      "message": "跳转到文件中的符号"
+    },
+    "ui.dialog.goto-label": {
+      "message": "行 或 行:列"
+    },
+    "ui.dialog.goto-title": {
+      "message": "跳转到行"
+    },
+    "ui.dialog.open-label": {
+      "message": "路径或模糊查询"
+    },
+    "ui.dialog.open-title": {
+      "message": "打开文件"
+    },
+    "ui.dialog.rename-label": {
+      "message": "名称"
+    },
+    "ui.dialog.rename-title": {
+      "message": "重命名节点"
+    },
+    "ui.dialog.save-as-label": {
+      "message": "工程路径"
+    },
+    "ui.dialog.save-as-title": {
+      "message": "另存为"
+    },
+    "ui.dialog.save-copy-label": {
+      "message": "工程路径"
+    },
+    "ui.dialog.save-copy-title": {
+      "message": "保存副本"
+    },
+    "ui.dialog.workspace-symbol-label": {
+      "message": "符号名"
+    },
+    "ui.dialog.workspace-symbol-title": {
+      "message": "跳转到工作区中的符号"
+    },
+    "ui.environment.backend": {
+      "message": "后端"
+    },
+    "ui.environment.dependency": {
+      "message": "依赖"
+    },
+    "ui.environment.language": {
+      "message": "界面语言"
+    },
+    "ui.environment.platform": {
+      "message": "平台"
+    },
+    "ui.error.build-command-unavailable": {
+      "message": "还没有记录到构建命令"
+    },
     "ui.error.contracts": {
       "message": "契约：{reason}"
     },
     "ui.error.contracts-differ": {
       "message": "契约不同：{reason}"
     },
+    "ui.error.copy-refused": {
+      "message": "未复制：{reason}"
+    },
+    "ui.error.document-not-closed": {
+      "message": "无法关闭活动文档"
+    },
+    "ui.error.file-not-opened": {
+      "message": "无法打开文件：{reason}"
+    },
+    "ui.error.file-reveal-refused": {
+      "message": "无法定位当前文件：{reason}"
+    },
+    "ui.error.first-error-not-found": {
+      "message": "构建输出没有给出源码位置"
+    },
+    "ui.error.goto-refused": {
+      "message": "无法跳转：{reason}"
+    },
     "ui.error.inspect-refused": {
       "message": "检查被拒绝：{reason}"
+    },
+    "ui.error.navigation-failed": {
+      "message": "代码导航失败：{reason}"
+    },
+    "ui.error.navigation-no-server": {
+      "message": "未配置语言服务器；请用 --lsp <program> 启动工作台"
+    },
+    "ui.error.navigation-not-found": {
+      "message": "服务未报告光标处的任何位置"
+    },
+    "ui.error.no-current-document": {
+      "message": "当前编辑器没有可定位的文档"
+    },
+    "ui.error.no-failed-tests": {
+      "message": "上一次运行没有记录到失败测试"
+    },
+    "ui.error.no-node-selected": {
+      "message": "没有选中的设计节点"
+    },
+    "ui.error.no-other-group": {
+      "message": "只有一个编辑组，标签页无处可移"
     },
     "ui.error.not-added": {
       "message": "未添加：{reason}"
@@ -394,47 +2089,92 @@
     "ui.error.not-duplicated": {
       "message": "未复制：{reason}"
     },
-    "ui.error.not-wrapped": {
-      "message": "未包装：{reason}"
-    },
-    "ui.error.rename-refused": {
-      "message": "未重命名：{reason}"
-    },
-    "ui.error.copy-refused": {
-      "message": "未复制：{reason}"
-    },
-    "ui.error.paste-refused": {
-      "message": "未粘贴：{reason}"
-    },
-    "ui.error.not-moved-into": {
-      "message": "未移入容器：{reason}"
-    },
-    "ui.error.nothing-to-paste": {
-      "message": "没有可粘贴的节点"
-    },
-    "ui.dialog.rename-title": {
-      "message": "重命名节点"
-    },
-    "ui.dialog.rename-label": {
-      "message": "名称"
-    },
-    "ui.error.not-moved-out": {
-      "message": "未移出：{reason}"
-    },
     "ui.error.not-fired": {
       "message": "未触发：{reason}"
     },
     "ui.error.not-moved": {
       "message": "未移动：{reason}"
     },
+    "ui.error.not-moved-into": {
+      "message": "未移入容器：{reason}"
+    },
+    "ui.error.not-moved-out": {
+      "message": "未移出：{reason}"
+    },
     "ui.error.not-opened": {
       "message": "未打开：{reason}"
+    },
+    "ui.error.not-saved": {
+      "message": "未保存：{reason}"
     },
     "ui.error.not-unbound": {
       "message": "未解绑：{reason}"
     },
+    "ui.error.not-wrapped": {
+      "message": "未包装：{reason}"
+    },
+    "ui.error.nothing-to-paste": {
+      "message": "没有可粘贴的节点"
+    },
+    "ui.error.nothing-to-reopen": {
+      "message": "没有可重新打开的已关闭文档"
+    },
+    "ui.error.paste-refused": {
+      "message": "未粘贴：{reason}"
+    },
+    "ui.error.project-close-dirty": {
+      "message": "工程中还有 {count} 个文档有未保存修改；请先保存或关闭"
+    },
+    "ui.error.project-not-trusted": {
+      "message": "工程未受信任，不能写入；请先选择“工程 → 信任工程”"
+    },
+    "ui.error.project-trust-refused": {
+      "message": "工程未被信任：{reason}"
+    },
+    "ui.error.rename-refused": {
+      "message": "未重命名：{reason}"
+    },
+    "ui.error.resources-clean-refused": {
+      "message": "资源未清理：{reason}"
+    },
+    "ui.error.reveal-refused": {
+      "message": "无法显示项目：{reason}"
+    },
+    "ui.error.save-conflict": {
+      "message": "文件在打开后已被其他程序修改，未覆盖"
+    },
+    "ui.error.save-failed": {
+      "message": "部分文档未保存：{reason}"
+    },
+    "ui.error.save-no-baseline": {
+      "message": "该文档不是从磁盘打开的，没有可写回的文件"
+    },
+    "ui.error.save-outside-root": {
+      "message": "该文档不在工程根内"
+    },
+    "ui.error.save-target-empty": {
+      "message": "保存目标不能为空"
+    },
+    "ui.error.save-target-exists": {
+      "message": "目标已存在；“另存为”和“保存副本”不会覆盖"
+    },
     "ui.error.schema-unavailable": {
       "message": "模式不可用：{reason}"
+    },
+    "ui.error.symbol-no-server": {
+      "message": "未配置语言服务器；请用 --lsp <program> 启动工作台"
+    },
+    "ui.error.symbol-not-found": {
+      "message": "没有匹配 {query} 的符号"
+    },
+    "ui.error.symbol-not-jumped": {
+      "message": "{reason}"
+    },
+    "ui.error.tab-not-moved": {
+      "message": "标签页未移动：{reason}"
+    },
+    "ui.error.tests-current-unavailable": {
+      "message": "当前文档没有只指向自身测试的模块路径"
     },
     "ui.error.theme-refused": {
       "message": "主题被拒绝：{reason}"
@@ -444,6 +2184,24 @@
     },
     "ui.error.widget-not-inserted": {
       "message": "未插入：{reason}"
+    },
+    "ui.extensions.none": {
+      "message": "未安装扩展"
+    },
+    "ui.help.commands": {
+      "message": "命令参考"
+    },
+    "ui.help.controls": {
+      "message": "控件目录"
+    },
+    "ui.help.controls-unavailable": {
+      "message": "此构建没有可用的控件目录。"
+    },
+    "ui.help.shortcuts": {
+      "message": "键盘快捷键"
+    },
+    "ui.help.welcome": {
+      "message": "欢迎与入门"
     },
     "ui.inspector.accepted": {
       "message": "可接受值"
@@ -466,14 +2224,53 @@
     "ui.inspector.theme": {
       "message": "主题"
     },
+    "ui.items.no-page": {
+      "message": "工程没有声明任何页面"
+    },
+    "ui.items.no-project": {
+      "message": "未打开工程；集合内容属于页面文档"
+    },
+    "ui.items.unreadable": {
+      "message": "工程文档无法读取，因此没有页面"
+    },
+    "ui.items.unreadable-at": {
+      "message": "页面无法读取：{reason}"
+    },
+    "ui.layout.no-page": {
+      "message": "工程没有声明任何页面"
+    },
+    "ui.layout.no-project": {
+      "message": "未打开工程；容器声明属于页面文档"
+    },
+    "ui.layout.unreadable": {
+      "message": "工程文档无法读取，因此没有页面"
+    },
+    "ui.layout.unreadable-at": {
+      "message": "页面无法读取：{reason}"
+    },
     "ui.menu.editor": {
       "message": "编辑器"
+    },
+    "ui.menu.fullscreen": {
+      "message": "全屏"
     },
     "ui.menu.layout": {
       "message": "布局"
     },
+    "ui.menu.load-layout": {
+      "message": "载入布局"
+    },
+    "ui.menu.lock-layout": {
+      "message": "锁定布局"
+    },
+    "ui.menu.merge-group": {
+      "message": "合并组"
+    },
     "ui.menu.next-group": {
       "message": "下一组"
+    },
+    "ui.menu.previous-group": {
+      "message": "上一组"
     },
     "ui.menu.quit": {
       "message": "退出"
@@ -484,8 +2281,14 @@
     "ui.menu.save-layout": {
       "message": "保存布局"
     },
+    "ui.menu.split-down": {
+      "message": "向下分屏"
+    },
     "ui.menu.split-right": {
       "message": "向右分屏"
+    },
+    "ui.menu.zen": {
+      "message": "专注模式"
     },
     "ui.note.data": {
       "message": "数据 v{version} · 效果 {effects} · 运行时：无"
@@ -499,23 +2302,77 @@
     "ui.note.pages": {
       "message": "{count} 个页面 · 当前 {current} · 修订 {revision}"
     },
-    "ui.panel.data": {
-      "message": "数据与状态"
+    "ui.notifications.counts": {
+      "message": "{errors} 个错误，{warnings} 个警告，{information} 条信息"
+    },
+    "ui.notifications.none": {
+      "message": "没有未处理的通知"
+    },
+    "ui.panel.actions": {
+      "message": "动作"
+    },
+    "ui.panel.ai": {
+      "message": "AI 会话"
+    },
+    "ui.panel.application": {
+      "message": "应用结构"
     },
     "ui.panel.assets": {
       "message": "资产"
     },
+    "ui.panel.breakpoints": {
+      "message": "断点"
+    },
+    "ui.panel.build": {
+      "message": "构建输出"
+    },
+    "ui.panel.components": {
+      "message": "组件库"
+    },
+    "ui.panel.data": {
+      "message": "数据与状态"
+    },
     "ui.panel.debug": {
       "message": "调试"
+    },
+    "ui.panel.dependencies": {
+      "message": "依赖"
+    },
+    "ui.panel.environments": {
+      "message": "环境"
     },
     "ui.panel.events": {
       "message": "事件"
     },
+    "ui.panel.extensions": {
+      "message": "扩展"
+    },
+    "ui.panel.help": {
+      "message": "帮助"
+    },
+    "ui.panel.history": {
+      "message": "历史"
+    },
+    "ui.panel.hot": {
+      "message": "热更新"
+    },
+    "ui.panel.inspection": {
+      "message": "检查"
+    },
     "ui.panel.inspector": {
       "message": "检查器"
     },
+    "ui.panel.items": {
+      "message": "集合内容"
+    },
+    "ui.panel.layout": {
+      "message": "布局检查器"
+    },
     "ui.panel.messages": {
       "message": "消息"
+    },
+    "ui.panel.notifications": {
+      "message": "通知"
     },
     "ui.panel.outline": {
       "message": "大纲"
@@ -523,11 +2380,53 @@
     "ui.panel.pages": {
       "message": "页面"
     },
+    "ui.panel.preview": {
+      "message": "预览"
+    },
     "ui.panel.problems": {
       "message": "问题"
     },
+    "ui.panel.project": {
+      "message": "工程"
+    },
+    "ui.panel.run": {
+      "message": "应用输出"
+    },
+    "ui.panel.search": {
+      "message": "搜索"
+    },
+    "ui.panel.source-outline": {
+      "message": "源码大纲"
+    },
+    "ui.panel.stack": {
+      "message": "调用栈"
+    },
+    "ui.panel.states": {
+      "message": "状态与转换"
+    },
+    "ui.panel.targets": {
+      "message": "目标"
+    },
+    "ui.panel.tasks": {
+      "message": "后台任务"
+    },
+    "ui.panel.terminal": {
+      "message": "终端"
+    },
+    "ui.panel.tests": {
+      "message": "测试"
+    },
     "ui.panel.theme": {
       "message": "主题"
+    },
+    "ui.panel.timeline": {
+      "message": "过渡预览"
+    },
+    "ui.panel.variables": {
+      "message": "变量"
+    },
+    "ui.panel.vcs": {
+      "message": "版本控制"
     },
     "ui.panel.widgets": {
       "message": "控件库"
@@ -544,20 +2443,131 @@
     "ui.placeholder.page-name": {
       "message": "页面名称"
     },
+    "ui.placeholder.program": {
+      "message": "要运行的程序"
+    },
+    "ui.placeholder.search": {
+      "message": "在打开的文档中搜索"
+    },
+    "ui.placeholder.source-filter": {
+      "message": "过滤符号"
+    },
+    "ui.placeholder.terminal": {
+      "message": "输入命令并按回车"
+    },
     "ui.placeholder.theme-name": {
       "message": "主题名称（dark）"
     },
     "ui.placeholder.widget-search": {
       "message": "搜索控件"
     },
+    "ui.project.none": {
+      "message": "未打开工程；用 --project <目录> 启动"
+    },
+    "ui.project.unreadable": {
+      "message": "工程的文件版本不是本构建能解释的版本"
+    },
+    "ui.search.no-match": {
+      "message": "打开的文档中没有匹配项"
+    },
+    "ui.source.jumped": {
+      "message": "已跳到第 {line} 行"
+    },
+    "ui.source.no-document": {
+      "message": "编辑器没有可生成大纲的文档"
+    },
+    "ui.source.no-editor": {
+      "message": "编辑器未接受跳转"
+    },
+    "ui.states.no-page": {
+      "message": "工程没有声明任何页面"
+    },
+    "ui.states.no-project": {
+      "message": "未打开工程；状态机属于页面文档"
+    },
+    "ui.states.unreadable": {
+      "message": "工程文档无法读取，因此没有页面"
+    },
+    "ui.states.unreadable-at": {
+      "message": "页面无法读取：{reason}"
+    },
+    "ui.status.already-bottom": {
+      "message": "{name} 已在最底层"
+    },
+    "ui.status.already-top": {
+      "message": "{name} 已在最上层"
+    },
+    "ui.status.bookmark-added": {
+      "message": "已添加书签"
+    },
+    "ui.status.bookmark-removed": {
+      "message": "已移除书签"
+    },
     "ui.status.bound": {
       "message": "已将 {event} 绑定到 {handler}（节点 {node}，修订 {revision}）"
+    },
+    "ui.status.breadcrumbs": {
+      "message": "{path}"
+    },
+    "ui.status.build-cancelling": {
+      "message": "已请求取消构建"
+    },
+    "ui.status.build-command-copied": {
+      "message": "已复制构建命令：{command}"
+    },
+    "ui.status.build-no-project": {
+      "message": "未打开工程；没有可构建的 manifest"
+    },
+    "ui.status.building": {
+      "message": "构建已提交"
+    },
+    "ui.status.clear-running": {
+      "message": "程序运行中，无法清空输出"
+    },
+    "ui.status.clipboard-empty": {
+      "message": "剪贴板没有文本，或编辑器为只读"
     },
     "ui.status.closing": {
       "message": "正在关闭"
     },
+    "ui.status.command-no-handler": {
+      "message": "{command}：本构建没有处理器"
+    },
+    "ui.status.command-not-implemented": {
+      "message": "{command}：本构建尚未实现（计划任务 {task}）"
+    },
+    "ui.status.command-palette": {
+      "message": "命令面板"
+    },
+    "ui.status.copied": {
+      "message": "已复制选区"
+    },
+    "ui.status.cursor-added": {
+      "message": "选区已添加光标"
+    },
+    "ui.status.cut": {
+      "message": "已剪切选区"
+    },
+    "ui.status.data-applied": {
+      "message": "{field} = {value}（数据 v{version}）"
+    },
+    "ui.status.debug-ran": {
+      "message": "调试：{command}"
+    },
+    "ui.status.debug-unavailable": {
+      "message": "调试：{command} 不可用"
+    },
     "ui.status.deleted": {
       "message": "已删除 {name}：{report}"
+    },
+    "ui.status.document-closed": {
+      "message": "已关闭 {document}"
+    },
+    "ui.status.duplicated": {
+      "message": "已复制 {name}，节点 {node}"
+    },
+    "ui.status.editor-split": {
+      "message": "编辑器已分屏"
     },
     "ui.status.favorite-added": {
       "message": "已收藏 {name}"
@@ -565,50 +2575,74 @@
     "ui.status.favorite-removed": {
       "message": "已取消收藏 {name}"
     },
-    "ui.status.duplicated": {
-      "message": "已复制 {name}，节点 {node}"
+    "ui.status.file-opened": {
+      "message": "已打开 {path}"
     },
-    "ui.status.wrapped": {
-      "message": "已将 {name} 包装为容器 {node}"
+    "ui.status.file-symbol-jumped": {
+      "message": "已移动到 {name}，第 {line} 行"
     },
-    "ui.status.moved-out": {
-      "message": "已将 {name} 移出 {parent}"
+    "ui.status.find-open": {
+      "message": "已打开查找栏"
     },
-    "ui.status.renamed": {
-      "message": "已重命名为 {name}"
-    },
-    "ui.status.node-copied": {
-      "message": "已复制 {name}（{count} 个节点）"
-    },
-    "ui.status.node-pasted": {
-      "message": "已粘贴 {count} 个节点，根 {node}"
-    },
-    "ui.status.moved-into": {
-      "message": "已将 {name} 移入 {parent}"
-    },
-    "ui.status.rename-cancelled": {
-      "message": "已取消重命名"
-    },
-    "ui.status.command-palette": {
-      "message": "命令面板"
-    },
-    "ui.status.data-applied": {
-      "message": "{field} = {value}（数据 v{version}）"
-    },
-    "ui.status.editor-split": {
-      "message": "编辑器已分屏"
+    "ui.status.first-error-opened": {
+      "message": "已移动到第一个错误：{path}:{line}"
     },
     "ui.status.focus-group": {
       "message": "焦点组 {group}"
     },
+    "ui.status.folded": {
+      "message": "已折叠光标处的块"
+    },
+    "ui.status.folded-many": {
+      "message": "已折叠 {count} 个块"
+    },
+    "ui.status.found": {
+      "message": "已定位到匹配项"
+    },
+    "ui.status.goto-cancelled": {
+      "message": "已取消跳转"
+    },
+    "ui.status.goto-done": {
+      "message": "已移动到第 {line} 行第 {column} 列"
+    },
+    "ui.status.group-merged": {
+      "message": "已将 {moved} 个视图并入相邻组"
+    },
+    "ui.status.group-not-merged": {
+      "message": "未合并组：{reason}"
+    },
     "ui.status.hidden": {
       "message": "已隐藏 {id}"
+    },
+    "ui.status.hidden-node": {
+      "message": "已隐藏 {name}"
+    },
+    "ui.status.history-empty": {
+      "message": "本窗口还没有执行过命令"
+    },
+    "ui.status.history-shown": {
+      "message": "已按从新到旧列出 {count} 条命令"
+    },
+    "ui.status.inlay-hints-hidden": {
+      "message": "已隐藏内联提示"
+    },
+    "ui.status.inlay-hints-shown": {
+      "message": "已显示内联提示"
     },
     "ui.status.inspected": {
       "message": "已检查节点；设计 v{version}，效果 {effects}"
     },
     "ui.status.inspector-cleared": {
       "message": "输入已清除；有效值 {name} 为 {value}"
+    },
+    "ui.status.layout-loaded": {
+      "message": "已从 {path} 载入布局"
+    },
+    "ui.status.layout-locked": {
+      "message": "布局已锁定"
+    },
+    "ui.status.layout-not-loaded": {
+      "message": "未载入布局：{reason}"
     },
     "ui.status.layout-not-saved": {
       "message": "布局未保存：{reason}"
@@ -619,23 +2653,143 @@
     "ui.status.layout-saved": {
       "message": "已保存布局到 {path}"
     },
+    "ui.status.layout-unlocked": {
+      "message": "布局已解锁"
+    },
+    "ui.status.locked": {
+      "message": "已锁定 {name}"
+    },
+    "ui.status.migration-previewed": {
+      "message": "迁移预览已写入消息面板"
+    },
+    "ui.status.mode-changed": {
+      "message": "模式 {mode}"
+    },
+    "ui.status.moved-back": {
+      "message": "已后退到 {path}:{line}"
+    },
+    "ui.status.moved-down": {
+      "message": "{name} 已下移一层"
+    },
+    "ui.status.moved-forward": {
+      "message": "已前进到 {path}:{line}"
+    },
+    "ui.status.moved-into": {
+      "message": "已将 {name} 移入 {parent}"
+    },
+    "ui.status.moved-out": {
+      "message": "已将 {name} 移出 {parent}"
+    },
+    "ui.status.moved-up": {
+      "message": "{name} 已上移一层"
+    },
     "ui.status.navigation-declared": {
       "message": "已声明导航 {from} -> {to}（修订 {revision}）"
+    },
+    "ui.status.navigation-done": {
+      "message": "已移动到 {path}:{line}"
+    },
+    "ui.status.navigation-many": {
+      "message": "{count} 个位置；已移动到第一个 {path}:{line}"
+    },
+    "ui.status.no-child": {
+      "message": "{name} 没有子节点"
+    },
+    "ui.status.no-closed-panels": {
+      "message": "还没有隐藏过面板"
+    },
+    "ui.status.no-cursor-line": {
+      "message": "该方向上没有可用的行"
     },
     "ui.status.no-document": {
       "message": "无文档"
     },
+    "ui.status.no-editor": {
+      "message": "焦点编辑组没有编辑表面"
+    },
+    "ui.status.no-focused-panel": {
+      "message": "没有面板持有键盘焦点"
+    },
     "ui.status.no-layout-path": {
       "message": "未提供 --layout 路径"
+    },
+    "ui.status.no-match": {
+      "message": "没有可定位的匹配项"
+    },
+    "ui.status.no-next-location": {
+      "message": "没有下一个跳转位置"
     },
     "ui.status.no-panel": {
       "message": "没有面板 {id}"
     },
+    "ui.status.no-parent": {
+      "message": "节点 {node} 没有父节点"
+    },
+    "ui.status.no-previous-location": {
+      "message": "没有上一个跳转位置"
+    },
     "ui.status.no-problems": {
       "message": "没有问题"
     },
+    "ui.status.no-sibling": {
+      "message": "{name} 在该方向上没有同级节点"
+    },
+    "ui.status.node-copied": {
+      "message": "已复制 {name}（{count} 个节点）"
+    },
+    "ui.status.node-id-copied": {
+      "message": "已复制节点 ID {id}"
+    },
+    "ui.status.node-pasted": {
+      "message": "已粘贴 {count} 个节点，根 {node}"
+    },
+    "ui.status.not-running": {
+      "message": "没有程序在运行"
+    },
+    "ui.status.nothing-selected": {
+      "message": "没有选中内容"
+    },
+    "ui.status.nothing-to-close": {
+      "message": "没有可关闭的活动文档"
+    },
+    "ui.status.nothing-to-expand": {
+      "message": "没有更大的结构单元"
+    },
+    "ui.status.nothing-to-fold": {
+      "message": "光标处没有可折叠的块"
+    },
+    "ui.status.nothing-to-move": {
+      "message": "没有可移动的标签页"
+    },
+    "ui.status.nothing-to-redo": {
+      "message": "没有可重做的更改"
+    },
+    "ui.status.nothing-to-shrink": {
+      "message": "没有可恢复的上一次选择"
+    },
+    "ui.status.nothing-to-undo": {
+      "message": "没有可撤销的更改"
+    },
+    "ui.status.nothing-to-unfold": {
+      "message": "光标处没有已折叠的区域"
+    },
     "ui.status.now-on": {
       "message": "当前位于 {page}"
+    },
+    "ui.status.occurrences-selected": {
+      "message": "{count} 处出现位置已添加光标"
+    },
+    "ui.status.open-cancelled": {
+      "message": "已取消打开"
+    },
+    "ui.status.others-closed": {
+      "message": "已关闭另外 {count} 个文档"
+    },
+    "ui.status.output-cleared": {
+      "message": "输出已清空"
+    },
+    "ui.status.output-copied": {
+      "message": "输出已复制"
     },
     "ui.status.page-declared": {
       "message": "已声明页面 {name}（修订 {revision}）"
@@ -646,14 +2800,155 @@
     "ui.status.palette-could-not-focus": {
       "message": "命令面板无法获得键盘焦点"
     },
+    "ui.status.panel-not-named": {
+      "message": "显示面板需要指定面板 ID"
+    },
+    "ui.status.pasted": {
+      "message": "已粘贴剪贴板内容"
+    },
+    "ui.status.path-copied": {
+      "message": "已复制 {path}"
+    },
+    "ui.status.preview-mounted": {
+      "message": "预览已挂载：{widgets} 个控件，{issues} 个问题"
+    },
+    "ui.status.preview-rebuild-failed": {
+      "message": "预览未重建：{reason}"
+    },
+    "ui.status.preview-started": {
+      "message": "预览已启动"
+    },
+    "ui.status.preview-stopped": {
+      "message": "预览已停止"
+    },
+    "ui.status.preview-updated": {
+      "message": "预览已更新：{patches} 个补丁，{updates} 处更新"
+    },
+    "ui.status.project-checked": {
+      "message": "项目已校验：{rows} 行已写入消息面板"
+    },
+    "ui.status.project-closed": {
+      "message": "工程已关闭"
+    },
+    "ui.status.project-not-readable": {
+      "message": "项目文件不是本构建可读取的格式"
+    },
+    "ui.status.project-rescanned": {
+      "message": "项目结构已重新读取"
+    },
+    "ui.status.project-trusted": {
+      "message": "本会话已信任该工程"
+    },
+    "ui.status.raised": {
+      "message": "已上移 {name}"
+    },
     "ui.status.ready": {
       "message": "就绪"
+    },
+    "ui.status.redone": {
+      "message": "已重做最新更改"
+    },
+    "ui.status.references-checked": {
+      "message": "{count} 条引用已写入消息面板"
+    },
+    "ui.status.rename-cancelled": {
+      "message": "已取消重命名"
+    },
+    "ui.status.renamed": {
+      "message": "已重命名为 {name}"
+    },
+    "ui.status.reopened": {
+      "message": "已重新打开 {document}"
+    },
+    "ui.status.replace-open": {
+      "message": "已打开替换栏"
     },
     "ui.status.reset-nodes": {
       "message": "已将 {count} 个节点重置为结构名称"
     },
+    "ui.status.resources-clean-cancelled": {
+      "message": "已取消资源清理，未做任何修改"
+    },
+    "ui.status.resources-clean-candidates": {
+      "message": "已列出 {count} 个未引用资源声明"
+    },
+    "ui.status.resources-clean-none": {
+      "message": "每个已声明资源都被页面引用"
+    },
+    "ui.status.resources-cleaned": {
+      "message": "已移除 {count} 个未引用资源声明；磁盘文件保留"
+    },
+    "ui.status.revealed": {
+      "message": "已将 {path} 交给文件管理器"
+    },
+    "ui.status.running": {
+      "message": "程序已启动"
+    },
+    "ui.status.save-cancelled": {
+      "message": "保存已取消"
+    },
+    "ui.status.saved": {
+      "message": "已保存 {path}"
+    },
+    "ui.status.saved-all": {
+      "message": "已保存 {count} 个文档"
+    },
+    "ui.status.saved-as": {
+      "message": "已另存为 {path}，并作为当前文档打开"
+    },
+    "ui.status.saved-closed": {
+      "message": "已关闭 {count} 个已保存文档"
+    },
+    "ui.status.saved-copy": {
+      "message": "已在 {path} 保存副本"
+    },
+    "ui.status.selected-all": {
+      "message": "已全选文档"
+    },
+    "ui.status.selection-cleared": {
+      "message": "已取消选择"
+    },
+    "ui.status.selection-expanded": {
+      "message": "已扩大选择"
+    },
+    "ui.status.selection-shrunk": {
+      "message": "已缩小选择"
+    },
+    "ui.status.sent-to-back": {
+      "message": "{name} 已置底"
+    },
     "ui.status.shown": {
       "message": "已显示 {id}"
+    },
+    "ui.status.shown-node": {
+      "message": "已显示 {name}"
+    },
+    "ui.status.stop-requested": {
+      "message": "已请求停止"
+    },
+    "ui.status.symbol-cancelled": {
+      "message": "符号跳转已取消"
+    },
+    "ui.status.tab-moved": {
+      "message": "已把标签页移动到下一编辑组"
+    },
+    "ui.status.terminal-started": {
+      "message": "终端已启动"
+    },
+    "ui.status.tests-busy": {
+      "message": "已有测试在运行"
+    },
+    "ui.status.tests-not-running": {
+      "message": "当前没有正在运行的测试"
+    },
+    "ui.status.tests-started": {
+      "message": "测试已开始运行"
+    },
+    "ui.status.tests-stopped": {
+      "message": "已请求停止测试运行"
+    },
+    "ui.status.text-changed": {
+      "message": "已执行：{command}"
     },
     "ui.status.theme-applied": {
       "message": "{message}"
@@ -661,53 +2956,98 @@
     "ui.status.unbound": {
       "message": "已解绑 {event}（节点 {node}，修订 {revision}）"
     },
+    "ui.status.undone": {
+      "message": "已撤销最新更改"
+    },
+    "ui.status.unfolded": {
+      "message": "已展开光标处的区域"
+    },
+    "ui.status.unfolded-many": {
+      "message": "已展开 {count} 个区域"
+    },
     "ui.status.unknown-action": {
       "message": "未知操作 {action}"
-    },
-    "ui.status.widget-inserted": {
-      "message": "已插入 {name}，节点 {node}"
-    },
-    "ui.status.no-parent": {
-      "message": "节点 {node} 没有父节点"
-    },
-    "ui.status.no-child": {
-      "message": "{name} 没有子节点"
-    },
-    "ui.status.locked": {
-      "message": "已锁定 {name}"
     },
     "ui.status.unlocked": {
       "message": "已解锁 {name}"
     },
-    "ui.status.hidden-node": {
-      "message": "已隐藏 {name}"
+    "ui.status.vcs-refreshed": {
+      "message": "已重新读取版本控制"
     },
-    "ui.status.shown-node": {
-      "message": "已显示 {name}"
+    "ui.status.widget-inserted": {
+      "message": "已插入 {name}，节点 {node}"
     },
-    "ui.status.raised": {
-      "message": "已上移 {name}"
+    "ui.status.workspace-symbol-jumped": {
+      "message": "已移动到 {name}（{path}:{line}）"
     },
-    "ui.status.already-top": {
-      "message": "{name} 已在最上层"
+    "ui.status.wrapped": {
+      "message": "已将 {name} 包装为容器 {node}"
     },
-    "ui.status.already-bottom": {
-      "message": "{name} 已在最底层"
+    "ui.status.zen-off": {
+      "message": "专注模式已关闭"
     },
-    "ui.status.moved-up": {
-      "message": "{name} 已上移一层"
+    "ui.status.zen-on": {
+      "message": "专注模式已开启"
     },
-    "ui.status.moved-down": {
-      "message": "{name} 已下移一层"
+    "ui.status.zoom-actual": {
+      "message": "设计面以实际尺寸显示"
     },
-    "ui.status.sent-to-back": {
-      "message": "{name} 已置底"
+    "ui.status.zoom-fit": {
+      "message": "设计面已适合画布"
+    },
+    "ui.status.zoom-reset": {
+      "message": "编辑器缩放已重置"
+    },
+    "ui.status.zoomed-in": {
+      "message": "编辑器已放大"
+    },
+    "ui.status.zoomed-out": {
+      "message": "编辑器已缩小"
+    },
+    "ui.target.certification": {
+      "message": "认证"
+    },
+    "ui.target.devices": {
+      "message": "设备"
+    },
+    "ui.target.none": {
+      "message": "未检测到"
+    },
+    "ui.target.profiles": {
+      "message": "配置"
+    },
+    "ui.target.sdk": {
+      "message": "SDK"
+    },
+    "ui.target.target": {
+      "message": "目标三元组"
+    },
+    "ui.target.toolchain": {
+      "message": "工具链"
+    },
+    "ui.target.verified": {
+      "message": "已验证"
+    },
+    "ui.tasks.none": {
+      "message": "尚未提交后台任务"
     },
     "ui.theme.curve": {
       "message": "动效曲线"
     },
     "ui.theme.metrics": {
       "message": "度量档"
+    },
+    "ui.timeline.no-page": {
+      "message": "工程没有声明任何页面"
+    },
+    "ui.timeline.no-project": {
+      "message": "未打开工程；过渡属于页面文档"
+    },
+    "ui.timeline.unreadable": {
+      "message": "工程文档无法读取，因此没有页面"
+    },
+    "ui.timeline.unreadable-at": {
+      "message": "页面无法读取：{reason}"
     },
     "ui.toolbar.commands": {
       "message": "命令"

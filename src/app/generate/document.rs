@@ -123,6 +123,12 @@ fn node_body(
         .ok_or_else(|| format!("node {} is referenced but not in the page", id.get()))?;
 
     let mut body = JsonObject::new();
+    // The design identity travels as the document's `id` attribute, which the library treats as
+    // structure rather than a property (`json/project.rs` asserts exactly that). Two facts read it:
+    // `GenerationReport::node_anchors[].id` (RW-42) and the declarative engine's node key, which is
+    // what keeps a control's identity across an update (T14.03). Dropping it here would leave both
+    // with no name for a node.
+    body.insert("id", Json::string(id.get().to_string()));
     for (name, value) in node.properties() {
         body.insert(name.as_str(), plain_value(value, id)?);
     }
@@ -149,6 +155,13 @@ fn node_body(
             visit.pop();
         }
         body.insert("children", Json::array(children));
+    }
+    // The container declaration travels in the library's own shape. The generator reads it from
+    // the root node (`JsonProject::layout_declaration`) and solves the children it already has; a
+    // parameter the library does not know is reported in `GenerationReport::layout_issues`, so
+    // nothing is dropped silently.
+    if let Some(layout) = node.layout() {
+        body.insert("layout", layout.to_json());
     }
     Ok(body)
 }
@@ -212,6 +225,34 @@ mod tests {
     }
 
     #[test]
+    fn a_root_layout_declaration_travels_in_the_library_shape() {
+        use crate::project::record::json::{Json, Number};
+        use crate::project::record::page::PageLayout;
+
+        let root = PageNode::new(NodeId::from_raw(1), kind("window")).with_layout(PageLayout::new(
+            "vbox",
+            [
+                ("spacing".to_owned(), Json::Number(Number::from_i64(8))),
+                ("margin".to_owned(), Json::Number(Number::from_i64(4))),
+            ],
+        ));
+        let document = to_library_document(NodeId::from_raw(1), &[root]).expect("document");
+        let value = crate::project::record::json::parse(&document).expect("the document parses");
+        let window = value
+            .as_object()
+            .and_then(|object| object.get("window"))
+            .and_then(Json::as_object)
+            .expect("the window node");
+        let layout = window
+            .get("layout")
+            .and_then(Json::as_object)
+            .expect("the layout object");
+        assert_eq!(layout.get("type").and_then(Json::as_str), Some("vbox"));
+        assert_eq!(layout.get("spacing").and_then(Json::as_u64), Some(8));
+        assert_eq!(layout.get("margin").and_then(Json::as_u64), Some(4));
+    }
+
+    #[test]
     fn the_same_page_translates_to_the_same_bytes() {
         let root = PageNode::new(NodeId::from_raw(1), kind("window"));
         let first = to_library_document(NodeId::from_raw(1), std::slice::from_ref(&root))
@@ -246,6 +287,19 @@ mod tests {
             PageNode::new(NodeId::from_raw(2), kind("vbox")).with_children([NodeId::from_raw(1)]);
         let error = to_library_document(NodeId::from_raw(1), &[a, b]).expect_err("a cycle");
         assert!(error.contains("not a tree"), "{error}");
+    }
+
+    #[test]
+    fn every_node_carries_its_design_id_as_the_document_s_id_attribute() {
+        let root =
+            PageNode::new(NodeId::from_raw(1), kind("window")).with_children([NodeId::from_raw(2)]);
+        let child = PageNode::new(NodeId::from_raw(2), kind("label"));
+        let document = to_library_document(NodeId::from_raw(1), &[root, child]).expect("document");
+        // The id is structure, not a property: the generator's `node_anchors[].id` and the
+        // declarative engine's node key both read it, and it must not be emitted as a property.
+        assert_eq!(document.matches("\"id\": ").count(), 2, "{document}");
+        assert!(document.contains("\"id\": \"1\""), "{document}");
+        assert!(document.contains("\"id\": \"2\""), "{document}");
     }
 
     #[test]

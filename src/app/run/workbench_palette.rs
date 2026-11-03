@@ -119,12 +119,12 @@ mod tests {
     fn a_recent_command_is_lifted_without_hiding_unseen_ones() {
         let registry = built_in();
         let mut recents = Recents::new(8);
-        recents.record("file.save");
+        recents.record("edit.undo");
         let mut palette = Palette::new();
         palette.open(None, &registry, &context(), &recents);
         assert_eq!(
             palette.entries().first().map(|entry| entry.id()),
-            Some("file.save")
+            Some("edit.undo")
         );
         assert!(palette.entries().len() > 1);
     }

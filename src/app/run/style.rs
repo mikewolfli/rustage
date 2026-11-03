@@ -57,7 +57,7 @@ pub(super) fn property_editor(options: &crate::cli::PropertyEditorOptions) -> bo
                 None => Err(format!("{argument:?} is not <property>:<type>")),
             },
             "set" => match parse_field(argument) {
-                Ok((node, name, text)) => match editor.set(node, name.clone(), &text) {
+                Ok((node, name, text)) => match editor.set(node, &name, &text) {
                     Ok(()) => Ok(vec![format!(
                         "set {} {}: accepted",
                         node.get(),

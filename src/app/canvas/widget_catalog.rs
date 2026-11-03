@@ -39,11 +39,14 @@ use std::collections::BTreeSet;
 use rust_widgets::designer::generator::availability_with;
 use rust_widgets::designer::{Availability, TargetProfile};
 use rust_widgets::widget::WidgetFactory;
-use rust_widgets::widget::capability::designer_manifest::{DesignerCommand, DesignerConstraint};
+// 4.0.1 re-exports `DesignerCommand`/`DesignerConstraint` (and the protocol constants) from the
+// `widget::capability` root (RW-102). Reading them here rather than from the `designer_manifest`
+// submodule is the library's own public path; the submodule stays for `designer_manifest()` itself.
 use rust_widgets::widget::capability::{
-    CapabilityValue, DesignerEvent, DesignerManifest, DesignerProperty,
-    EventSchema as ContractEventSchema, ManifestExportError,
-    PropertySchema as ContractPropertySchema, PropertyValueKind, designer_manifest, shape_token,
+    CapabilityValue, DesignerCommand, DesignerConstraint, DesignerEvent, DesignerManifest,
+    DesignerProperty, EventSchema as ContractEventSchema, ManifestExportError,
+    PropertySchema as ContractPropertySchema, PropertyValueKind, companion_hosts,
+    designer_manifest, shape_token,
 };
 use rust_widgets::widget::icon_source::{IconColorMode, IconSpec};
 
@@ -238,6 +241,11 @@ pub struct CommandSchema {
     pub arity: Option<usize>,
     /// The declared kind of each composite element, when homogeneous.
     pub element: Option<ValueType>,
+    /// The accepted spellings of an enum parameter, in the order the contract gives them (RW-103).
+    ///
+    /// Empty for a command whose parameter is not an enum. Copied from the property the command
+    /// writes, so a caller offering a parameter choice does not have to guess the vocabulary.
+    pub tokens: Vec<String>,
     /// The side-effect class the contract declares.
     pub effect: String,
 }
@@ -257,6 +265,9 @@ impl CommandSchema {
         }
         if let Some(element) = &self.element {
             line.push_str(&format!(" of {}", element.name()));
+        }
+        if !self.tokens.is_empty() {
+            line.push_str(&format!(" one of {}", self.tokens.join(", ")));
         }
         if !self.effect.is_empty() {
             line.push_str(&format!(" ({})", self.effect));
@@ -375,6 +386,11 @@ pub struct WidgetDescriptor {
     pub aliases: Vec<String>,
     /// The canonical control this name is a second spelling of, empty for a canonical row.
     pub alias_of: String,
+    /// The canonical controls this control is built to sit beside (RW-107).
+    ///
+    /// Empty for a control that stands alone. The list is a pairing fact from the manifest, not
+    /// proof that a specific `attach_*` method exists; the commands list answers that question.
+    pub companion_of: Vec<String>,
     /// Whether the target can place it.
     pub support: Support,
     /// What the contract cannot express, with a note.
@@ -404,6 +420,7 @@ impl WidgetDescriptor {
             children: Vec::new(),
             aliases: Vec::new(),
             alias_of: String::new(),
+            companion_of: Vec::new(),
             support: Support::Supported,
             limits: Vec::new(),
         }
@@ -447,6 +464,12 @@ impl WidgetDescriptor {
         self
     }
 
+    /// The same descriptor paired with the host(s) it was built for.
+    pub fn with_companion_of(mut self, hosts: impl IntoIterator<Item = String>) -> Self {
+        self.companion_of = hosts.into_iter().collect();
+        self
+    }
+
     /// The same descriptor with a limit note.
     pub fn with_limit(mut self, note: impl Into<String>) -> Self {
         self.limits.push(note.into());
@@ -469,6 +492,15 @@ impl WidgetDescriptor {
         !self.children.is_empty()
     }
 
+    /// The canonical controls this control is built to sit beside (RW-107).
+    ///
+    /// Empty for a control that stands alone. A companion — a transport bar, a chart data table, a
+    /// map overview — has no meaning by itself; this is the pairing fact the palette needs instead
+    /// of guessing it from the category.
+    pub fn is_companion(&self) -> bool {
+        !self.companion_of.is_empty()
+    }
+
     /// The descriptor in one line.
     pub fn render(&self) -> String {
         let mut line = format!(
@@ -482,6 +514,9 @@ impl WidgetDescriptor {
         );
         if !self.alias_of.is_empty() {
             line.push_str(&format!(" — alias of {}", self.alias_of));
+        }
+        if !self.companion_of.is_empty() {
+            line.push_str(&format!(" — companion of {}", self.companion_of.join(", ")));
         }
         match &self.support {
             Support::Supported => {}
@@ -1018,67 +1053,78 @@ fn descriptor_from_contract(
         .unwrap_or_default();
 
     let mut limits = Vec::new();
-    let (category, properties, events, commands, children, aliases, alias_of) = match manifest {
-        Ok(manifest) => {
-            let category = if manifest.category.is_empty() {
-                kind_category
-            } else {
-                manifest.category.clone()
-            };
-            (
-                category,
-                manifest
-                    .properties
-                    .iter()
-                    .map(property_from_designer)
-                    .collect(),
-                manifest.events.iter().map(event_from_designer).collect(),
-                manifest
-                    .commands
-                    .iter()
-                    .map(command_from_designer)
-                    .collect(),
-                manifest.children.clone(),
-                manifest.aliases.clone(),
-                manifest.alias_of.clone(),
-            )
-        }
-        Err(reason) => {
-            // The manifest is the only source that carries defaults; falling back keeps the
-            // declared properties and events visible while the note records what is missing.
-            limits.push(format!(
-                "the designer manifest could not be read ({reason}); properties and events are the capability schema, so no defaults, commands or child kinds are shown"
-            ));
-            match capability {
-                Some(capability) => (
-                    kind_category,
-                    capability
+    let (category, properties, events, commands, children, aliases, alias_of, companion_of) =
+        match manifest {
+            Ok(manifest) => {
+                let category = if manifest.category.is_empty() {
+                    kind_category
+                } else {
+                    manifest.category.clone()
+                };
+                (
+                    category,
+                    manifest
                         .properties
                         .iter()
-                        .map(property_from_schema)
+                        .map(property_from_designer)
                         .collect(),
-                    capability.events.iter().map(event_from_schema).collect(),
-                    Vec::new(),
-                    Vec::new(),
-                    capability
-                        .aliases
+                    manifest.events.iter().map(event_from_designer).collect(),
+                    manifest
+                        .commands
                         .iter()
-                        .map(|alias| (*alias).to_owned())
+                        .map(command_from_designer)
                         .collect(),
-                    String::new(),
-                ),
-                None => (
-                    kind_category,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    String::new(),
-                ),
+                    manifest.children.clone(),
+                    manifest.aliases.clone(),
+                    manifest.alias_of.clone(),
+                    manifest.companion_of.clone(),
+                )
             }
-        }
-    };
+            Err(reason) => {
+                // The manifest is the only source that carries defaults; falling back keeps the
+                // declared properties and events visible while the note records what is missing.
+                limits.push(format!(
+                    "the designer manifest could not be read ({reason}); properties and events are the capability schema, so no defaults, commands or child kinds are shown"
+                ));
+                // `companion_hosts` is a compile-time table in the library, not a manifest member,
+                // so the pairing fact survives an unreadable manifest (principle #22: a fallback
+                // that is a real answer, not a blank).
+                let companion_of = companion_hosts(name)
+                    .iter()
+                    .map(|host| (*host).to_owned())
+                    .collect();
+                match capability {
+                    Some(capability) => (
+                        kind_category,
+                        capability
+                            .properties
+                            .iter()
+                            .map(property_from_schema)
+                            .collect(),
+                        capability.events.iter().map(event_from_schema).collect(),
+                        Vec::new(),
+                        Vec::new(),
+                        capability
+                            .aliases
+                            .iter()
+                            .map(|alias| (*alias).to_owned())
+                            .collect(),
+                        String::new(),
+                        companion_of,
+                    ),
+                    None => (
+                        kind_category,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        String::new(),
+                        companion_of,
+                    ),
+                }
+            }
+        };
 
     let support =
         Support::query(factory, name, profile).unwrap_or_else(|refusal| Support::Unsupported {
@@ -1096,6 +1142,7 @@ fn descriptor_from_contract(
         children,
         aliases,
         alias_of,
+        companion_of,
         support,
         limits,
     }
@@ -1142,9 +1189,12 @@ fn command_from_designer(command: &DesignerCommand) -> CommandSchema {
         name: command.name.clone(),
         signature: command.signature.to_owned(),
         parameter: command.parameter.clone(),
-        kind: command.kind.map(|kind| value_type(kind, &[])),
+        // RW-103: an enum parameter's tokens travel with the command and belong in its kind, so a
+        // caller sees `enum(primary,ghost)` rather than an empty enum.
+        kind: command.kind.map(|kind| value_type(kind, &command.tokens)),
         arity: command.arity,
         element: command.element.map(|kind| value_type(kind, &[])),
+        tokens: command.tokens.clone(),
         effect: command.effect.to_owned(),
     }
 }
@@ -1297,6 +1347,7 @@ mod tests {
                     kind: None,
                     arity: None,
                     element: None,
+                    tokens: Vec::new(),
                     effect: "mutates-control".to_owned(),
                 })
                 .with_child(ANY_CHILD)
@@ -1452,6 +1503,11 @@ mod tests {
                 "{} alias_of",
                 descriptor.id
             );
+            assert_eq!(
+                descriptor.companion_of, manifest.companion_of,
+                "{} companion_of",
+                descriptor.id
+            );
             for (actual, expected) in descriptor.properties.iter().zip(&manifest.properties) {
                 assert_eq!(actual.readable, expected.readable, "{}", descriptor.id);
                 assert_eq!(actual.writable, expected.writable, "{}", descriptor.id);
@@ -1524,6 +1580,140 @@ mod tests {
             !audit.contains("unread:"),
             "every desktop manifest in this build is readable: {audit}"
         );
+    }
+
+    #[test]
+    fn command_tokens_and_companion_pairing_are_the_manifests_own() {
+        // RW-103: an enum parameter's tokens travel with the command, so the picker offers the
+        // property's vocabulary rather than an empty enum. RW-107: a companion names the hosts it
+        // was built for instead of being guessed from its category.
+        let factory = crate::app::contract::factory();
+        let catalog = contract("desktop");
+        let mut commands_with_tokens = 0usize;
+        let mut companions = 0usize;
+        for descriptor in catalog.descriptors() {
+            let manifest =
+                rust_widgets::widget::capability::designer_manifest(factory, &descriptor.id)
+                    .expect("a registered desktop control has a manifest");
+            assert_eq!(
+                descriptor.companion_of, manifest.companion_of,
+                "{} companion_of",
+                descriptor.id
+            );
+            if !descriptor.companion_of.is_empty() {
+                companions += 1;
+                assert!(descriptor.is_companion(), "{}", descriptor.id);
+                assert!(
+                    descriptor.render().contains("companion of"),
+                    "{} render",
+                    descriptor.id
+                );
+            }
+            for (actual, expected) in descriptor.commands.iter().zip(&manifest.commands) {
+                assert_eq!(actual.name, expected.name, "{}", descriptor.id);
+                assert_eq!(actual.tokens, expected.tokens, "{} tokens", descriptor.id);
+                if actual.tokens.is_empty() {
+                    continue;
+                }
+                commands_with_tokens += 1;
+                assert_eq!(
+                    actual.kind,
+                    Some(ValueType::Enum(actual.tokens.clone())),
+                    "{}: an enum parameter's kind carries its tokens",
+                    descriptor.id
+                );
+                assert!(
+                    actual.render().contains("one of"),
+                    "{}: {}",
+                    descriptor.id,
+                    actual.render()
+                );
+            }
+        }
+        assert!(
+            commands_with_tokens > 0,
+            "a catalog with no enum-parameter command would leave RW-103 untested"
+        );
+        assert!(
+            companions > 0,
+            "a catalog with no companion would leave RW-107 untested"
+        );
+    }
+
+    #[test]
+    fn the_4_0_1_design_time_surfaces_are_in_the_catalog() {
+        // 4.0.1 closed RW-105 (the four suites manifests export) and RW-104/106 (new events,
+        // commands and design-time data surfaces). This test reads them through the catalog, which
+        // is the path the palette and Inspector use; a missing property here would mean the
+        // closure did not reach the designer.
+        let catalog = contract("desktop");
+
+        for id in [
+            "map_overview",
+            "map_attribution",
+            "gantt_task_grid",
+            "terminal_find_bar",
+        ] {
+            let descriptor = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("the catalog contains {id}"));
+            assert!(
+                descriptor.limits.is_empty(),
+                "{id} manifest is readable: {:?}",
+                descriptor.limits
+            );
+            assert!(
+                !descriptor.properties.is_empty(),
+                "{id} publishes properties"
+            );
+        }
+
+        for (id, property) in [
+            ("order_book", "bids"),
+            ("order_book", "asks"),
+            ("depth_chart", "bids"),
+            ("depth_chart", "asks"),
+            ("chapter_list_panel", "chapters"),
+            ("chapter_list_panel", "chapter_count"),
+            ("lottie_widget", "source"),
+            ("rive_widget", "source"),
+            ("rive_widget", "progress"),
+        ] {
+            let descriptor = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("the catalog contains {id}"));
+            let row = descriptor
+                .properties
+                .iter()
+                .find(|row| row.name == property)
+                .unwrap_or_else(|| panic!("{id} publishes {property}"));
+            assert!(
+                row.writable || property == "chapter_count",
+                "{id}.{property} is a design-time surface"
+            );
+        }
+
+        let swipe = catalog
+            .get("swipe_to_dismiss")
+            .expect("the catalog contains swipe_to_dismiss");
+        for command in ["dismiss", "reset_swipe"] {
+            assert!(
+                swipe.commands.iter().any(|row| row.name == command),
+                "swipe_to_dismiss publishes {command}: {:?}",
+                swipe.commands
+            );
+        }
+
+        let axis = catalog
+            .get("axis_picker")
+            .expect("the catalog contains axis_picker");
+        for command in ["set_series_names", "set_assignments", "set_edges"] {
+            assert!(
+                axis.commands.iter().any(|row| row.name == command),
+                "axis_picker publishes {command}: {:?}",
+                axis.commands
+            );
+        }
     }
 
     #[test]

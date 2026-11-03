@@ -238,7 +238,7 @@
       "topic": "升级策略与选项",
       "status": "ratified",
       "summary": "格式前向迁移不支持降级；依赖按固定修订升级并重跑探针",
-      "decision": "两条升级轴分别固定：(a) 工程格式只做前向迁移，按版本号逐步升级并记录迁移结果，不提供降级写入，旧设计器打开新格式时只读拒绝；(b) rust-widgets 依赖固定到具体 git 修订（当前 1a30785842140e45789bf50a81bd7280c8f9b7a2（4.0.0），见 docs/log/log-20261103-1.md 与探针报告），升级流程为改修订、重跑契约探针、更新支持矩阵证据、再记录影响。",
+      "decision": "两条升级轴分别固定：(a) 工程格式只做前向迁移，按版本号逐步升级并记录迁移结果，不提供降级写入，旧设计器打开新格式时只读拒绝；(b) rust-widgets 依赖固定到具体 git 修订（当前 ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81（4.0.1），见 docs/log/log-20261103-2.md 与探针报告），升级流程为改修订、重跑契约探针、更新支持矩阵证据、再记录影响。",
       "rationale": "两条轴都是「不可复现的升级等于没有升级」的同一问题：格式侧靠版本化迁移保证可回滚定位，依赖侧靠固定修订加探针复跑保证结论仍成立（原则 #22、#24）。",
       "alternatives": [
         {
@@ -292,33 +292,89 @@
         "T15.02",
         "T22.02"
       ]
-    }
-  ],
-  "openDecisions": [
+    },
     {
       "id": "O-APP-ID",
-      "decision": "应用 ID（反域名形式且满足鸿蒙 bundle name 约束的稳定标识）",
-      "owner": "项目方",
-      "owningTask": "T00.04、T25.01",
-      "reason": "需要项目方选定有权使用且跨四平台可用的标识；本仓库无法从代码或依赖推断，代填会伪造身份。packaging/identity.json 中的空值保持为空并被检查标记，直到项目方给出取值。",
-      "status": "open"
+      "topic": "应用 ID",
+      "status": "ratified",
+      "summary": "反域名标识 io.github.mikewolfli.rustage，同时满足鸿蒙 bundle name 规则",
+      "decision": "四平台共用一个应用标识 `io.github.mikewolfli.rustage`：它是项目可控的 GitHub 命名空间的反域名写法，全部小写、无连字符，因而同时满足 macOS `CFBundleIdentifier`、Windows AUMID、Linux `StartupWMClass` 与鸿蒙 bundle name 的约束（三段以上、仅字母数字下划线、7–128 字节）。",
+      "rationale": "标识必须由项目方有权使用且跨四平台可拼写；GitHub 命名空间是唯一一个既有事实依据、又不需要新域名注册的命名空间。鸿蒙禁止连字符，因此不能用 `rustage-app` 一类写法。",
+      "alternatives": [
+        {
+          "option": "自拟品牌域名 com.rustage.app",
+          "rejected": "项目方尚未控制该域名；用未持有的域名做 bundle id 会把身份建立在别人的命名空间上。"
+        },
+        {
+          "option": "随机 UUID 形式",
+          "rejected": "不满足反域名可读性，且无法从安装列表辨认属于哪个项目；迁移时也没有稳定语义。"
+        }
+      ],
+      "compatibilityImpact": "标识出现在 macOS Info.plist、鸿蒙 bundleName、Linux desktop 的 StartupWMClass 与 Windows AUMID；发布后再改会变成另一个已安装应用，因此只能在首版前落定。",
+      "revisitTrigger": "项目方取得自有域名或正式品牌名时，作为一次带迁移说明的身份变更重新登记。",
+      "owner": "项目方（本轮授权按推荐方案落定）",
+      "affects": [
+        "T00.04",
+        "T25.01",
+        "T25.02"
+      ]
     },
     {
       "id": "O-MIN-OS",
-      "decision": "最低系统版本（各宿主与目标平台）",
-      "owner": "项目方",
-      "owningTask": "T01.08、T25.01",
-      "reason": "最低版本必须以各平台真实构建与运行小样验证后才能锁定；缺设备或 SDK 时保持未验证并报告阻塞，不得用推测版本让生成报告通过。",
-      "status": "open"
+      "topic": "最低系统版本",
+      "status": "ratified",
+      "summary": "Windows 10.0.17763、macOS 11.0、Linux glibc 2.31、HarmonyOS 5.1.0(18)",
+      "decision": "首版最低版本：Windows `10.0.17763`（1809），macOS `11.0`，Linux `glibc 2.31`（Ubuntu 20.04 基线），HarmonyOS `5.1.0(18)`。macOS 的值是 aarch64-apple-darwin 的 rustc 部署目标下限；鸿蒙取本机已安装的 API 18 SDK（5.1.0.107），API 20（6.0.0.47）也已在机器上，但作为更高的编译目标而不是最低版本。",
+      "rationale": "最低版本要同时满足工具链下限与已安装 SDK 的事实：macOS 没有 Intel 构建，不能声称 10.13；鸿蒙只装了 API 18/20，取较低者扩大设备面；Windows 10 是当前 rustc MSVC 目标的下限；Linux 的 glibc 版本必须在真实 20.04 构建上确认后才算证据（M-4）。",
+      "alternatives": [
+        {
+          "option": "macOS 10.13",
+          "rejected": "aarch64 rustc 的部署目标下限是 11.0，且本仓库没有 Intel 构建；声明更低版本无法交付。"
+        },
+        {
+          "option": "HarmonyOS 6.0.0(20)",
+          "rejected": "会把最低版本抬到最新 SDK，缩小可安装设备面；API 18 已在机器上，没有理由排除。"
+        },
+        {
+          "option": "Windows 7",
+          "rejected": "当前 rustc MSVC 目标不再支持；声明它等同于声明一个无法构建的组合。"
+        }
+      ],
+      "compatibilityImpact": "最低版本写入 macOS Info.plist 的 LSMinimumSystemVersion 与鸿蒙 build-profile 的 compatibleSdkVersion；调低可以在后续修订放宽，调高会让现有安装无法升级，属于需要说明的变更。",
+      "revisitTrigger": "Linux 20.04 真实构建（M-4）给出 glibc 证据，或目标设备要求更低/更高的 API 时重新登记。",
+      "owner": "项目方（本轮授权按推荐方案落定）",
+      "affects": [
+        "T00.04",
+        "T01.08",
+        "T25.01"
+      ]
     },
     {
       "id": "O-DIST",
-      "decision": "发行形态与安装布局（含各平台签名流程）",
-      "owner": "项目方",
-      "owningTask": "T25.02",
-      "reason": "属于平台与发行决策，涉及签名凭据与安装位置；签名凭据不得入库，取值未经确认前不得写入打包配置。",
-      "status": "open"
-    },
+      "topic": "发行形态与安装布局",
+      "status": "ratified",
+      "summary": "macOS .dmg、Windows 便携 .zip、Linux .tar.gz、HarmonyOS .hap；不做单文件",
+      "decision": "首版发行形态：macOS `.dmg`（内含 `.app`）、Windows 便携 `.zip`、Linux `.tar.gz`（安装前缀 `/usr/local`）、HarmonyOS `.hap`。不把“单可执行文件”作为首版要求：`language/` 是运行期读取并热重载的资源目录，打包成单文件需要另一套资源机制。签名凭据一律不入库，由各发布机自行配置。",
+      "rationale": "宿主运行期从 `language/` 读界面目录并监听改动，单文件会把一个已经工作的资源机制换成未验证的内嵌方案；首版先发目录形态，签名与商店提交流程随 T25.02 逐平台确认。Linux 图标按应用 ID 命名，desktop 文件的 `Icon=` 才能解析。",
+      "alternatives": [
+        {
+          "option": "单可执行文件 + 内嵌语言包",
+          "rejected": "需要新增一套资源内嵌与热重载替代机制，超出首版范围，且会让翻译更新必须重新打包。"
+        },
+        {
+          "option": "首版即提供 MSI/DEB 安装器",
+          "rejected": "安装器与签名流程尚未在真实发布机上验证；先交付可校验的便携归档，不把未验证的安装器写成承诺。"
+        }
+      ],
+      "compatibilityImpact": "发行形态与签名是每个发布机的事实，不进入源码兼容性；安装前缀 `/usr/local` 与 Linux 图标命名随身份落定，后续更改需要重打包而不是重编译。",
+      "revisitTrigger": "需要向 AppGallery/商店提交、或用户要求安装器/自动更新时重新登记。",
+      "owner": "项目方（本轮授权按推荐方案落定）",
+      "affects": [
+        "T25.02"
+      ]
+    }
+  ],
+  "openDecisions": [
     {
       "id": "O-BRAND",
       "decision": "品牌与主题取值（当前提案需视觉审核后批准或修改）",

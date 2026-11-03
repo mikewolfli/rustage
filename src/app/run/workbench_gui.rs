@@ -38,11 +38,13 @@ use rust_widgets::layout::{BoxLayout, Layout as _, LayoutConstraints, Orientatio
 use rust_widgets::widget::PropertyGrid;
 use rust_widgets::widget::PropertyItem;
 use rust_widgets::widget::capability::CapabilityValue;
+use rust_widgets::widget::dialog::alert_dialogs::ConfirmDialog;
 use rust_widgets::widget::dialog::input_dialog::InputDialog;
 use rust_widgets::widget::runtime::{
     self, clear_focus, focus_widget, focused_widget, with_widget_mut,
 };
-use rust_widgets::widget::special_widgets::code_editor::CodeEditor;
+use rust_widgets::widget::special_widgets::canvas::CanvasTransform;
+use rust_widgets::widget::special_widgets::code_editor::{CodeEditor, TextChange};
 use rust_widgets::widget::view_widgets::PropertyItemKind;
 use rust_widgets::widget::{GroupBox, ListBox, Menu, TabWidget, ToolBar};
 
@@ -72,8 +74,8 @@ use super::workbench_pages::PagesState;
 use super::workbench_palette::Palette;
 use super::workbench_property::PropertyState;
 use super::workbench_scene::{
-    CanvasLayout, CanvasState, CanvasTransform, CanvasView, ClipboardSubtree, DESIGN_HEIGHT,
-    DESIGN_WIDTH, span,
+    CanvasLayout, CanvasState, CanvasView, ClipboardSubtree, DESIGN_HEIGHT, DESIGN_WIDTH,
+    canvas_rect, span,
 };
 
 const WIDTH: u32 = 1280;
@@ -436,6 +438,15 @@ struct RenameRequest {
     answer: RenameAnswer,
 }
 
+/// The answer to the unsaved-changes question a window close asked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CloseAnswer {
+    /// Quit and discard the unsaved buffers (the person chose the confirming action).
+    Discard,
+    /// Keep the window open; nothing is discarded.
+    KeepEditing,
+}
+
 /// Which one-field prompt is open.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PromptKind {
@@ -570,6 +581,7 @@ fn add_menu_leaf(
     key: &str,
     command: &str,
     title: &str,
+    shortcuts: &BTreeMap<String, String>,
     actions: &mut BTreeMap<u64, String>,
     gui: &Arc<Mutex<Gui>>,
 ) {
@@ -579,9 +591,23 @@ fn add_menu_leaf(
     } else {
         translated
     };
-    let item = handle.new_menu_item(menu, &label, None);
+    // The new leaf lands at the row the menu currently ends on; a separator added later would
+    // shift only rows after it, and those are not history commands.
+    let index = menu.item_count();
+    // The chord is display text (the library documents it as such), and this window really routes
+    // the single-key ones, so the menu and the palette name the same key.
+    let shortcut = shortcuts
+        .get(crate::app::commands::menu::Menu::command_id(command))
+        .map(String::as_str);
+    let item = handle.new_menu_item(menu, &label, shortcut);
     actions.insert(item.raw_id(), format!("command:{command}"));
     if let Ok(mut gui) = gui.lock() {
+        // Undo and Redo follow the editor's own history state; record the row so
+        // `refresh_history_commands` can enable or disable it without rebuilding the menu.
+        if command == "edit.undo" || command == "edit.redo" {
+            gui.history_items
+                .push((menu.raw_id(), index, command.to_owned()));
+        }
         gui.translatable.push(Translatable {
             id: item.raw_id(),
             key: key.to_owned(),
@@ -610,6 +636,11 @@ struct Gui {
     project: Option<ProjectSession>,
     /// The text each document had on disk when it was read or last saved.
     saved_texts: BTreeMap<String, String>,
+    /// The menu rows that must follow the editor's history state.
+    ///
+    /// `(menu id, row index, command id)`. The library enables a row by index, and the rows are
+    /// created once, so the index recorded at build time stays valid across relabelling.
+    history_items: Vec<(u64, usize, String)>,
     /// The session's permission record; trusting a project is the person's decision.
     permissions: crate::host::permission::PermissionService,
     project_list: u64,
@@ -651,9 +682,6 @@ struct Gui {
     /// Where code navigation has been, newest last; [`Gui::jump_forward`] is the reverse.
     jump_back: Vec<JumpLocation>,
     jump_forward: Vec<JumpLocation>,
-    /// The selections `edit.select-shrink` walks back through, and the document they belong to.
-    selection_history: Vec<((usize, usize), (usize, usize))>,
-    selection_history_document: String,
     /// Documents closed by a command, newest last, with the text they had.
     closed_documents: Vec<(String, String)>,
     /// The resource paths a cleanup preview listed, waiting for confirmation.
@@ -817,6 +845,21 @@ struct Gui {
     /// holds the lock would deadlock the main loop; the guard makes that emission the model
     /// following itself instead of a person's click.
     syncing_editors: Arc<AtomicBool>,
+    /// The document each editor surface is showing.
+    ///
+    /// A text control reports a change with its new text but not with the document it was showing.
+    /// This map is written by [`Gui::sync_editors`] in the same step that loads a document into the
+    /// surface, so a change reported later is attributed to the text the surface actually held. It
+    /// lives outside the `Gui` mutex because the report arrives while a caller may already hold that
+    /// mutex (see the guard note above).
+    editor_documents: Arc<Mutex<BTreeMap<u64, String>>>,
+    /// The editor surfaces whose text changed since the model last read them.
+    ///
+    /// The library's `text_change` signal describes one edit and deliberately does not clone the
+    /// document, so the report only records *which* surface moved. The model reads that surface's
+    /// text on the next main-loop turn (or before the next load), which keeps the cost proportional
+    /// to the edit rather than to the document.
+    editor_changed: Arc<Mutex<BTreeSet<u64>>>,
     /// Labels re-read after a translation hot reload.
     translatable: Vec<Translatable>,
     /// The toolbar and the catalog keys of its items, so a reload can rebuild its labels.
@@ -848,6 +891,12 @@ struct Gui {
     prompt_dialog: u64,
     /// One prompt answer waiting for the main loop.
     prompt_slot: Arc<Mutex<Option<Prompt>>>,
+    /// The mounted unsaved-changes confirmation (0 when none) and the slot its answer arrives in.
+    ///
+    /// The dialog is the library's `ConfirmDialog`; its signals only write the slot, because they
+    /// run inside the runtime's dispatch while the close handler may already hold this `Gui`.
+    close_dialog: u64,
+    close_slot: Arc<Mutex<Option<CloseAnswer>>>,
     rename_slot: Arc<Mutex<Option<RenameRequest>>>,
 }
 
@@ -875,6 +924,17 @@ struct CanvasSnapshot {
 
 /// How far a press must move in design space before it is a marquee rather than a click.
 const DRAG_THRESHOLD: u32 = 8;
+
+/// One group's strip as [`Gui::sync_editors`] reads it.
+///
+/// The documents it shows, which one is active, that document's model text, and the index the
+/// strip should show. A named record keeps the load, the tab labels and the "which document is this
+/// surface showing" map from sharing one unread tuple.
+struct StripState {
+    documents: Vec<String>,
+    active_document: Option<String>,
+    active_index: Option<usize>,
+}
 
 /// Reports a widget or model operation that failed during window construction or a callback.
 ///
@@ -970,6 +1030,9 @@ impl Gui {
     }
 
     fn sync_editors(&mut self) {
+        // A text control's edit reaches the model before the model is loaded back into the control:
+        // otherwise this load would overwrite the very text that has not been read yet.
+        self.apply_pending_editor_text();
         // `TabWidget::set_current_index` emits `current_changed` synchronously, and that signal's
         // subscriber locks this same `Gui`; a rebuild the caller asked for is not a click. The flag
         // is cleared before the function returns, and nothing below returns early.
@@ -977,7 +1040,7 @@ impl Gui {
         // The model decides how many groups exist; the responsive layout follows it. Geometry is
         // no longer written here, so the two cannot disagree about which box a group owns.
         self.refresh_layout();
-        let groups: Vec<(u64, Vec<String>, String, Option<usize>)> = self
+        let groups: Vec<StripState> = self
             .groups
             .group_ids()
             .into_iter()
@@ -988,20 +1051,25 @@ impl Gui {
                     .iter()
                     .map(|tab| tab.document().to_owned())
                     .collect();
-                let text = tabs
-                    .active()
-                    .and_then(|tab| self.groups.text(tab.document()))
-                    .unwrap_or("")
-                    .to_owned();
-                let active = tabs
+                let active_document = tabs.active().map(|tab| tab.document().to_owned());
+                let active_index = tabs
                     .tabs()
                     .iter()
                     .position(|tab| tabs.active().is_some_and(|active| active == tab));
-                (group.get(), documents, text, active)
+                StripState {
+                    documents,
+                    active_document,
+                    active_index,
+                }
             })
             .collect();
         for (index, view) in self.group_views.iter_mut().enumerate() {
-            let Some((_, documents, text, active)) = groups.get(index) else {
+            let Some(StripState {
+                documents,
+                active_document,
+                active_index,
+            }) = groups.get(index)
+            else {
                 for widget in &view.all {
                     rust_widgets::set_widget_visible(*widget, false);
                 }
@@ -1015,11 +1083,12 @@ impl Gui {
             // that appears or disappears cannot leave a stale tab behind.
             let tabs = rust_widgets::app::TabWidgetHandle::from_raw(view.tabs);
             let mut count = tabs.tab_count();
+            let dirty = self.groups.dirty_documents();
             for (tab, document) in documents.iter().enumerate() {
-                let label = document.rsplit('/').next().unwrap_or(document);
+                let label = tab_label(document, dirty.contains(document));
                 if tab < count {
-                    tabs.set_tab_text(tab, label);
-                } else if tabs.add_tab(label, None).is_some() {
+                    tabs.set_tab_text(tab, &label);
+                } else if tabs.add_tab(&label, None).is_some() {
                     count += 1;
                 }
             }
@@ -1030,16 +1099,34 @@ impl Gui {
                     break;
                 }
             }
-            if let Some(active) = active {
+            if let Some(active) = active_index {
                 tabs.set_current_index(*active);
+            }
+            // What the surface is showing, recorded in the same step that loads it: a change the
+            // control reports later is attributed to the document it actually held.
+            if let Ok(mut showing) = self.editor_documents.lock() {
+                match active_document {
+                    Some(document) => {
+                        showing.insert(view.editor, document.clone());
+                    }
+                    None => {
+                        showing.remove(&view.editor);
+                    }
+                }
             }
             let applied = with_widget_mut(view.editor, |widget| {
                 let any: &mut dyn std::any::Any = widget;
                 match any.downcast_mut::<CodeEditor>() {
                     Some(editor) => {
-                        if editor.text() != *text {
-                            editor.set_text(text);
-                        }
+                        let texts: BTreeMap<String, String> = documents
+                            .iter()
+                            .filter_map(|document| {
+                                self.groups
+                                    .text(document)
+                                    .map(|text| (document.clone(), text.to_owned()))
+                            })
+                            .collect();
+                        sync_editor_buffers(editor, documents, active_document.as_deref(), &texts);
                         true
                     }
                     None => false,
@@ -1047,8 +1134,19 @@ impl Gui {
             });
             if applied != Some(true) {
                 self.message = "the editor surface did not accept the document".to_owned();
+                crate::host::log::emit(
+                    crate::host::log::Level::Warn,
+                    "app::run::workbench-editor",
+                    &format!(
+                        "surface {} did not accept {active_document:?} ({applied:?})",
+                        view.editor
+                    ),
+                );
             }
         }
+        // The title and status line name the buffer the editor area is actually showing, and its
+        // saved state; both are read from the tabs rather than kept in a second record.
+        sync_workbench_document(self);
         rust_widgets::set_widget_text(
             self.status,
             &format!("{} | {}", self.status_line(), self.message),
@@ -1057,6 +1155,115 @@ impl Gui {
         // control; the stored draw commands are absolute, so they are rebuilt for the new rect.
         sync_canvas(self);
         self.syncing_editors.store(false, Ordering::SeqCst);
+    }
+
+    /// Reads the editors whose text changed into the one model buffer.
+    ///
+    /// The library reports an edit as a line-range description rather than as a document clone —
+    /// that is what keeps a keystroke proportional to the edit — so the text is read here, from the
+    /// control that holds it. The read runs on the main loop, outside the widget borrow the signal
+    /// was delivered in.
+    ///
+    /// A read that cannot happen yet (the surface is lent out to the caller) leaves the report in
+    /// the pending set, so a later turn still sees it. A surface that is gone, or one showing no
+    /// document, has nothing to write and is dropped.
+    fn apply_pending_editor_text(&mut self) {
+        let changed: Vec<u64> = match self.editor_changed.lock() {
+            Ok(mut set) => std::mem::take(&mut *set).into_iter().collect(),
+            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner())
+                .into_iter()
+                .collect(),
+        };
+        if changed.is_empty() {
+            return;
+        }
+        let mut still_pending = Vec::new();
+        for editor in changed {
+            let document = match self.editor_documents.lock() {
+                Ok(showing) => showing.get(&editor).cloned(),
+                Err(poisoned) => poisoned.into_inner().get(&editor).cloned(),
+            };
+            // A surface that is showing nothing (a closed group, an empty strip) names no buffer.
+            let Some(document) = document else {
+                continue;
+            };
+            let text = with_widget_mut(editor, |widget| {
+                let any: &mut dyn std::any::Any = widget;
+                any.downcast_mut::<CodeEditor>()
+                    .map(|editor| editor.text().to_owned())
+            });
+            let Some(text) = text else {
+                // The surface is lent out right now; the edit is still unread.
+                still_pending.push(editor);
+                continue;
+            };
+            // The surface is gone: a report about a control that no longer exists must not be
+            // written into whichever buffer now happens to be active.
+            let Some(text) = text else {
+                continue;
+            };
+            self.set_document_text(&document, &text);
+        }
+        if !still_pending.is_empty()
+            && let Ok(mut pending) = self.editor_changed.lock()
+        {
+            pending.extend(still_pending);
+        }
+    }
+
+    /// Writes one document's text into the model, with its dirty flags, title and status.
+    ///
+    /// The editor already shows this text, so nothing is loaded back into it: a load would be a
+    /// second writer of the same fact and would re-enter the control's own change signal.
+    fn set_document_text(&mut self, document: &str, text: &str) {
+        if self.groups.text(document) == Some(text) {
+            return;
+        }
+        let was_dirty = self.groups.dirty_documents().contains(document);
+        if let Err(reason) = self.groups.set_text(document, text) {
+            warn_failure("an editor change could not reach the model", reason);
+            return;
+        }
+        // "Dirty" is the buffer against the text it had on disk, not a counter of keystrokes, so
+        // undoing back to the saved text leaves the document clean.
+        //
+        // A buffer with no disk baseline is never dirty: the synthetic demo documents were never
+        // read from a file, `file.save` already refuses them for that reason, and a close that told
+        // the person to save them would be advice nothing can carry out.
+        let dirty = self
+            .saved_texts
+            .get(document)
+            .is_some_and(|saved| saved != text);
+        if dirty != was_dirty {
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-editor",
+                &format!(
+                    "{document}: {}",
+                    if dirty {
+                        "unsaved changes"
+                    } else {
+                        "matches the file on disk"
+                    }
+                ),
+            );
+        }
+        for group in self.groups.group_ids() {
+            if let Some(tabs) = self.groups.tabs_mut(group) {
+                tabs.mark_dirty(document, dirty);
+            }
+        }
+        sync_workbench_document(self);
+        // The strip shows which buffers are unsaved; an edit changed that, so the labels follow it.
+        // The editor surfaces are not reloaded: that is `sync_editors`' job, and doing it here would
+        // move the caret of the view being typed in.
+        refresh_tab_labels(self);
+        // Typing is the one event that gives Undo something to do; the menu follows the control.
+        refresh_history_commands(self);
+        rust_widgets::set_widget_text(
+            self.status,
+            &format!("{} | {}", self.status_line(), self.message),
+        );
     }
 }
 
@@ -1068,6 +1275,68 @@ fn palette_context() -> Context {
     Context::in_area("design")
         .trusted()
         .authorizing(EffectClass::Command)
+}
+
+/// The two places history state shows, for a log line: the menu row and the palette's answer.
+///
+/// `(command, menu row enabled, palette refusal)`; a `None` refusal means the palette would run it.
+fn history_state(gui: &Gui) -> Vec<(String, Option<bool>, Option<String>)> {
+    let context = command_context(gui);
+    gui.history_items
+        .iter()
+        .map(|(menu, index, command)| {
+            let enabled = with_widget_mut(*menu, |widget| {
+                let any: &mut dyn std::any::Any = widget;
+                any.downcast_mut::<Menu>()
+                    .and_then(|menu| menu.item_enabled(*index))
+            })
+            .flatten();
+            let refusal = gui.registry.why_not(&Call::to(command.clone()), &context);
+            (command.clone(), enabled, refusal)
+        })
+        .collect()
+}
+
+/// The one context the palette is filtered with, including what the editor's own history can do.
+///
+/// `can_undo`/`can_redo` come from the focused `CodeEditor`, so "Undo" is greyed out with its
+/// reason exactly when the control would refuse — not from a host counter that could drift.
+fn command_context(gui: &Gui) -> Context {
+    let (undo, redo) = match edit_with_editor(gui, |editor| (editor.can_undo(), editor.can_redo()))
+    {
+        Some((undo, redo)) => (Some(undo), Some(redo)),
+        // No editor surface: the fact is unknown, so the commands stay available and answer for
+        // themselves when they run.
+        None => (None, None),
+    };
+    palette_context().with_history(undo, redo)
+}
+
+/// Points the menu's Undo/Redo items at the same history the palette reads.
+///
+/// The library's `MenuHandle::set_item_enabled` is by row index, so the index of each leaf is
+/// recorded when the menu is built. Nothing here is a second answer to "can this run": the
+/// decision is the control's own `can_undo`/`can_redo`.
+fn refresh_history_commands(gui: &Gui) {
+    if gui.history_items.is_empty() {
+        return;
+    }
+    let Some((undo, redo)) = edit_with_editor(gui, |editor| (editor.can_undo(), editor.can_redo()))
+    else {
+        return;
+    };
+    for (menu, index, command) in &gui.history_items {
+        let enabled = if *command == "edit.undo" { undo } else { redo };
+        // The menu enables a row by index; the handle has no such call (the tool bar's does), so
+        // this goes through the widget, the same way the host reaches other typed setters.
+        let _ = with_widget_mut(*menu, |widget| {
+            let any: &mut dyn std::any::Any = widget;
+            any.downcast_mut::<Menu>().map(|menu| {
+                menu.set_item_enabled(*index, enabled);
+                true
+            })
+        });
+    }
 }
 
 /// Runs `f` with the palette state while the registry and recents stay borrowed from the GUI.
@@ -1249,7 +1518,12 @@ impl GridRow {
     }
 }
 
-/// Stages a control-level tooltip. Entry-level tooltips remain the upstream gap RW-62.
+/// Stages a control-level tooltip.
+///
+/// Entry-level hints exist upstream since RW-62 (`ToolBar::entry_tooltip_at`,
+/// `TabWidget::entry_tooltip_at`, `TooltipManager::note_entry_hover`), and the manager below reads
+/// them from the hovered control. No host item sets one yet: a toolbar label has no longer text
+/// than the label itself, and a hint that repeats the visible text is noise rather than help.
 fn set_control_tooltip(id: u64, text: String) {
     if id == 0 {
         return;
@@ -1369,10 +1643,7 @@ fn refresh_variables(gui: &mut Gui) {
 /// Fills the Actions panel from the command registry and the real keymap.
 fn refresh_actions(gui: &mut Gui) {
     let list = gui.actions_list;
-    let rows = crate::app::run::workbench_actions::rows(
-        &gui.registry,
-        &crate::app::commands::shortcuts::built_in(),
-    );
+    let rows = crate::app::run::workbench_actions::rows(&gui.registry, &window_keymap());
     set_list_rows(list, rows);
 }
 
@@ -1844,8 +2115,10 @@ fn refresh_source(gui: &mut Gui) {
 /// Fills the layout-inspector panel from the opened project's startup page.
 ///
 /// The declaration is read from the page document itself (format v6's root `layout` object); the
-/// diagnostics come from the generation run's own report, so a parameter the library does not honour
-/// is named by the library. Without a run the panel says "not checked" rather than "none".
+/// diagnostics and the solved rectangles come from the generation run's own report, so a parameter
+/// the library does not honour is named by the library and the canvas reads the same geometry as
+/// the generated source (RW-111/RW-116). Without a run the panel says "not checked" rather than
+/// "none".
 fn refresh_layout_panel(gui: &mut Gui) {
     let list = gui.layout_list;
     let (source, page) = match read_startup_page(gui) {
@@ -1879,13 +2152,32 @@ fn refresh_layout_panel(gui: &mut Gui) {
         kind: root.kind().as_str(),
         layout: root.layout(),
         children: root.children().len(),
+        constraints: page
+            .nodes()
+            .iter()
+            .filter_map(|node| {
+                node.constraints()
+                    .map(|constraints| (node.id().get(), constraints))
+            })
+            .collect(),
     };
-    // The issues belong to a generation run; without one the panel must not claim a clean document.
+    // The issues and the solved rectangles belong to a generation run; without one the panel must
+    // not claim a clean document, and it must not present a geometry it did not receive.
     let generated = generated_source(gui);
     let issues = generated
         .as_ref()
         .map(|(_, outcome)| outcome.report.layout_issues.as_slice());
-    let rows = crate::app::run::workbench_layout_panel::rows(&source, &declaration, issues);
+    let geometry =
+        generated.as_ref().map(
+            |(_, outcome)| crate::app::run::workbench_layout_panel::Geometry {
+                width: WIDTH,
+                height: HEIGHT,
+                rects: &outcome.report.node_rects,
+                gaps: &outcome.report.layout_geometry_gaps,
+            },
+        );
+    let rows =
+        crate::app::run::workbench_layout_panel::rows(&source, &declaration, issues, geometry);
     set_list_rows(list, rows);
 }
 
@@ -2339,11 +2631,49 @@ fn set_list_rows(list: u64, rows: Vec<String>) {
     });
 }
 
-/// Replaces every row of a `PropertyGrid`.
+/// Builds the library row a [`GridRow`] describes.
+fn property_item(row: &GridRow) -> PropertyItem {
+    let item = if row.mixed {
+        PropertyItem::mixed(row.name.clone()).with_placeholder(tr("ui.placeholder.mixed"))
+    } else {
+        PropertyItem::new(row.name.clone(), row.value.clone(), row.editable)
+            .with_kind(row.kind.clone())
+    };
+    match row.bounds {
+        Some((min, max, step)) => item.with_bounds(min, max, step),
+        None => item,
+    }
+}
+
+/// Compares two grid rows by every field the host sets.
 ///
-/// The grid owns the rows; the host only hands it the current model. `clear` + adding the items
-/// is the widget's own structure-change path, so its cached display rows and hit test follow.
-fn set_property_rows(id: u64, rows: &[GridRow], selected: Option<usize>) {
+/// `PropertyItem` is not `PartialEq`, so the comparison is spelled out here rather than derived at
+/// the call site; a field added to the host row must be added here too.
+fn same_property_item(before: &PropertyItem, after: &PropertyItem) -> bool {
+    before.name == after.name
+        && before.value == after.value
+        && before.editable == after.editable
+        && before.mixed == after.mixed
+        && before.placeholder == after.placeholder
+        && before.kind == after.kind
+        && before.category == after.category
+        && before.number_bounds == after.number_bounds
+}
+
+/// Brings the rows of a `PropertyGrid` up to date, editing only what changed.
+///
+/// RW-11's incremental row API is what keeps the grid's row-indexed state — selection, hover, an
+/// open editor, a custom-editor binding — alive across a refresh. `clear` + re-adding every row
+/// dropped all of it whenever the model was re-read, even when only one value had changed.
+///
+/// `row_error` paints a message on the row it belongs to (RW-12); it is cleared on every refresh
+/// so a stale error cannot outlive the state that produced it.
+fn set_property_rows(
+    id: u64,
+    rows: &[GridRow],
+    selected: Option<usize>,
+    row_error: Option<(usize, String)>,
+) {
     if id == 0 {
         return;
     }
@@ -2352,19 +2682,26 @@ fn set_property_rows(id: u64, rows: &[GridRow], selected: Option<usize>) {
         let Some(grid) = (widget as &mut dyn Any).downcast_mut::<PropertyGrid>() else {
             return false;
         };
-        grid.clear();
-        for row in &rows {
-            let item = if row.mixed {
-                PropertyItem::mixed(row.name.clone()).with_placeholder(tr("ui.placeholder.mixed"))
-            } else {
-                PropertyItem::new(row.name.clone(), row.value.clone(), row.editable)
-                    .with_kind(row.kind.clone())
-            };
-            let item = match row.bounds {
-                Some((min, max, step)) => item.with_bounds(min, max, step),
-                None => item,
-            };
-            grid.add_property_item(item);
+        let wanted: Vec<PropertyItem> = rows.iter().map(property_item).collect();
+        let current: Vec<PropertyItem> = grid.properties().to_vec();
+        let shared = current.len().min(wanted.len());
+        for index in 0..shared {
+            if !same_property_item(&current[index], &wanted[index]) {
+                grid.update_property(index, wanted[index].clone());
+            }
+        }
+        if current.len() > wanted.len() {
+            for index in (wanted.len()..current.len()).rev() {
+                grid.remove_property(index);
+            }
+        } else {
+            for (index, item) in wanted.iter().enumerate().skip(shared) {
+                grid.insert_property(index, item.clone());
+            }
+        }
+        grid.clear_row_errors();
+        if let Some((index, message)) = row_error {
+            grid.set_row_error(index, Some(message));
         }
         grid.set_selected_index(selected);
         true
@@ -2376,6 +2713,20 @@ fn set_property_rows(id: u64, rows: &[GridRow], selected: Option<usize>) {
             "the mounted control was not a PropertyGrid",
         );
     }
+}
+
+/// Sets or clears one row's error message without touching the rest of the grid (RW-12).
+fn set_property_row_error(id: u64, row: usize, message: Option<&str>) {
+    if id == 0 {
+        return;
+    }
+    let message = message.map(str::to_owned);
+    let _ = with_widget_mut(id, move |widget| {
+        let Some(grid) = (widget as &mut dyn Any).downcast_mut::<PropertyGrid>() else {
+            return false;
+        };
+        grid.set_row_error(row, message)
+    });
 }
 
 /// Rewrites one cell of a `PropertyGrid` without rebuilding the row set.
@@ -2405,6 +2756,10 @@ fn set_property_cell(id: u64, row: usize, value: &str) {
 /// registration order. This observer makes that traversal observable in the host log so a window
 /// probe can assert that keyboard-only navigation reached a panel rather than only the toolbar.
 fn watch_focus(id: u64, name: &'static str) {
+    // The host holds raw ids of mixed kinds, and `WidgetHandle` is implemented per kind
+    // (`TabWidgetHandle`, `WindowHandle`, …) rather than by one generic handle, so the control's
+    // own `focus_gained` signal is reached through the mounted widget here. RW-63's handle-level
+    // `on_focus_gained` is the same signal; a typed handle is used where the host already has one.
     let watched = with_widget_mut(id, move |widget| {
         widget.base().focus_gained.connect(move || {
             crate::host::log::emit(
@@ -2425,23 +2780,114 @@ fn watch_focus(id: u64, name: &'static str) {
     }
 }
 
+/// The library row for one palette entry (RW-15).
+///
+/// The enabled state and its reason belong to the entry, not to the title: the control paints a
+/// disabled row dimmed and shows the reason where a shortcut would be. Folding the reason into the
+/// title made a disabled command look like a normal row whose name happened to end in
+/// `— disabled: …`.
+fn palette_command_entry(
+    entry: &crate::app::commands::palette::Entry,
+    shortcut: Option<&str>,
+) -> rust_widgets::widget::special_widgets::CommandEntry {
+    let row = rust_widgets::widget::special_widgets::CommandEntry::new(entry.id(), entry.title())
+        .with_category(entry.category())
+        .with_enabled(entry.is_enabled(), entry.reason().map(str::to_owned));
+    // RW-16: the control paints the shortcut at the row's trailing edge (and the disabled reason
+    // in its place). Only single-key bindings are shown: the window key handler routes one key at
+    // a time, so a sequence would name a chord it cannot complete.
+    match shortcut {
+        Some(chord) => row.with_shortcut(chord),
+        None => row,
+    }
+}
+
+/// The desktop platform this window resolves keys for.
+fn window_platform() -> crate::app::commands::shortcuts::Platform {
+    if cfg!(target_os = "macos") {
+        crate::app::commands::shortcuts::Platform::MacOs
+    } else if cfg!(target_os = "windows") {
+        crate::app::commands::shortcuts::Platform::Windows
+    } else {
+        crate::app::commands::shortcuts::Platform::Linux
+    }
+}
+
+/// The keymap this window resolves keys with, in the platform's own notation.
+///
+/// One table feeds the key handler, the menu chords, the palette column and the help text, so
+/// "what key runs this" cannot answer differently on two surfaces.
+fn window_keymap() -> crate::app::commands::shortcuts::Keymap {
+    window_platform().keymap()
+}
+
+/// The single-key chords this window actually routes, by command id, in the platform's notation.
+fn routed_shortcuts() -> std::collections::BTreeMap<String, String> {
+    let keymap = window_keymap();
+    let mut shortcuts = std::collections::BTreeMap::new();
+    for binding in keymap.bindings() {
+        // A sequence needs two keypresses and a scoped binding only applies in its own panel; the
+        // menu and the palette are global surfaces, so neither belongs in this column.
+        if binding.chord().keys().len() != 1
+            || !matches!(
+                binding.scope(),
+                crate::app::commands::shortcuts::Scope::Global
+            )
+        {
+            continue;
+        }
+        shortcuts
+            .entry(binding.command().to_owned())
+            .or_insert_with(|| binding.chord().to_string());
+    }
+    shortcuts
+}
+
+/// The command a window keypress should run, or `None` when the key continues to the control.
+///
+/// The library's route decides *whether* the window sees a key (a bare character, a composing IME
+/// and a declined handler never reach the window); this decides what the host keymap does with it.
+/// Pure so the decision can be tested without a window: a text field takes a bare key but not a
+/// command modifier, IME composition suppresses everything, and a panel-scoped chord matches only
+/// while that panel owns the keyboard.
+fn command_for_key(
+    keymap: &crate::app::commands::shortcuts::Keymap,
+    key: crate::app::commands::shortcuts::Key,
+    mode: &str,
+    panel: Option<String>,
+    text_input: bool,
+    composing: bool,
+) -> Option<String> {
+    let mut scene = if text_input {
+        crate::app::commands::shortcuts::Scene::text_field(mode)
+    } else {
+        crate::app::commands::shortcuts::Scene::in_mode(mode, panel)
+    };
+    if composing {
+        scene = scene.composing();
+    }
+    match keymap.resolve(&[key], &scene) {
+        crate::app::commands::shortcuts::Resolution::Triggered { command } => Some(command),
+        // A two-key sequence needs the first chord held across keypresses; this handler sees one
+        // canonical key at a time and deliberately does not keep a buffer that a text key (which
+        // never reaches it) could leave stale.
+        crate::app::commands::shortcuts::Resolution::Pending { .. }
+        | crate::app::commands::shortcuts::Resolution::Suppressed { .. }
+        | crate::app::commands::shortcuts::Resolution::Nothing => None,
+    }
+}
+
 fn sync_palette(gui: &mut Gui) {
     let surface = gui.palette_surface;
     if surface == 0 {
         return;
     }
+    let shortcuts = routed_shortcuts();
     let entries: Vec<rust_widgets::widget::special_widgets::CommandEntry> = gui
         .palette
         .entries()
         .iter()
-        .map(|entry| {
-            let title = match entry.reason() {
-                Some(reason) => format!("{} — disabled: {reason}", entry.title()),
-                None => entry.title().to_owned(),
-            };
-            rust_widgets::widget::special_widgets::CommandEntry::new(entry.id(), title)
-                .with_category(entry.category())
-        })
+        .map(|entry| palette_command_entry(entry, shortcuts.get(entry.id()).map(String::as_str)))
         .collect();
     let query = gui.palette.query().to_owned();
     // `CommandPalette` emits `query_changed` from `set_query`; the callback locks this same `Gui`,
@@ -2453,8 +2899,13 @@ fn sync_palette(gui: &mut Gui) {
             ) else {
                 return false;
             };
-            palette.set_entries(entries);
-            palette.set_query(query);
+            // RW-16: `update_entries` keeps the highlighted command highlighted (by id, not by
+            // filtered position), which `set_entries` resets. A refresh — a language reload, a
+            // trust change, a completed command — must not move the keyboard to another row.
+            palette.update_entries(entries);
+            if palette.query() != query.as_str() {
+                palette.set_query(query);
+            }
             true
         });
     });
@@ -2567,7 +3018,7 @@ fn refresh_inspector(gui: &mut Gui) {
             tr("ui.placeholder.no-selection"),
             false,
         )];
-        set_property_rows(gui.property_grid, &rows, None);
+        set_property_rows(gui.property_grid, &rows, None, None);
         if gui.property_error != 0 {
             rust_widgets::set_widget_text(gui.property_error, &tr("ui.placeholder.no-selection"));
         }
@@ -2650,27 +3101,34 @@ fn refresh_inspector(gui: &mut Gui) {
             false,
         ));
     }
-    set_property_rows(gui.property_grid, &rows, Some(gui.property_row));
+    // The row-level error sits on the value row (RW-12) as well as the contract note below: the
+    // grid paints it in the value column, where the person is looking.
+    let note = gui
+        .property
+        .schema_unavailable()
+        .map(|reason| tr_args("ui.error.schema-unavailable", &[("reason", reason)]))
+        .or_else(|| {
+            gui.property
+                .incompatible()
+                .map(|reason| tr_args("ui.error.contracts-differ", &[("reason", reason)]))
+        })
+        .or_else(|| {
+            gui.property
+                .contract_note()
+                .map(|note| tr_args("ui.error.contracts", &[("reason", note)]))
+        });
+    set_property_rows(
+        gui.property_grid,
+        &rows,
+        Some(gui.property_row),
+        note.as_ref().map(|note| (gui.property_row, note.clone())),
+    );
     // Contract facts are reported instead of hidden behind one node's schema: an unavailable
     // schema refuses edits, and a selection whose properties disagree is not agreement.
-    if gui.property_error != 0 {
-        let note = gui
-            .property
-            .schema_unavailable()
-            .map(|reason| tr_args("ui.error.schema-unavailable", &[("reason", reason)]))
-            .or_else(|| {
-                gui.property
-                    .incompatible()
-                    .map(|reason| tr_args("ui.error.contracts-differ", &[("reason", reason)]))
-            })
-            .or_else(|| {
-                gui.property
-                    .contract_note()
-                    .map(|note| tr_args("ui.error.contracts", &[("reason", note)]))
-            });
-        if let Some(note) = note {
-            rust_widgets::set_widget_text(gui.property_error, &note);
-        }
+    if gui.property_error != 0
+        && let Some(note) = note
+    {
+        rust_widgets::set_widget_text(gui.property_error, &note);
     }
     if gui.inspect_note != 0 {
         rust_widgets::set_widget_text(
@@ -2770,7 +3228,7 @@ fn sync_data(gui: &mut Gui) {
     }
     let selected = gui.data_selected.min(fields.len().saturating_sub(1));
     gui.data_selected = selected;
-    set_property_rows(gui.data_grid, &rows, Some(selected + 1));
+    set_property_rows(gui.data_grid, &rows, Some(selected + 1), None);
     if let Some(problem) = gui.inspect.problem() {
         rust_widgets::set_widget_text(
             gui.data_error,
@@ -3034,10 +3492,11 @@ fn apply_property(gui: &mut Gui, text: &str) {
         }
         Err(reason) => {
             let reason = gui.property.problem().map(str::to_owned).unwrap_or(reason);
-            rust_widgets::set_widget_text(
-                gui.property_error,
-                &tr_args("ui.error.not-applied", &[("reason", &reason)]),
-            );
+            let text = tr_args("ui.error.not-applied", &[("reason", &reason)]);
+            rust_widgets::set_widget_text(gui.property_error, &text);
+            // RW-12: the refused value stays in the field and the reason is painted on the row
+            // that owns it, rather than only in the note under the grid.
+            set_property_row_error(gui.property_grid, gui.property_row, Some(&text));
             gui.message = format!(
                 "{} not applied at revision {}: {reason}",
                 gui.property.name().as_str(),
@@ -3061,6 +3520,7 @@ fn apply_property(gui: &mut Gui, text: &str) {
 fn clear_property(gui: &mut Gui) {
     set_property_cell(gui.property_grid, gui.property_row, "");
     rust_widgets::set_widget_text(gui.property_error, "");
+    set_property_row_error(gui.property_grid, gui.property_row, None);
     gui.message = tr_args(
         "ui.status.inspector-cleared",
         &[
@@ -3167,7 +3627,9 @@ fn canvas_point(gui: &Gui, x: i32, y: i32) -> Option<(i32, i32)> {
         return None;
     }
     with_widget_mut(gui.canvas_panel, |widget| {
-        gui.canvas_view.transform(widget.geometry()).to_design(x, y)
+        let transform = gui.canvas_view.transform(widget.geometry());
+        let point = transform.inverse_point(Point::new(x, y));
+        (point.x, point.y)
     })
 }
 
@@ -3403,7 +3865,7 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
             if *hidden {
                 continue;
             }
-            let node = transform.place(*design);
+            let node = transform.rect(canvas_rect(*design));
             let (fill, border) = if *selected {
                 (SELECTED_FILL, ACCENT)
             } else if *locked {
@@ -3421,7 +3883,7 @@ fn draw_canvas(panel: u64, surface: u64, frame: &CanvasSnapshot) {
             );
         }
         if let Some(marquee) = frame.marquee {
-            canvas.draw_rect(transform.place(marquee), ACCENT);
+            canvas.draw_rect(transform.rect(canvas_rect(marquee)), ACCENT);
         }
     });
 }
@@ -3440,14 +3902,14 @@ fn draw_grid(
     }
     let right = rect.x + rect.width as i32;
     let bottom = rect.y + rect.height as i32;
-    let mut x = transform.offset_x as f32;
+    let mut x = transform.offset.x as f32;
     while x < right as f32 {
         if x >= rect.x as f32 {
             canvas.fill_rect(Rect::new(x.round() as i32, rect.y, 1, rect.height), GRID);
         }
         x += step;
     }
-    let mut y = transform.offset_y as f32;
+    let mut y = transform.offset.y as f32;
     while y < bottom as f32 {
         if y >= rect.y as f32 {
             canvas.fill_rect(Rect::new(rect.x, y.round() as i32, rect.width, 1), GRID);
@@ -3473,7 +3935,7 @@ fn draw_rulers(
     }
     let mut design = 0u32;
     while design <= DESIGN_WIDTH {
-        let x = transform.offset_x + (design as f32 * transform.scale) as i32;
+        let x = transform.offset.x + (design as f32 * transform.scale) as i32;
         if x >= rect.x && x < rect.x + rect.width as i32 {
             canvas.fill_rect(Rect::new(x, rect.y, 1, RULER), MUTED_TEXT);
             canvas.draw_text(
@@ -3487,7 +3949,7 @@ fn draw_rulers(
     }
     let mut design = 0u32;
     while design <= DESIGN_HEIGHT {
-        let y = transform.offset_y + (design as f32 * transform.scale) as i32;
+        let y = transform.offset.y + (design as f32 * transform.scale) as i32;
         if y >= rect.y && y < rect.y + rect.height as i32 {
             canvas.fill_rect(Rect::new(rect.x, y, RULER, 1), MUTED_TEXT);
         }
@@ -4886,7 +5348,8 @@ fn create_drag_ghost(state: &Arc<Mutex<Gui>>, gui: &mut Gui) {
     };
     let view = gui.canvas_view;
     let Some(origin) = with_widget_mut(gui.canvas_panel, move |widget| {
-        view.transform(widget.geometry()).place(node_rect)
+        view.transform(widget.geometry())
+            .rect(canvas_rect(node_rect))
     }) else {
         warn_failure(
             "the drag ghost could not be placed",
@@ -5205,7 +5668,7 @@ fn open_palette(gui: &mut Gui) {
         "palette open requested",
     );
     let previous = focused_widget();
-    let context = palette_context();
+    let context = command_context(gui);
     palette_with(gui, |palette, registry, recents| {
         palette.open(previous, registry, &context, recents);
     });
@@ -5261,7 +5724,7 @@ fn close_palette(gui: &mut Gui) {
 }
 
 fn shortcut_summary() -> String {
-    let keymap = crate::app::commands::shortcuts::built_in();
+    let keymap = window_keymap();
     let bindings = keymap.bindings();
     let mut parts: Vec<String> = bindings
         .iter()
@@ -5293,33 +5756,22 @@ fn run_palette_id(gui: &mut Gui, id: &str) {
 
     let id = entry.id().to_owned();
     gui.recents.record(id.clone());
-    let outcome = match id.as_str() {
+    match id.as_str() {
         "view.palette" => {
             gui.message = "the command palette is already open".to_owned();
             update_status(gui);
             return;
         }
-        "panel.close" => {
-            // Focus tracking for docked panels is a later T04.07 slice; hiding an arbitrary panel
-            // would be a different action from the one the user asked for.
-            format!("{id}: no focused docked panel is tracked in this window yet")
-        }
         // Every other palette entry runs through the same dispatcher as the menu, so a command
-        // implemented for one entry is never "no handler" from the other.
+        // implemented for one entry is never "no handler" from the other. Closing the focused
+        // docked panel is `view.panel-hide-current` there, not a second id this function would
+        // have to keep in step.
         _ => {
             close_palette(gui);
             run_command(gui, &id);
             return;
         }
-    };
-    close_palette(gui);
-    gui.message = outcome;
-    update_status(gui);
-    crate::host::log::emit(
-        crate::host::log::Level::Info,
-        "app::run::workbench-palette",
-        &format!("palette ran {id}"),
-    );
+    }
 }
 
 /// The commands this window has a handler for.
@@ -5327,7 +5779,7 @@ fn run_palette_id(gui: &mut Gui, id: &str) {
 /// A menu leaf and a shortcut both end in [`run_command`]; a command whose name is not here has no
 /// effect in this build, and saying so is the only honest answer. The list is deliberately short:
 /// registering a command claims it exists, and the window can only claim what it can do.
-const HANDLED_COMMANDS: [&str; 137] = [
+const HANDLED_COMMANDS: [&str; 141] = [
     "view.palette",
     "view.welcome",
     "view.split",
@@ -5460,6 +5912,10 @@ const HANDLED_COMMANDS: [&str; 137] = [
     "code.outline",
     "code.breadcrumbs",
     "code.inlay-hints",
+    "code.line-numbers",
+    "code.minimap",
+    "code.word-wrap",
+    "code.whitespace",
     "code.bookmark-toggle",
     "design.fit",
     "design.actual-size",
@@ -5477,6 +5933,10 @@ fn run_command(gui: &mut Gui, command: &str) {
 /// is where the call reaches the same dispatcher a key or the palette uses, so an implemented
 /// command is never "no handler" depending on which surface asked for it.
 fn run_call(gui: &mut Gui, call: &Call) {
+    // A command may read the model (save, close, a tab switch), so an edit the control reported
+    // but the model has not read yet is applied first. The poller does the same between commands;
+    // this is what makes "type, then press the shortcut" independent of the poll's timing.
+    gui.apply_pending_editor_text();
     let command = call.id();
     if !HANDLED_COMMANDS.contains(&command) {
         // A key still binds some of these (Ctrl+S, Ctrl+Z). Answering "resolved" was a lie: nothing
@@ -5639,6 +6099,10 @@ fn run_call(gui: &mut Gui, call: &Call) {
         }
         "code.breadcrumbs" => code_breadcrumbs(gui),
         "code.inlay-hints" => code_inlay_hints(gui),
+        "code.line-numbers" => code_display_toggle(gui, DisplayToggle::LineNumbers),
+        "code.minimap" => code_display_toggle(gui, DisplayToggle::Minimap),
+        "code.word-wrap" => code_display_toggle(gui, DisplayToggle::WordWrap),
+        "code.whitespace" => code_display_toggle(gui, DisplayToggle::Whitespace),
         "code.bookmark-toggle" => code_bookmark_toggle(gui),
         "edit.select-occurrences" => edit_select_occurrences(gui),
         "edit.select-next-occurrence" => edit_select_more(gui, "next-occurrence"),
@@ -5798,6 +6262,7 @@ fn run_call(gui: &mut Gui, call: &Call) {
         record_command(gui, command);
     }
     gui.message = outcome;
+    refresh_history_commands(gui);
     update_status(gui);
     crate::host::log::emit(
         crate::host::log::Level::Info,
@@ -5945,19 +6410,285 @@ fn scene_command(gui: &mut Gui, action: &str) -> String {
 ///
 /// A document is skipped when any view of it is dirty: "saved" means no view would lose an edit,
 /// not that this particular tab happened to be clean.
+/// Records the buffer the editor area is showing in the title's one record, with its saved state.
+///
+/// The active tab is a fact of the editor area; the `Workbench` is the title's record of it. Copying
+/// it here — after a tab switch, an edit or a save — is what keeps the status line from naming a
+/// document the window stopped showing, and the unsaved marker from outliving the edit it marked.
+fn sync_workbench_document(gui: &mut Gui) {
+    let focus = gui.groups.focus();
+    let active = gui.groups.tabs(focus).and_then(|tabs| {
+        tabs.active()
+            .map(|tab| (tab.document().to_owned(), tab.is_dirty()))
+    });
+    match active {
+        Some((document, dirty)) => {
+            // `open_document` clears the marker, so the tab's own state is applied after it.
+            gui.workbench.open_document(document);
+            if dirty {
+                gui.workbench.mark_dirty();
+            }
+        }
+        None => gui.workbench.close_document(),
+    }
+}
+
+/// The label a tab strip shows for one document.
+///
+/// The library's `TabWidget` has no "modified" flag, so the marker the title uses is written into
+/// the tab text here: one derivation for both places, and no screenful of space spent on a second
+/// indicator. The marker is read from the buffers (`Groups::dirty_documents`), never tracked
+/// separately.
+fn tab_label(document: &str, dirty: bool) -> String {
+    let name = document.rsplit('/').next().unwrap_or(document);
+    if dirty {
+        format!("• {name}")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Rewrites the tab labels from the buffers, without touching the editors.
+///
+/// An edit changes which buffers are dirty; the tab strip is the place a person sees that for a
+/// document that is not active. Only labels are written — loading a document back into an editor
+/// here would move that view's caret on every keystroke.
+fn refresh_tab_labels(gui: &mut Gui) {
+    let dirty = gui.groups.dirty_documents();
+    let groups = gui.groups.group_ids();
+    for (index, view) in gui.group_views.iter().enumerate() {
+        let Some(group) = groups.get(index).copied() else {
+            continue;
+        };
+        let Some(tabs) = gui.groups.tabs(group) else {
+            continue;
+        };
+        let strip = rust_widgets::app::TabWidgetHandle::from_raw(view.tabs);
+        for (tab, entry) in tabs.tabs().iter().enumerate() {
+            let label = tab_label(entry.document(), dirty.contains(entry.document()));
+            strip.set_tab_text(tab, &label);
+        }
+    }
+}
+
+/// Reconciles one editor surface with its strip: one library buffer per open document.
+///
+/// The library's editor is multi-buffer by design — `open_buffer`/`activate_buffer_id`/
+/// `close_buffer_id`, and `buffer_summaries` is documented as what a host's tab strip needs — so the
+/// host keeps **one buffer per document** instead of reloading the whole text on every tab switch.
+/// That is what leaves each document's undo history and caret where the person left them: switching
+/// tabs activates a buffer, it does not replace a buffer's text.
+///
+/// The active buffer's text is brought in line with the model only when the two disagree — a command
+/// that wrote the model, not a person's typing (which the model reads from this very control). A
+/// wholesale replacement is not an undoable edit, so the history is cleared just for that case.
+fn sync_editor_buffers(
+    editor: &mut CodeEditor,
+    documents: &[String],
+    active: Option<&str>,
+    texts: &BTreeMap<String, String>,
+) {
+    let buffers = |editor: &CodeEditor| -> BTreeMap<String, u64> {
+        editor
+            .buffer_summaries()
+            .into_iter()
+            .zip(editor.buffer_ids())
+            .map(|((title, _, _), id)| (title, id))
+            .collect()
+    };
+
+    // A document the surface does not hold yet gets its own buffer, with the model's text.
+    let present = buffers(editor);
+    for document in documents {
+        if present.contains_key(document) {
+            continue;
+        }
+        let text = texts.get(document).cloned().unwrap_or_default();
+        editor.open_buffer(document.clone(), text);
+    }
+
+    // A buffer whose document left the strip goes away. Closing the last buffer empties it instead
+    // of removing it, which is the library's documented rule and leaves nothing stale on screen.
+    let open: Vec<(String, u64)> = buffers(editor).into_iter().collect();
+    for (title, id) in open {
+        if !documents.iter().any(|document| *document == title) {
+            editor.close_buffer_id(id);
+        }
+    }
+
+    let Some(active) = active else {
+        return;
+    };
+    // Activation is by identity: an earlier close shifts positions but never an id.
+    if let Some(id) = buffers(editor).get(active).copied() {
+        editor.activate_buffer_id(id);
+    }
+    // The document's name owns its language (the library's lexer knows 20 of them). Setting it on
+    // the active buffer is what gives the window real highlighting instead of the plain default.
+    let language = crate::app::editor::highlight::Language::of_path(active).id();
+    if editor.active_language() != language {
+        editor.set_language(language);
+    }
+    let expected = texts.get(active).map(String::as_str).unwrap_or("");
+    if editor.text() != expected {
+        editor.set_text(expected);
+        editor.clear_history();
+    }
+}
+
+/// Decides whether the window may close, answering `false` while a buffer has unsaved changes.
+///
+/// The library asks this before the window disappears (`WindowHandle::set_close_handler`), so the
+/// close button cannot discard an edit silently. The refusal names how many buffers are holding it
+/// and leaves the window open; the menu's Quit is the explicit path that does discard, which is why
+/// the message points at it instead of offering a second, host-built confirmation.
+///
+/// Any edit the control reported but the model has not read yet is applied first: a keystroke from a
+/// few milliseconds ago is still an unsaved change.
+fn window_close_allowed(gui: &mut Gui) -> bool {
+    gui.apply_pending_editor_text();
+    let dirty = gui.groups.dirty_documents();
+    if dirty.is_empty() {
+        return true;
+    }
+    let count = dirty.len();
+    let count_text = count.to_string();
+    let documents = dirty.into_iter().collect::<Vec<_>>().join(", ");
+    gui.message = tr_args("ui.error.window-close-dirty", &[("count", &count_text)]);
+    crate::host::log::emit(
+        crate::host::log::Level::Warn,
+        "app::run::workbench",
+        &format!("close refused: {count_text} document(s) with unsaved changes: {documents}"),
+    );
+    update_status(gui);
+    // The refusal is followed by the library's own question, so the answer can be "quit and
+    // discard" without the person having to find the menu. A second click while the question is up
+    // does not stack another one: the open dialog is the question.
+    open_close_dialog(gui, count);
+    false
+}
+
+/// Asks the unsaved-changes question with the library's `ConfirmDialog`.
+///
+/// The dialog is mounted on the modal stack and its two signals only write [`Gui::close_slot`]: they
+/// run inside the runtime's dispatch, where asking for the `Gui` would deadlock the close handler
+/// that opened them. [`schedule_close`] applies the answer on the main loop.
+fn open_close_dialog(gui: &mut Gui, count: usize) {
+    if gui.close_dialog != 0 {
+        return;
+    }
+    let count = count.to_string();
+    let mut dialog = ConfirmDialog::new(
+        &tr("ui.dialog.close-dirty-title"),
+        &tr_args("ui.dialog.close-dirty-message", &[("count", &count)]),
+        Rect::new(
+            (WIDTH as i32 - 440) / 2,
+            (HEIGHT as i32 - 180) / 2,
+            440,
+            180,
+        ),
+    );
+    dialog.set_accept_text(tr("ui.dialog.close-dirty-accept"));
+    dialog.set_reject_text(tr("ui.dialog.close-dirty-reject"));
+    let slot = Arc::clone(&gui.close_slot);
+    dialog.accepted.connect(move || {
+        if let Ok(mut pending) = slot.lock() {
+            *pending = Some(CloseAnswer::Discard);
+        }
+    });
+    let slot = Arc::clone(&gui.close_slot);
+    dialog.rejected.connect(move || {
+        if let Ok(mut pending) = slot.lock() {
+            *pending = Some(CloseAnswer::KeepEditing);
+        }
+    });
+    let Some(id) = runtime::register(Box::new(dialog)) else {
+        warn_failure(
+            "the unsaved-changes question could not be mounted",
+            "the runtime refused to register the dialog",
+        );
+        return;
+    };
+    runtime::set_host_window(id, gui.window);
+    if !runtime::enter_modal(id) {
+        runtime::unregister(id);
+        warn_failure(
+            "the unsaved-changes question could not be mounted",
+            "the modal stack refused the dialog",
+        );
+        return;
+    }
+    gui.close_dialog = id;
+    crate::host::log::emit(
+        crate::host::log::Level::Info,
+        "app::run::workbench",
+        &format!("asked about {count} unsaved document(s); dialog {id} is open"),
+    );
+}
+
+/// Applies the answer to the unsaved-changes question on the main loop.
+fn apply_close_answer(gui: &mut Gui, answer: CloseAnswer) {
+    if gui.close_dialog != 0 {
+        let id = gui.close_dialog;
+        runtime::exit_modal(id);
+        runtime::unregister(id);
+        gui.close_dialog = 0;
+    }
+    match answer {
+        CloseAnswer::Discard => {
+            gui.message = tr("ui.status.closing");
+            update_status(gui);
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench",
+                "the person chose to discard the unsaved changes and quit",
+            );
+            // The library records the request; the loop performs the stop on its next frame, so no
+            // toolkit call crosses this callback.
+            rust_widgets::quit();
+        }
+        CloseAnswer::KeepEditing => {
+            gui.message = tr("ui.status.close-cancelled");
+            update_status(gui);
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench",
+                "the person kept editing; the window stays open and nothing was discarded",
+            );
+        }
+    }
+}
+
+/// Polls the unsaved-changes answer, the same way the rename and prompt dialogs are polled.
+fn schedule_close(gui: Arc<Mutex<Gui>>, slot: Arc<Mutex<Option<CloseAnswer>>>) {
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(50), move || {
+        // Take the answer before locking the `Gui`: the dialog's callback may hold the slot while
+        // the main loop holds the window state, and locking both in the other order would deadlock.
+        let answer = match slot.lock() {
+            Ok(mut pending) => pending.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(answer) = answer
+            && let Ok(mut gui) = gui.lock()
+        {
+            apply_close_answer(&mut gui, answer);
+        }
+        schedule_close(gui, slot);
+    });
+}
+
 fn close_saved(gui: &mut Gui) -> String {
-    let mut dirty = BTreeSet::new();
     let mut documents = BTreeSet::new();
     for group in gui.groups.group_ids() {
         if let Some(tabs) = gui.groups.tabs(group) {
             for tab in tabs.tabs() {
                 documents.insert(tab.document().to_owned());
-                if tab.is_dirty() {
-                    dirty.insert(tab.document().to_owned());
-                }
             }
         }
     }
+    // One derivation of "which buffers are dirty" for every close path, so closing the window and
+    // closing saved tabs cannot disagree about a document's state.
+    let dirty = gui.groups.dirty_documents();
     let saved: Vec<(String, String)> = documents
         .difference(&dirty)
         .filter_map(|document| {
@@ -6604,21 +7335,14 @@ fn view_mode(gui: &mut Gui, mode: Mode) -> String {
 ///
 /// The editor's own `expand_selection` is progressive within one structural kind, so the command
 /// tries the kinds in the order a person widens a selection: word, line, brackets, block. The
-/// previous selection is remembered so [`edit_select_shrink`] can walk back.
+/// control records the replaced selection itself (RW-114), which is what
+/// [`edit_select_shrink`] walks back through — one history, not a host copy that can drift from it.
 fn edit_select_expand(gui: &mut Gui) -> String {
     use rust_widgets::widget::special_widgets::code_editor::StructuralKind;
 
-    let Some(document) = active_document(gui).map(|(document, _)| document) else {
+    if active_document(gui).is_none() {
         return tr("ui.status.no-editor");
-    };
-    prepare_selection_history(gui, &document);
-    let Some(bounds) = edit_with_editor(gui, |editor| {
-        let (start, end) = editor.selection_bounds();
-        ((start.line, start.column), (end.line, end.column))
-    }) else {
-        return tr("ui.source.no-editor");
-    };
-    gui.selection_history.push(bounds);
+    }
     let expanded = edit_with_editor(gui, |editor| {
         for kind in [
             StructuralKind::Word,
@@ -6632,46 +7356,25 @@ fn edit_select_expand(gui: &mut Gui) -> String {
         }
         false
     });
-    if expanded == Some(true) {
-        tr("ui.status.selection-expanded")
-    } else {
-        // Nothing contains the current selection: do not leave a history entry that would
-        // shrink to the same place.
-        gui.selection_history.pop();
-        tr("ui.status.nothing-to-expand")
+    match expanded {
+        Some(true) => tr("ui.status.selection-expanded"),
+        Some(false) => tr("ui.status.nothing-to-expand"),
+        None => tr("ui.source.no-editor"),
     }
 }
 
-/// Restores the selection `edit.select-expand` had before its last step.
+/// Restores the selection the last `edit.select-expand` replaced (RW-114).
+///
+/// The editor owns the history (`CodeEditor::shrink_selection`) and clears it on every document
+/// change, so a stale position is never restored.
 fn edit_select_shrink(gui: &mut Gui) -> String {
-    use rust_widgets::widget::special_widgets::code_editor::TextPosition;
-
-    let Some(document) = active_document(gui).map(|(document, _)| document) else {
+    if active_document(gui).is_none() {
         return tr("ui.status.no-editor");
-    };
-    prepare_selection_history(gui, &document);
-    let Some((anchor, head)) = gui.selection_history.pop() else {
-        return tr("ui.status.nothing-to-shrink");
-    };
-    let restored = edit_with_editor(gui, move |editor| {
-        editor.set_caret(TextPosition::new(anchor.0, anchor.1), false);
-        editor.set_caret(TextPosition::new(head.0, head.1), true);
-        true
-    });
-    match restored {
-        Some(true) => tr("ui.status.selection-shrunk"),
-        _ => {
-            gui.selection_history.push((anchor, head));
-            tr("ui.source.no-editor")
-        }
     }
-}
-
-/// Drops a selection history recorded against another document.
-fn prepare_selection_history(gui: &mut Gui, document: &str) {
-    if gui.selection_history_document != document {
-        gui.selection_history.clear();
-        gui.selection_history_document = document.to_owned();
+    match edit_with_editor(gui, |editor| editor.shrink_selection()) {
+        Some(true) => tr("ui.status.selection-shrunk"),
+        Some(false) => tr("ui.status.nothing-to-shrink"),
+        None => tr("ui.source.no-editor"),
     }
 }
 
@@ -6689,6 +7392,57 @@ fn code_inlay_hints(gui: &mut Gui) -> String {
         Some(true) => tr("ui.status.inlay-hints-shown"),
         Some(false) => tr("ui.status.inlay-hints-hidden"),
         None => tr("ui.source.no-editor"),
+    }
+}
+
+/// A display setting that can be switched at runtime (RW-112).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DisplayToggle {
+    LineNumbers,
+    Minimap,
+    WordWrap,
+    Whitespace,
+}
+
+/// Switches one of the editor's display settings without rebuilding the control.
+///
+/// The control owns each flag and records a full-surface repaint itself
+/// (`CodeEditor::set_show_line_numbers` and friends, RW-112), so the command only flips it and reads
+/// the result back. Rebuilding the editor would lose its undo history and selection, which is what
+/// this path exists to avoid.
+fn code_display_toggle(gui: &mut Gui, toggle: DisplayToggle) -> String {
+    let state = edit_with_editor(gui, |editor| match toggle {
+        DisplayToggle::LineNumbers => {
+            let next = !editor.config().show_line_numbers;
+            editor.set_show_line_numbers(next);
+            next
+        }
+        DisplayToggle::Minimap => {
+            let next = !editor.config().show_minimap;
+            editor.set_show_minimap(next);
+            next
+        }
+        DisplayToggle::WordWrap => {
+            let next = !editor.config().word_wrap;
+            editor.set_word_wrap(next);
+            next
+        }
+        DisplayToggle::Whitespace => {
+            let next = !editor.config().show_whitespace;
+            editor.set_show_whitespace(next);
+            next
+        }
+    });
+    match (state, toggle) {
+        (Some(true), DisplayToggle::LineNumbers) => tr("ui.status.line-numbers-on"),
+        (Some(false), DisplayToggle::LineNumbers) => tr("ui.status.line-numbers-off"),
+        (Some(true), DisplayToggle::Minimap) => tr("ui.status.minimap-on"),
+        (Some(false), DisplayToggle::Minimap) => tr("ui.status.minimap-off"),
+        (Some(true), DisplayToggle::WordWrap) => tr("ui.status.word-wrap-on"),
+        (Some(false), DisplayToggle::WordWrap) => tr("ui.status.word-wrap-off"),
+        (Some(true), DisplayToggle::Whitespace) => tr("ui.status.whitespace-on"),
+        (Some(false), DisplayToggle::Whitespace) => tr("ui.status.whitespace-off"),
+        (None, _) => tr("ui.source.no-editor"),
     }
 }
 
@@ -7224,11 +7978,80 @@ fn preview_rebuild(gui: &mut Gui) -> String {
         }
     };
     let mounted = gui.preview_json;
+    // State that could not be put back is the one thing about a rebuild a person needs to see: the
+    // log keeps every outcome, but these lines also go to the Messages panel (principle #22).
+    let mut unrestored: Vec<String> = Vec::new();
     let outcome: Result<String, String> = with_preview(|preview| {
         let factory = WidgetFactory::new_with_defaults();
         let make = crate::app::run::preview::control_creator(&factory);
+        // T14.03: capture what the live session would lose across a rebuild and put it back on the
+        // controls the update kept. Focus, row scroll and typed text are read from the library's own
+        // channels (`focused_widget`, the `scroll_row` property, the `text` property), and a text is
+        // only called "typed" when it differs from the page declaration, so a rebuilt control keeps
+        // the value the document gives it.
+        let capture = preview.capture_state();
+        let mut restore =
+            |preview: &crate::app::preview::preview_service::Preview,
+             capture: &crate::app::preview::state_keep::Capture| {
+                match preview.restore_state(capture) {
+                    Ok(outcomes) if !outcomes.is_empty() => {
+                        let lines: Vec<String> =
+                            outcomes.iter().map(|outcome| outcome.render()).collect();
+                        unrestored.extend(
+                            outcomes
+                                .iter()
+                                .filter(|outcome| !outcome.is_restored())
+                                .map(|outcome| outcome.render()),
+                        );
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench-preview-state",
+                            &format!(
+                                "restored {} live state(s): {}",
+                                outcomes.len(),
+                                lines.join("; ")
+                            ),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(reason) => crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "app::run::workbench-preview-state",
+                        &format!("live state could not be restored: {reason}"),
+                    ),
+                }
+                match preview.restore_input(capture) {
+                    Ok(outcomes) if !outcomes.is_empty() => {
+                        let lines: Vec<String> =
+                            outcomes.iter().map(|outcome| outcome.render()).collect();
+                        unrestored.extend(
+                            outcomes
+                                .iter()
+                                .filter(|outcome| !outcome.is_restored())
+                                .map(|outcome| outcome.render()),
+                        );
+                        crate::host::log::emit(
+                            crate::host::log::Level::Info,
+                            "app::run::workbench-preview-state",
+                            &format!(
+                                "restored {} typed text(s): {}",
+                                outcomes.len(),
+                                lines.join("; ")
+                            ),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(reason) => crate::host::log::emit(
+                        crate::host::log::Level::Warn,
+                        "app::run::workbench-preview-state",
+                        &format!("typed text could not be restored: {reason}"),
+                    ),
+                }
+            };
         if mounted {
-            preview.update_json(&json, &make).map(|report| {
+            let result = preview.update_json(&json, &make);
+            restore(preview, &capture);
+            result.map(|report| {
                 tr_args(
                     "ui.status.preview-updated",
                     &[
@@ -7238,7 +8061,9 @@ fn preview_rebuild(gui: &mut Gui) -> String {
                 )
             })
         } else {
-            preview.mount_json(&json, &make).map(|report| {
+            let result = preview.mount_json(&json, &make);
+            restore(preview, &capture);
+            result.map(|report| {
                 tr_args(
                     "ui.status.preview-mounted",
                     &[
@@ -7249,6 +8074,12 @@ fn preview_rebuild(gui: &mut Gui) -> String {
             })
         }
     });
+    for line in unrestored {
+        push_message(
+            gui,
+            format!("{} {line}", tr("ui.status.preview-state-not-restored")),
+        );
+    }
     match outcome {
         Ok(message) => {
             gui.preview_json = true;
@@ -7416,6 +8247,11 @@ fn save_document(gui: &mut Gui, document: &str, text: &str) -> Result<String, St
         if let Some(tabs) = gui.groups.tabs_mut(group) {
             tabs.mark_dirty(document, false);
         }
+    }
+    // The title's marker follows the buffer that was just written; without this the window would
+    // say "unsaved" about a document whose file it just replaced.
+    if gui.workbench.document() == Some(document) {
+        gui.workbench.mark_clean();
     }
     Ok(relative)
 }
@@ -7807,7 +8643,7 @@ fn open_help_document(gui: &mut Gui, name: &str, text: String) {
 
 /// The keyboard reference, built from the same keymap the window and audit use.
 fn shortcut_reference_text() -> String {
-    let keymap = crate::app::commands::shortcuts::built_in();
+    let keymap = window_keymap();
     let mut text = format!("# {}\n\n", tr("ui.help.shortcuts"));
     for binding in keymap.bindings() {
         text.push_str(&format!(
@@ -7931,6 +8767,7 @@ fn toggle_panel(gui: &mut Gui, id: &str) {
 }
 
 fn apply_action(gui: &mut Gui, action: &str) {
+    gui.apply_pending_editor_text();
     if let Some(raw) = action.strip_prefix("command:") {
         let (id, arguments) = match raw.split_once('?') {
             Some((id, query)) => (id, parse_action_arguments(query)),
@@ -8044,11 +8881,17 @@ fn apply_action(gui: &mut Gui, action: &str) {
             open_help_document(gui, "CONTROLS.md", text);
         }
         "quit" => {
-            gui.message = tr("ui.status.closing");
-            rust_widgets::quit();
+            // Quitting is the same question as closing: an explicit "quit" is still a request that
+            // would discard buffers, so it goes through the one guard rather than a second, silently
+            // different path. A clean window quits at once.
+            if window_close_allowed(gui) {
+                gui.message = tr("ui.status.closing");
+                rust_widgets::quit();
+            }
         }
         other => gui.message = tr_args("ui.status.unknown-action", &[("action", other)]),
     }
+    refresh_history_commands(gui);
     rust_widgets::set_widget_text(
         gui.status,
         &format!("{} | {}", gui.status_line(), gui.message),
@@ -8370,6 +9213,7 @@ pub(super) fn workbench_gui(
 
     let rename_slot: Arc<Mutex<Option<RenameRequest>>> = Arc::new(Mutex::new(None));
     let prompt_slot: Arc<Mutex<Option<Prompt>>> = Arc::new(Mutex::new(None));
+    let close_slot: Arc<Mutex<Option<CloseAnswer>>> = Arc::new(Mutex::new(None));
     let gui = Arc::new(Mutex::new(Gui {
         workbench,
         panels,
@@ -8383,6 +9227,7 @@ pub(super) fn workbench_gui(
         vcs_menu: 0,
         project,
         saved_texts: BTreeMap::new(),
+        history_items: Vec::new(),
         permissions: crate::host::permission::PermissionService::new(),
         project_list: 0,
         dependencies_list: 0,
@@ -8413,8 +9258,6 @@ pub(super) fn workbench_gui(
         source_filter: String::new(),
         jump_back: Vec::new(),
         jump_forward: Vec::new(),
-        selection_history: Vec::new(),
-        selection_history_document: String::new(),
         closed_documents: Vec::new(),
         pending_resource_cleanup: Vec::new(),
         command_history: Vec::new(),
@@ -8522,6 +9365,8 @@ pub(super) fn workbench_gui(
         outline_content_revision: u64::MAX,
         outline_syncing: Arc::new(AtomicBool::new(false)),
         syncing_editors: Arc::new(AtomicBool::new(false)),
+        editor_documents: Arc::new(Mutex::new(BTreeMap::new())),
+        editor_changed: Arc::new(Mutex::new(BTreeSet::new())),
         translatable: Vec::new(),
         toolbar: 0,
         toolbar_items: Vec::new(),
@@ -8538,6 +9383,8 @@ pub(super) fn workbench_gui(
         rename_dialog: 0,
         prompt_dialog: 0,
         prompt_slot: Arc::clone(&prompt_slot),
+        close_dialog: 0,
+        close_slot: Arc::clone(&close_slot),
         rename_slot: Arc::clone(&rename_slot),
     }));
     if let Ok(mut state) = gui.lock() {
@@ -8545,6 +9392,7 @@ pub(super) fn workbench_gui(
     }
     schedule_rename(Arc::clone(&gui), rename_slot);
     schedule_prompt(Arc::clone(&gui), prompt_slot);
+    schedule_close(Arc::clone(&gui), close_slot);
 
     // The interface catalogue is runtime data under `language/`; load it into the library's manager
     // and watch the directory so an edit appears without restarting (blue21 L-4 items 3/5).
@@ -8582,6 +9430,8 @@ pub(super) fn workbench_gui(
         gui.placements.push((bar.raw_id(), Area::Menu));
     }
     let mut menu_actions: BTreeMap<u64, String> = BTreeMap::new();
+    // The keys this window routes, so a menu leaf shows the same chord the palette does.
+    let menu_shortcuts = routed_shortcuts();
     // The menu tree is the registry's, not a second hand-spelled copy: every leaf names the command
     // it binds, and the label is the identified vocabulary key (`menu.<id>.item.<command>`). This is
     // what blue21 L-2/T05.02 asked for — the same menu the catalog covers is the one the window paints.
@@ -8609,6 +9459,7 @@ pub(super) fn workbench_gui(
                         &format!("menu.{}.item.{command}", menu.id()),
                         command,
                         title,
+                        &menu_shortcuts,
                         &mut menu_actions,
                         &gui,
                     );
@@ -8662,6 +9513,7 @@ pub(super) fn workbench_gui(
                                 &format!("menu.{}.submenu.{id}.item.{command}", menu.id()),
                                 command,
                                 leaf,
+                                &menu_shortcuts,
                                 &mut menu_actions,
                                 &gui,
                             );
@@ -10571,6 +11423,21 @@ pub(super) fn workbench_gui(
             });
         }
         {
+            // RW-12: the grid refuses a value its row kind cannot take (not a number, outside the
+            // row's bounds, not one of a choice row's options) and says why. Painting that on the
+            // row is the control's own report, not a second validation in the host.
+            let gui = Arc::clone(&gui);
+            subscribe_cell(grid_id, "cell_change_rejected", move |row, message| {
+                if let Ok(mut gui) = gui.lock() {
+                    let text = tr_args("ui.error.not-applied", &[("reason", message)]);
+                    rust_widgets::set_widget_text(gui.property_error, &text);
+                    set_property_row_error(gui.property_grid, row as usize, Some(&text));
+                    gui.message = text;
+                    update_status(&gui);
+                }
+            });
+        }
+        {
             let gui = Arc::clone(&gui);
             subscribe_cell(grid_id, "color_picker_requested", move |row, seed| {
                 if let Ok(mut gui) = gui.lock() {
@@ -11400,10 +12267,14 @@ pub(super) fn workbench_gui(
             })
             .unwrap_or_default();
         let tab_strip = handle.new_tab_widget(tx, CONTENT_Y, ew, 26);
+        let dirty_at_start = match gui.lock() {
+            Ok(gui) => gui.groups.dirty_documents(),
+            Err(poisoned) => poisoned.into_inner().groups.dirty_documents(),
+        };
         for document in &documents {
-            let label = document.rsplit('/').next().unwrap_or(document);
-            if tab_strip.add_tab(label, None).is_none() {
-                warn_failure("a tab could not be added to the strip", label);
+            let label = tab_label(document, dirty_at_start.contains(document));
+            if tab_strip.add_tab(&label, None).is_none() {
+                warn_failure("a tab could not be added to the strip", &label);
             }
         }
         {
@@ -11486,6 +12357,61 @@ pub(super) fn workbench_gui(
             .mount_widget_by_name("code_editor", Rect::new(tx, CONTENT_Y + 30, ew, 535), "")
             .expect("the library registers the code editor widget");
         all.push(editor.raw_id());
+        // Every committed edit is reported to the model. The library describes a keystroke as a
+        // line-range change (it does not clone the document), so the report only says *which*
+        // surface moved; `Gui::apply_pending_editor_text` reads its text on the next main-loop turn.
+        //
+        // Nothing here touches the `Gui`: the signal is delivered while a caller may already hold
+        // that mutex — `sync_editors` loads a document into this very surface — so the closures only
+        // write the small maps that sit outside it. The load itself is skipped through the same
+        // guard the tab strips use, because a load is not a person's edit.
+        {
+            let (changed, syncing) = match gui.lock() {
+                Ok(gui) => (
+                    Arc::clone(&gui.editor_changed),
+                    Arc::clone(&gui.syncing_editors),
+                ),
+                Err(poisoned) => {
+                    let gui = poisoned.into_inner();
+                    (
+                        Arc::clone(&gui.editor_changed),
+                        Arc::clone(&gui.syncing_editors),
+                    )
+                }
+            };
+            let editor_id = editor.raw_id();
+            let wired = with_widget_mut(editor_id, move |widget| {
+                let any: &mut dyn std::any::Any = widget;
+                let Some(editor) = any.downcast_mut::<CodeEditor>() else {
+                    return;
+                };
+                let per_keystroke = Arc::clone(&changed);
+                let per_keystroke_guard = Arc::clone(&syncing);
+                editor.text_change.connect_ref(move |_change: &TextChange| {
+                    if per_keystroke_guard.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if let Ok(mut pending) = per_keystroke.lock() {
+                        pending.insert(editor_id);
+                    }
+                });
+                let wholesale_guard = Arc::clone(&syncing);
+                editor.text_changed.connect_ref(move |_text: &String| {
+                    if wholesale_guard.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if let Ok(mut pending) = changed.lock() {
+                        pending.insert(editor_id);
+                    }
+                });
+            });
+            if wired.is_none() {
+                warn_failure(
+                    "an editor could not report its text changes",
+                    format!("surface {editor_id} is not a mounted code editor"),
+                );
+            }
+        }
         if let Ok(mut gui) = gui.lock() {
             gui.placements.push((
                 editor.raw_id(),
@@ -11791,6 +12717,10 @@ pub(super) fn workbench_gui(
     if !menu_actions.is_empty() {
         schedule_menu(Arc::clone(&gui), Arc::new(menu_actions));
     }
+    // Edits reach the model the same way: the control reports a change, the poller reads the text it
+    // now holds. `sync_editors` also drains the report before it loads a document back, so neither a
+    // tab switch nor a command can overwrite a keystroke that was not read yet.
+    schedule_editor_model(Arc::clone(&gui));
 
     if smoke {
         crate::host::log::emit(
@@ -12021,6 +12951,130 @@ pub(super) fn workbench_gui(
                             gui.property.count()
                         ),
                     );
+                    // The editor's own report reaches the model. This is the path a keystroke takes
+                    // (control emits `text_change`, the model reads the text it now holds), and no
+                    // other smoke step exercises it. It runs before the rename dialog below opens
+                    // its modal: a modal refuses events aimed at anything else, which is the
+                    // library's own rule and would make this step test the refusal.
+                    {
+                        let editor = gui.group_views.first().map(|view| view.editor).unwrap_or(0);
+                        let document = gui
+                            .groups
+                            .group_ids()
+                            .first()
+                            .and_then(|group| gui.groups.tabs(*group))
+                            .and_then(|tabs| tabs.active().map(|tab| tab.document().to_owned()));
+                        if let (true, Some(document)) = (editor != 0, document) {
+                            // The demo buffers have no file. A baseline is recorded here, exactly as
+                            // opening a project file does, so the dirty path and the close guard are
+                            // exercised without writing anything to disk.
+                            gui.saved_texts.insert(document.clone(), String::new());
+                            let before = gui.groups.text(&document).unwrap_or("").to_owned();
+                            let _ = runtime::dispatch_event(
+                                editor,
+                                &rust_widgets::event::Event::text_input("// smoke"),
+                            );
+                            gui.apply_pending_editor_text();
+                            let after = gui.groups.text(&document).unwrap_or("").to_owned();
+                            // What the strip now shows for that view: the marker is written into
+                            // the tab text, so reading it back is the end-to-end check.
+                            let shown = gui
+                                .groups
+                                .tabs(gui.groups.focus())
+                                .and_then(|tabs| tabs.active_index())
+                                .and_then(|index| {
+                                    gui.group_views.first().and_then(|view| {
+                                        with_widget_mut(view.tabs, |widget| {
+                                            let any: &mut dyn std::any::Any = widget;
+                                            any.downcast_mut::<rust_widgets::widget::TabWidget>()
+                                                .and_then(|tabs| {
+                                                    tabs.tab_text(index).map(str::to_owned)
+                                                })
+                                        })
+                                    })
+                                })
+                                .flatten();
+                            let dirty = gui.groups.dirty_documents().contains(&document);
+                            let allows_close = window_close_allowed(&mut gui);
+                            let refusal = gui.message.clone();
+                            // The refusal asks the library's question. Escape is the dismissing
+                            // action, so the smoke answers "keep editing" through the dialog's own
+                            // signal and then applies it here, instead of leaving a modal up over
+                            // the rename step below.
+                            let dialog = gui.close_dialog;
+                            if dialog != 0 {
+                                let _ = runtime::dispatch_event(
+                                    dialog,
+                                    &rust_widgets::event::Event::key_press(
+                                        rust_widgets::event::key_codes::ESCAPE,
+                                        0,
+                                    ),
+                                );
+                            }
+                            let answer = match gui.close_slot.lock() {
+                                Ok(mut pending) => pending.take(),
+                                Err(poisoned) => poisoned.into_inner().take(),
+                            };
+                            if let Some(answer) = answer {
+                                apply_close_answer(&mut gui, answer);
+                            }
+                            let kept = gui.close_dialog == 0;
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench",
+                                &format!(
+                                    "workbench smoke: an editor edit reached the model of {document} ({} -> {} chars, the model now carries the text: {}), dirty {dirty}, tab {shown:?}, window close allowed {allows_close} with {refusal:?}, dialog {dialog} answered and dismissed {kept}, history {:?}, message {:?}",
+                                    before.len(),
+                                    after.len(),
+                                    after.contains("// smoke"),
+                                    history_state(&gui),
+                                    gui.message,
+                                ),
+                            );
+                            // Per-document undo history: switch away from the document and back,
+                            // then undo. With one buffer per document the history belongs to the
+                            // document, so the typed text is still undoable; a surface whose text
+                            // was swapped on every switch (the previous shape) would answer
+                            // "nothing to undo" here.
+                            let group = gui.groups.group_ids()[0];
+                            let away = gui.groups.tabs_mut(group).map(|tabs| tabs.activate(1));
+                            gui.sync_editors();
+                            let back = gui.groups.tabs_mut(group).map(|tabs| tabs.activate(0));
+                            gui.sync_editors();
+                            run_command(&mut gui, "edit.undo");
+                            let undone = gui.message.clone();
+                            let after_undo = gui.groups.text(&document).unwrap_or("").to_owned();
+                            let surface = with_widget_mut(editor, |widget| {
+                                let any: &mut dyn std::any::Any = widget;
+                                any.downcast_mut::<CodeEditor>().map(|editor| {
+                                    (
+                                        editor.buffer_summaries().len(),
+                                        editor.active_language(),
+                                        editor.text().len(),
+                                    )
+                                })
+                            });
+                            crate::host::log::emit(
+                                crate::host::log::Level::Info,
+                                "app::run::workbench",
+                                &format!(
+                                    "workbench smoke: switched away {away:?} and back {back:?}, undo said {undone:?}, the buffer is {} -> {} chars and still carries the text: {}; surface (buffers, language, text) {surface:?}, history {:?}",
+                                    after.len(),
+                                    after_undo.len(),
+                                    after_undo.contains("// smoke"),
+                                    history_state(&gui),
+                                ),
+                            );
+                            // Neither the baseline nor the dirty mark was real, so both go away.
+                            gui.saved_texts.remove(&document);
+                            for group in gui.groups.group_ids() {
+                                if let Some(tabs) = gui.groups.tabs_mut(group) {
+                                    tabs.mark_dirty(&document, false);
+                                }
+                            }
+                            sync_workbench_document(&mut gui);
+                        }
+                    }
                     // The rename dialog's whole path, on the node that survived the copy's delete:
                     // open it, type through the dialog's own setter, and accept with Enter. The
                     // answer is applied by the poller after this callback unwinds.
@@ -12071,8 +13125,101 @@ pub(super) fn workbench_gui(
         let quit_gui = Arc::clone(&gui);
         let _ = rust_widgets::schedule_on_main(Duration::from_millis(900), move || {
             if let Ok(mut gui) = quit_gui.lock() {
-                apply_action(&mut gui, "quit");
+                // The confirming action of the same question, through the dialog's own signal. A
+                // discard is a quit, so this step replaces the plain quit action: the session ends
+                // because the person answered the dialog, not because a timer fired.
+                let document = gui
+                    .groups
+                    .group_ids()
+                    .first()
+                    .and_then(|group| gui.groups.tabs(*group))
+                    .and_then(|tabs| tabs.active().map(|tab| tab.document().to_owned()));
+                let mut asked = false;
+                if let Some(document) = document {
+                    gui.saved_texts.insert(document.clone(), String::new());
+                    let typed = format!("{}// quit", gui.groups.text(&document).unwrap_or(""));
+                    gui.set_document_text(&document, &typed);
+                    asked = !window_close_allowed(&mut gui);
+                    let dialog = gui.close_dialog;
+                    if dialog != 0 {
+                        // Enter follows the focus ring, and the ring starts at the dismissing
+                        // action: two Tabs move it to the confirming one, then Enter accepts. That
+                        // is the dialog's own keyboard contract, not a host shortcut.
+                        for key in [
+                            rust_widgets::event::key_codes::TAB,
+                            rust_widgets::event::key_codes::TAB,
+                            rust_widgets::event::key_codes::ENTER,
+                        ] {
+                            let _ = runtime::dispatch_event(
+                                dialog,
+                                &rust_widgets::event::Event::key_press(key, 0),
+                            );
+                        }
+                    }
+                }
+                crate::host::log::emit(
+                    crate::host::log::Level::Info,
+                    "app::run::workbench",
+                    &format!(
+                        "workbench smoke: close refused {asked}, answer queued {}; the poller quits",
+                        gui.close_slot
+                            .lock()
+                            .map(|pending| pending.is_some())
+                            .unwrap_or(false)
+                    ),
+                );
             }
+        });
+    }
+
+    // Keyboard routing (T04.08/T05.05). The library offers each keypress to this window before
+    // the focused control sees it, and only while the key is a command (a bare character, a
+    // composing IME and a declined handler all continue to the control). The host resolves the
+    // canonical shortcut against the keymap the window and the audit share; a triggered command
+    // runs through the same dispatcher as a menu leaf.
+    {
+        let keys_gui = Arc::clone(&gui);
+        let platform = window_platform();
+        let keymap = window_keymap();
+        handle.set_key_handler(move |shortcut, info| {
+            let Some(key) = crate::app::commands::shortcuts::key_of_shortcut(shortcut, platform)
+            else {
+                return false;
+            };
+            let Ok(mut gui) = keys_gui.lock() else {
+                return false;
+            };
+            let Some(command) = command_for_key(
+                &keymap,
+                key,
+                gui.workbench.mode().name(),
+                focused_panel(&gui),
+                info.accepts_text_input(),
+                info.is_ime_composing(),
+            ) else {
+                return false;
+            };
+            // The one place a real session can prove routing without a debugger: the chord and the
+            // command it resolved to, on the same log stream as the menu and palette.
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::run::workbench-keys",
+                &format!("{key} -> {command}"),
+            );
+            run_command(&mut gui, &command);
+            true
+        });
+    }
+
+    // Save-before-closing (upstream RW-53). The window's close button is a proposal the library
+    // asks this handler about before the window disappears; a buffer with unsaved changes refuses
+    // it and says which documents are holding it. Quitting from the menu stays the explicit path
+    // that discards, so a refused close is never a window nobody can close.
+    {
+        let close_gui = Arc::clone(&gui);
+        handle.set_close_handler(move || match close_gui.lock() {
+            Ok(mut gui) => window_close_allowed(&mut gui),
+            Err(poisoned) => window_close_allowed(&mut poisoned.into_inner()),
         });
     }
 
@@ -12106,14 +13253,176 @@ fn schedule_menu(gui: Arc<Mutex<Gui>>, actions: Arc<BTreeMap<u64, String>>) {
     });
 }
 
+/// Carries edits the editor surfaces reported into the model, between commands.
+///
+/// The signal says *which* surface changed; reading its text and writing the buffer happens here, on
+/// the main loop, so a document is cloned only after an edit and never while a keystroke is being
+/// dispatched. The poller does nothing when no edit is pending, and its tick is well below a person's
+/// reading speed: the cost is one buffer copy per tick at most, not one per keystroke.
+fn schedule_editor_model(gui: Arc<Mutex<Gui>>) {
+    let next = Arc::clone(&gui);
+    let _ = rust_widgets::schedule_on_main(Duration::from_millis(250), move || {
+        if let Ok(mut gui) = gui.lock() {
+            gui.apply_pending_editor_text();
+        }
+        schedule_editor_model(next);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        control_reference_text, dependency_rows, environment_rows, find_hits, onboarding_text,
-        project_rows, sample_asset_images, shortcut_reference_text, target_rows, tr,
+        GridRow, command_for_key, control_reference_text, dependency_rows, environment_rows,
+        find_hits, onboarding_text, palette_command_entry, project_rows, property_item,
+        same_property_item, sample_asset_images, shortcut_reference_text, shortcut_summary,
+        tab_label, target_rows, tr, window_keymap,
     };
     use crate::app::canvas::widget_catalog::Catalog;
     use crate::app::commands::command::built_in;
+
+    #[test]
+    fn a_disabled_palette_entry_carries_its_reason_instead_of_bending_its_title() {
+        use crate::app::commands::command::Context;
+        use crate::app::commands::palette::{Recents, search};
+
+        let registry = built_in();
+        // No trust and no authorization: some commands are rightly disabled, which is the state
+        // the control has to paint (RW-15).
+        let context = Context::in_area("design");
+        let entries = search(&registry, &context, "", &Recents::new(8));
+        let disabled = entries
+            .iter()
+            .find(|entry| !entry.is_enabled())
+            .expect("an untrusted context disables at least one command");
+        let row = palette_command_entry(disabled, None);
+        assert_eq!(row.id, disabled.id());
+        assert_eq!(row.title, disabled.title());
+        assert!(!row.title.contains("disabled"), "{}", row.title);
+        assert!(!row.is_enabled());
+        assert_eq!(row.disabled_reason(), disabled.reason());
+
+        let enabled = entries
+            .iter()
+            .find(|entry| entry.is_enabled())
+            .expect("an enabled command");
+        let row = palette_command_entry(enabled, None);
+        assert!(row.is_enabled());
+        assert_eq!(row.disabled_reason(), None);
+
+        // RW-16: a routed chord is shown, and a two-key sequence is not (the window handler
+        // routes one key at a time).
+        let row = palette_command_entry(enabled, Some("Ctrl+Z"));
+        assert_eq!(row.shortcut.as_deref(), Some("Ctrl+Z"));
+        let routed = super::routed_shortcuts();
+        assert!(routed.contains_key("edit.undo"), "{routed:?}");
+        assert!(
+            !routed.contains_key("keys.show"),
+            "a sequence has no single-key hint: {routed:?}"
+        );
+    }
+
+    #[test]
+    fn a_key_routes_only_when_the_keymap_and_the_focus_say_so() {
+        use crate::app::commands::shortcuts::{Chord, Key, key_of_shortcut};
+        use rust_widgets::shortcut::{Key as LibraryKey, Modifiers as LibraryModifiers, Shortcut};
+
+        let platform = crate::app::commands::shortcuts::Platform::Linux;
+        let keymap = platform.keymap();
+        let undo = key_of_shortcut(
+            &Shortcut::new(LibraryKey::Z, LibraryModifiers::PRIMARY),
+            platform,
+        )
+        .expect("a host key");
+        assert_eq!(
+            command_for_key(&keymap, undo, "design", None, false, false).as_deref(),
+            Some("edit.undo")
+        );
+
+        // macOS spells the *bindings* with Cmd, so the incoming key has to be spelled the same way
+        // for the two to match. This is the assertion that would have caught a Ctrl-only bridge.
+        let mac = crate::app::commands::shortcuts::Platform::MacOs;
+        let mac_undo = key_of_shortcut(
+            &Shortcut::new(LibraryKey::Z, LibraryModifiers::PRIMARY),
+            mac,
+        )
+        .expect("a host key");
+        assert!(mac_undo.modifiers().uses_meta(), "primary is Cmd on macOS");
+        assert_eq!(
+            command_for_key(&mac.keymap(), mac_undo, "design", None, false, false).as_deref(),
+            Some("edit.undo")
+        );
+
+        // A bare character belongs to the text field, and an IME composition belongs to the IME.
+        let bare = Key::parse("z").expect("a key");
+        assert_eq!(
+            command_for_key(&keymap, bare, "design", None, true, false),
+            None
+        );
+        assert_eq!(
+            command_for_key(&keymap, undo, "design", None, false, true),
+            None,
+            "a composing IME makes no key a command"
+        );
+
+        // A panel-scoped chord matches only while that panel owns the keyboard. The default table
+        // has no panel-scoped binding, so this uses one of its own — the scope mechanism is what
+        // is under test, not the default list.
+        let escape = key_of_shortcut(
+            &Shortcut::new(LibraryKey::Escape, LibraryModifiers::NONE),
+            platform,
+        )
+        .expect("a host key");
+        let mut panel_keymap = crate::app::commands::shortcuts::Keymap::new();
+        panel_keymap
+            .add(crate::app::commands::shortcuts::Binding::new(
+                Chord::parse("Escape").expect("a chord"),
+                "view.panel-hide-current",
+                crate::app::commands::shortcuts::Scope::Panel("outline".to_owned()),
+            ))
+            .expect("no conflict");
+        assert_eq!(
+            command_for_key(
+                &panel_keymap,
+                escape,
+                "design",
+                Some("outline".to_owned()),
+                false,
+                false
+            )
+            .as_deref(),
+            Some("view.panel-hide-current")
+        );
+        assert_eq!(
+            command_for_key(&panel_keymap, escape, "design", None, false, false),
+            None
+        );
+
+        // A two-key sequence is not routed by the window handler.
+        let ctrl_k = key_of_shortcut(
+            &Shortcut::new(LibraryKey::K, LibraryModifiers::PRIMARY),
+            platform,
+        )
+        .expect("a host key");
+        assert_eq!(
+            command_for_key(&keymap, ctrl_k, "design", None, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn the_keyboard_reference_and_summary_name_the_keymap_the_window_routes() {
+        let reference = shortcut_reference_text();
+        for binding in window_keymap().bindings() {
+            assert!(
+                reference.contains(&binding.chord().to_string()),
+                "{} is missing from the reference",
+                binding.chord()
+            );
+        }
+        let summary = shortcut_summary();
+        assert!(summary.starts_with("shortcuts: "), "{summary}");
+        assert!(summary.contains("edit.undo"), "{summary}");
+    }
 
     #[test]
     fn the_sample_assets_are_decoded_rgba_thumbnails() {
@@ -12122,6 +13431,58 @@ mod tests {
         for asset in &assets {
             assert!(asset.image.is_some(), "{} has no pixels", asset.path);
             assert_eq!((asset.width, asset.height), (96, 72));
+        }
+    }
+
+    #[test]
+    fn a_tab_label_marks_only_an_unsaved_buffer_and_keeps_the_document_name() {
+        // The last path component names the tab; the marker is the title's own, so the two places
+        // that show "unsaved" cannot drift.
+        assert_eq!(tab_label("pages/home.json", false), "home.json");
+        assert_eq!(tab_label("pages/home.json", true), "• home.json");
+        assert_eq!(tab_label("main.rs", true), "• main.rs");
+    }
+
+    #[test]
+    fn the_property_row_maps_to_the_library_item_the_grid_edits() {
+        let row = GridRow::new("title", "Save", true);
+        let item = property_item(&row);
+        assert_eq!(item.name, "title");
+        assert_eq!(item.value, "Save");
+        assert!(item.editable);
+        assert!(!item.mixed);
+
+        let mixed = property_item(&GridRow::mixed("title"));
+        assert!(mixed.mixed);
+        assert!(mixed.placeholder.is_some());
+
+        let bounded = property_item(&GridRow::new("width", "1", true).with_bounds(
+            Some(0.0),
+            Some(10.0),
+            Some(1.0),
+        ));
+        assert_eq!(bounded.number_bounds.expect("bounds").max, Some(10.0));
+    }
+
+    #[test]
+    fn the_row_comparison_sees_every_field_the_host_sets() {
+        let base = GridRow::new("title", "Save", true);
+        assert!(same_property_item(
+            &property_item(&base),
+            &property_item(&base)
+        ));
+        let variants = [
+            GridRow::new("other", "Save", true),
+            GridRow::new("title", "Open", true),
+            GridRow::new("title", "Save", false),
+            GridRow::mixed("title"),
+            GridRow::new("title", "Save", true).with_bounds(Some(0.0), Some(1.0), None),
+        ];
+        for variant in &variants {
+            assert!(
+                !same_property_item(&property_item(&base), &property_item(variant)),
+                "{variant:?} compares equal to {base:?}"
+            );
         }
     }
 
@@ -12279,8 +13640,9 @@ mod tests {
         for menu in crate::app::commands::menu::built_in() {
             // `commands()` answers `(title, command)`.
             for (title, command) in menu.commands() {
+                let id = crate::app::commands::menu::Menu::command_id(&command);
                 assert!(
-                    super::HANDLED_COMMANDS.contains(&command.as_str()),
+                    super::HANDLED_COMMANDS.contains(&id),
                     "{title:?} binds {command}, which this window cannot run"
                 );
             }

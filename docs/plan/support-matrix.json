@@ -2,13 +2,31 @@
   "schema": 1,
   "dependency": {
     "crate": "rust_widgets",
-    "revision": "1a30785842140e45789bf50a81bd7280c8f9b7a2",
+    "revision": "ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81",
     "profile": "desktop"
   },
   "capacityBudgets": [
-    { "id": "Device", "controls": 4096, "textures": 4096, "glyphCache": "2 MiB", "eventQueue": 256 },
-    { "id": "Surface", "controls": 512, "textures": 2048, "glyphCache": "1 MiB", "eventQueue": 128 },
-    { "id": "Minimal", "controls": 64, "textures": 1024, "glyphCache": "256 KiB", "eventQueue": 64 }
+    {
+      "id": "Device",
+      "controls": 4096,
+      "textures": 4096,
+      "glyphCache": "2 MiB",
+      "eventQueue": 256
+    },
+    {
+      "id": "Surface",
+      "controls": 512,
+      "textures": 2048,
+      "glyphCache": "1 MiB",
+      "eventQueue": 128
+    },
+    {
+      "id": "Minimal",
+      "controls": 64,
+      "textures": 1024,
+      "glyphCache": "256 KiB",
+      "eventQueue": 64
+    }
   ],
   "desktopOnly": [
     "chart",
@@ -27,19 +45,19 @@
       "id": "macos",
       "triple": "aarch64-apple-darwin",
       "designerHost": "certified",
-      "reason": "4.0.0（1a30785）上 macOS aarch64 的 cargo check/test 多域通过，并以 cargo run -- --workbench-gui --exit-after-ms 4000 建立真实 1280x800 窗口会话（docs/log/log-20261103-1.md），故恢复 certified"
+      "reason": "4.0.1（ee4260d8）上 macOS aarch64 的 cargo check 通过，probe/catalog/locale/page/generate 目标套件通过，并以 cargo run -- --workbench-gui --exit-after-ms 4000 建立真实 1280x800 窗口会话（docs/log/log-20261103-2.md），故保持 certified"
     },
     {
       "id": "windows",
       "triple": "x86_64-pc-windows-msvc（真实构建）/ x86_64-pc-windows-gnu（既有构建证据）",
       "designerHost": "unverified",
-      "reason": "4.0.0（1a30785）在 macOS 宿主以 cargo-xwin 交叉构建失败于上游 src/platform/windows/types.rs:540 的 WA_INACTIVE 类型不匹配（RW-101，docs/rw-feedback/feedback-20261101.md 第六轮）；3.1.0 的 xwin 证据不作为 4.0.0 证据"
+      "reason": "4.0.1（ee4260d8）在 macOS 宿主以 cargo-xwin 交叉构建 --bin rustage 与五个 profile 的 --lib 均通过（RW-101 已修），但未在 Windows 实机运行，故 designerHost 仍为 unverified；证据见 docs/log/log-20261103-2.md；2026-11-04 在第九轮宿主改动后复跑 `cargo xwin build --bin rustage --target x86_64-pc-windows-msvc` 仍通过（21.6s，仅 3 条既有 workbench_terminal 警告）"
     },
     {
       "id": "linux",
       "triple": "x86_64-unknown-linux-gnu",
-      "designerHost": "certified",
-      "reason": "4.0.0（1a30785）在 Linux x86_64（GTK3 3.24.41）上 cargo build --features linux-native --bin rustage 通过，并以 cargo run --features linux-native -- --workbench-gui --exit-after-ms 3000 建立真实 1280x800 窗口会话（docs/log/log-20261103-1.md），故恢复 certified"
+      "designerHost": "unverified",
+      "reason": "4.0.1（ee4260d8）尚未在 Linux 上重跑；4.0.0（1a30785）的 GTK3 GUI 有界会话证据见 docs/log/log-20261103-1.md，按矩阵规则不作为 4.0.1 证据"
     }
   ],
   "profiles": [
@@ -49,7 +67,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）的 desktop 为宿主默认依赖 features：macOS aarch64 上 cargo check/test 多域通过并完成 GUI 有界会话；Linux x86_64 上上游 --features desktop --lib 构建通过，宿主以 linux-native 完成 GUI 有界会话（docs/log/log-20261103-1.md）；生成物本身未链接，故不写成 certified"
+      "mode2Reason": "4.0.1（ee4260d8）的 desktop 为宿主默认依赖 features：macOS aarch64 上 cargo check、目标套件与 GUI 有界会话通过；Windows x86_64 以 xwin --features desktop --lib 交叉构建通过；Linux 未重跑；生成物本身未链接，故不写成 certified（docs/log/log-20261103-2.md）"
     },
     {
       "id": "tablet",
@@ -57,7 +75,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.1（ee4260d8）在 macOS aarch64 与（xwin）Windows x86_64 以 --no-default-features --features tablet --lib 构建通过；Linux 未重跑（docs/log/log-20261103-2.md）"
     },
     {
       "id": "mobile",
@@ -65,7 +83,7 @@
       "mode1": "unverified",
       "mode1Reason": null,
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.1（ee4260d8）在 macOS aarch64 与（xwin）Windows x86_64 以 --no-default-features --features mobile --lib 构建通过；Linux 未重跑（docs/log/log-20261103-2.md）"
     },
     {
       "id": "mini",
@@ -73,7 +91,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，mini 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.1（ee4260d8）在 macOS aarch64 与（xwin）Windows x86_64 以 --no-default-features --features mini --lib 构建通过；Linux 未重跑（docs/log/log-20261103-2.md）"
     },
     {
       "id": "embedded",
@@ -81,7 +99,7 @@
       "mode1": "unsupported",
       "mode1Reason": "模式 1 需要 JSON/CSS 运行时，embedded 不承载（原则 #11）",
       "mode2": "build-verified",
-      "mode2Reason": "4.0.0（1a30785）在 macOS aarch64 与 Linux x86_64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
+      "mode2Reason": "4.0.1（ee4260d8）在 macOS aarch64 与（xwin）Windows x86_64 以 --no-default-features --features embedded --lib 构建通过；Linux 未重跑（docs/log/log-20261103-2.md）"
     }
   ],
   "cells": [
@@ -89,91 +107,91 @@
       "host": "macos",
       "profile": "desktop",
       "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 macOS aarch64 以 host desktop 依赖 features 完成 cargo check/test 与 GUI 有界会话（docs/log/log-20261103-1.md）"
+      "reason": "4.0.1（ee4260d8）在 macOS aarch64 以宿主 desktop 依赖 features 完成 cargo check、probe/catalog/locale/page/generate 目标套件与 GUI 有界会话（docs/log/log-20261103-2.md）"
     },
     {
       "host": "macos",
       "profile": "tablet",
       "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
+      "reason": "4.0.1（ee4260d8）在 macOS aarch64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-2.md）"
     },
     {
       "host": "macos",
       "profile": "mobile",
       "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
+      "reason": "4.0.1（ee4260d8）在 macOS aarch64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-2.md）"
     },
     {
       "host": "macos",
       "profile": "mini",
       "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
+      "reason": "4.0.1（ee4260d8）在 macOS aarch64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-2.md）"
     },
     {
       "host": "macos",
       "profile": "embedded",
       "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 macOS aarch64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
+      "reason": "4.0.1（ee4260d8）在 macOS aarch64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-2.md）"
     },
     {
       "host": "windows",
       "profile": "desktop",
-      "status": "unverified",
-      "reason": "4.0.0（1a30785）以 cargo-xwin 交叉构建失败于上游 src/platform/windows/types.rs:540 的 WA_INACTIVE 类型不匹配（RW-101，docs/rw-feedback/feedback-20261101.md 第六轮）"
+      "status": "build-verified",
+      "reason": "4.0.1（ee4260d8）在 macOS 宿主以 cargo-xwin 交叉构建 --no-default-features --features desktop --lib 通过（docs/log/log-20261103-2.md）；未在 Windows 实机运行"
     },
     {
       "host": "windows",
       "profile": "tablet",
-      "status": "unverified",
-      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
+      "status": "build-verified",
+      "reason": "4.0.1（ee4260d8）在 macOS 宿主以 cargo-xwin 交叉构建 --no-default-features --features tablet --lib 通过（docs/log/log-20261103-2.md）；未在 Windows 实机运行"
     },
     {
       "host": "windows",
       "profile": "mobile",
-      "status": "unverified",
-      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
+      "status": "build-verified",
+      "reason": "4.0.1（ee4260d8）在 macOS 宿主以 cargo-xwin 交叉构建 --no-default-features --features mobile --lib 通过（docs/log/log-20261103-2.md）；未在 Windows 实机运行"
     },
     {
       "host": "windows",
       "profile": "mini",
-      "status": "unverified",
-      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
+      "status": "build-verified",
+      "reason": "4.0.1（ee4260d8）在 macOS 宿主以 cargo-xwin 交叉构建 --no-default-features --features mini --lib 通过（docs/log/log-20261103-2.md）；未在 Windows 实机运行"
     },
     {
       "host": "windows",
       "profile": "embedded",
-      "status": "unverified",
-      "reason": "4.0.0（1a30785）的 Windows 后端编译失败于 src/platform/windows/types.rs:540（RW-101），全部 profile 均无法建立证据"
+      "status": "build-verified",
+      "reason": "4.0.1（ee4260d8）在 macOS 宿主以 cargo-xwin 交叉构建 --no-default-features --features embedded --lib 通过（docs/log/log-20261103-2.md）；未在 Windows 实机运行"
     },
     {
       "host": "linux",
       "profile": "desktop",
-      "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --features desktop --lib 构建通过，宿主以 linux-native（GTK3）完成 GUI 有界会话；生成物本身未链接，保持 build-verified（docs/log/log-20261103-1.md）"
+      "status": "unverified",
+      "reason": "4.0.1（ee4260d8）未在 Linux 上重跑（本机 macOS）；4.0.0 的构建/会话证据见 docs/log/log-20261103-1.md，按矩阵规则不作为 4.0.1 证据"
     },
     {
       "host": "linux",
       "profile": "tablet",
-      "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features tablet --lib 构建通过（docs/log/log-20261103-1.md）"
+      "status": "unverified",
+      "reason": "4.0.1（ee4260d8）未在 Linux 上重跑（本机 macOS）；4.0.0 的构建/会话证据见 docs/log/log-20261103-1.md，按矩阵规则不作为 4.0.1 证据"
     },
     {
       "host": "linux",
       "profile": "mobile",
-      "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features mobile --lib 构建通过（docs/log/log-20261103-1.md）"
+      "status": "unverified",
+      "reason": "4.0.1（ee4260d8）未在 Linux 上重跑（本机 macOS）；4.0.0 的构建/会话证据见 docs/log/log-20261103-1.md，按矩阵规则不作为 4.0.1 证据"
     },
     {
       "host": "linux",
       "profile": "mini",
-      "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features mini --lib 构建通过（docs/log/log-20261103-1.md）"
+      "status": "unverified",
+      "reason": "4.0.1（ee4260d8）未在 Linux 上重跑（本机 macOS）；4.0.0 的构建/会话证据见 docs/log/log-20261103-1.md，按矩阵规则不作为 4.0.1 证据"
     },
     {
       "host": "linux",
       "profile": "embedded",
-      "status": "build-verified",
-      "reason": "4.0.0（1a30785）在 Linux x86_64 以 --no-default-features --features embedded --lib 构建通过（docs/log/log-20261103-1.md）"
+      "status": "unverified",
+      "reason": "4.0.1（ee4260d8）未在 Linux 上重跑（本机 macOS）；4.0.0 的构建/会话证据见 docs/log/log-20261103-1.md，按矩阵规则不作为 4.0.1 证据"
     }
   ]
 }

@@ -8,7 +8,8 @@
 
 use super::*;
 
-use rust_widgets::core::{ObjectId, Rect};
+use rust_widgets::core::{ObjectId, Rect, Size};
+use rust_widgets::view::Breakpoint;
 use rust_widgets::widget::{Widget, WidgetFactory, runtime};
 
 /// Builds real, registered controls, so a mounted preview is a live session rather than ids on
@@ -221,15 +222,36 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
             ]),
             "capture" => {
                 capture = preview.capture_state();
-                let lines = capture.render();
+                // Only what a restore would actually move: the focused control, any row container
+                // that is scrolled away from its first row, and any control whose text differs from
+                // the text its declaration gives it.
+                let live = Capture {
+                    entries: capture
+                        .entries
+                        .iter()
+                        .filter(|kept| kept.focus || kept.scroll > 0 || !kept.input.is_empty())
+                        .cloned()
+                        .collect(),
+                };
+                let lines = live.render();
                 if lines.is_empty() {
-                    Ok(vec!["nothing focused".to_owned()])
+                    Ok(vec!["nothing focused, scrolled or typed into".to_owned()])
                 } else {
                     Ok(lines)
                 }
             }
             "restore" => match preview.restore_state(&capture) {
-                Ok(outcomes) => Ok(outcomes.iter().map(|outcome| outcome.render()).collect()),
+                Ok(outcomes) => {
+                    let mut lines: Vec<String> =
+                        outcomes.iter().map(|outcome| outcome.render()).collect();
+                    match preview.restore_input(&capture) {
+                        Ok(inputs) => {
+                            lines.extend(inputs.iter().map(|input| input.render()));
+                            Ok(lines)
+                        }
+                        Err(reason) => Err(reason),
+                    }
+                }
                 Err(reason) => Err(reason),
             },
             "gap" => Ok(vec![Preview::scroll_gap().to_owned()]),
@@ -255,6 +277,14 @@ pub(super) fn preview(options: &crate::cli::PreviewOptions) -> bool {
                     None => Err(format!("{size:?} is not <width>x<height>")),
                 },
                 None => Err(format!("{argument:?} is not <path>:<width>x<height>")),
+            },
+            // H-29: one document, three breakpoint tiers, solved by the library's own generator at
+            // the width each tier accepts.
+            "tiers" => match argument.split_once(':') {
+                Some((page, directory)) if !page.is_empty() && !directory.is_empty() => {
+                    tier_frames(page, Some(directory))
+                }
+                _ => tier_frames(argument, None),
             },
             "unwired" => {
                 let lines = preview.unwired_events();
@@ -1179,4 +1209,273 @@ fn load_counts(
         ),
     };
     Ok((controls, nodes, latency))
+}
+
+/// The height every breakpoint tier is solved at (H-29).
+///
+/// A tier is classified by width alone (the library's `Breakpoint::of` says why), so the height is
+/// one constant shared by the three tiers; differing heights would make the results incomparable
+/// without testing anything a tier decides.
+const TIER_HEIGHT: u32 = 800;
+
+/// The three tiers and the widest width each one accepts, from the library's own tokens.
+///
+/// Compact and Medium use the boundaries themselves; Expanded is the first width past the Medium
+/// boundary, because the classifier has no upper bound. All three numbers come from
+/// [`rust_widgets::style::breakpoint_tokens`], so a theme that moves a boundary moves the preview.
+fn tier_widths() -> [(Breakpoint, u32); 3] {
+    let tokens = rust_widgets::style::breakpoint_tokens();
+    [
+        (Breakpoint::Compact, tokens.compact_max),
+        (Breakpoint::Medium, tokens.medium_max),
+        (Breakpoint::Expanded, tokens.medium_max.saturating_add(1)),
+    ]
+}
+
+/// The tier's stable name.
+fn tier_name(tier: Breakpoint) -> &'static str {
+    match tier {
+        Breakpoint::Compact => "compact",
+        Breakpoint::Medium => "medium",
+        Breakpoint::Expanded => "expanded",
+    }
+}
+
+/// Solves one document at every breakpoint tier (H-29).
+///
+/// The numbers are the library's generation-time solve (`GenerationReport::node_rects`, RW-116), so
+/// the three tiers show what the generator would place, not a host-side arithmetic pass. The
+/// classifier is the library's too, and a width that does not classify as the tier it was chosen
+/// for is an error rather than a report with a misleading name.
+///
+/// `frames` names a directory to paint into. When it is given, the mounted preview's widgets receive
+/// the generator's rectangles through the library's `widget::runtime::set_geometry` and the library's
+/// own paint traversal writes one SVG per tier: the picture and the numbers come from one solve.
+/// (The C-ABI `set_widget_geometry` only records a rectangle that paint never reads, so it is not the
+/// setter used here.) When it is absent the command only reports the numbers.
+///
+/// **Boundary.** A tier that selected a different *subtree* needs a breakpoint member in the
+/// library's declarative document, which it does not have (RW-117); this command therefore solves
+/// one unchanged tree at three widths and says so. It does not invent a host-only breakpoint field
+/// that generation could not consume (principle #13/#26).
+fn tier_frames(page: &str, frames: Option<&str>) -> Result<Vec<String>, String> {
+    use rust_widgets::designer::{GenerationRequest, TargetProfile, generate};
+
+    let json = crate::app::run::generate::read_document(page)?;
+    let mut lines = vec![format!("page: {page}")];
+    // The full declarative loader registers parent/child links and applies a layout, which is what
+    // a paint pass walks; the incremental view session keeps its own tree and paints only the root.
+    // The solved rectangles below then replace the loader's geometry, so the picture is the
+    // generator's solve rather than a second layout.
+    let bound = match frames {
+        Some(_) => Some(rust_widgets::json::JsonLoader::load(&json)?),
+        None => None,
+    };
+    if let Some(directory) = frames {
+        std::fs::create_dir_all(directory)
+            .map_err(|error| format!("cannot create {directory}: {error}"))?;
+    }
+    let root = match (&bound, frames) {
+        (Some(bound), Some(_)) => Some(
+            bound
+                .root()
+                .ok_or_else(|| "the document has no root widget to paint".to_owned())?,
+        ),
+        _ => None,
+    };
+    for (tier, width) in tier_widths() {
+        let size = Size::new(width, TIER_HEIGHT);
+        if Breakpoint::of(size) != tier {
+            return Err(format!(
+                "{width}x{TIER_HEIGHT} classifies as {} rather than {}",
+                tier_name(Breakpoint::of(size)),
+                tier_name(tier)
+            ));
+        }
+        let generated = generate(&GenerationRequest {
+            json: json.clone(),
+            target: TargetProfile::Default,
+            width,
+            height: TIER_HEIGHT,
+            function_name: "build_ui".to_owned(),
+        })
+        .map_err(|reason| format!("{} at {width}x{TIER_HEIGHT}: {reason}", tier_name(tier)))?;
+        lines.push(format!(
+            "{}: {width}x{TIER_HEIGHT} -> {} node rect(s), {} layout issue(s)",
+            tier_name(tier),
+            generated.report.node_rects.len(),
+            generated.report.layout_issues.len()
+        ));
+        for rect in &generated.report.node_rects {
+            lines.push(format!(
+                "  node {} (path {:?}): x={} y={} {}x{}",
+                rect.id.as_deref().unwrap_or("-"),
+                rect.path,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height
+            ));
+        }
+        for issue in &generated.report.layout_issues {
+            lines.push(format!("  issue: {}", issue.describe()));
+        }
+        if let (Some(bound), Some(root), Some(directory)) = (bound.as_ref(), root, frames) {
+            // The rectangles are the generator's solve (RW-116); applying them to the loaded
+            // widgets is geometry, not a second layout. The library's paint traversal then writes
+            // the frame, so the picture and the numbers above are one answer.
+            for rect in &generated.report.node_rects {
+                if let Some(name) = &rect.id
+                    && let Some(widget) = bound.id(name)
+                {
+                    // `runtime::set_geometry` moves the widget itself; the C-ABI/state setter only
+                    // records a rectangle the paint pass never reads.
+                    rust_widgets::widget::runtime::set_geometry(
+                        widget,
+                        Rect::new(rect.x, rect.y, rect.width, rect.height),
+                    );
+                }
+            }
+            let mut backend = rust_widgets::render::SvgPaintBackend::new(size);
+            let painted = rust_widgets::widget::runtime::paint_tree_into(
+                root,
+                size,
+                rust_widgets::core::Color::WHITE,
+                &mut backend,
+            );
+            if !painted {
+                return Err(format!(
+                    "{} frame: the root widget has no drawable",
+                    tier_name(tier)
+                ));
+            }
+            let path = format!("{directory}/{}.svg", tier_name(tier));
+            std::fs::write(&path, backend.finish())
+                .map_err(|error| format!("cannot write {path}: {error}"))?;
+            lines.push(format!("  frame: {path}"));
+        }
+    }
+    if let Some(bound) = &bound {
+        // The full loader registers real widgets and stores declarative layouts keyed by parent;
+        // a headless check must not leave either behind.
+        for (id, _, _) in bound.walk() {
+            rust_widgets::layout::declarative::forget_layout(id);
+            rust_widgets::widget::runtime::unregister(id);
+        }
+    }
+    lines.push(
+        "per-tier subtree declarations: not expressible in the library's JSON document (RW-117); \
+         these tiers solve one unchanged tree at three widths"
+            .to_owned(),
+    );
+    Ok(lines)
+}
+
+#[cfg(test)]
+mod tiers_tests {
+    use super::{Breakpoint, Size, TIER_HEIGHT, tier_name, tier_widths};
+
+    #[test]
+    fn each_tier_width_classifies_as_the_tier_it_names() {
+        for (tier, width) in tier_widths() {
+            assert_eq!(
+                Breakpoint::of(Size::new(width, TIER_HEIGHT)),
+                tier,
+                "{} at {width}",
+                tier_name(tier)
+            );
+        }
+        let widths: Vec<u32> = tier_widths().iter().map(|(_, width)| *width).collect();
+        assert!(
+            widths.windows(2).all(|pair| pair[0] < pair[1]),
+            "{widths:?}"
+        );
+    }
+
+    #[test]
+    fn one_page_is_solved_at_all_three_tiers() {
+        let root = std::env::temp_dir().join(format!("rustage-tiers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("pages")).expect("a directory");
+        std::fs::write(root.join("project.json"), "{}").expect("a project file");
+        let page = root.join("pages/main.json");
+        std::fs::write(
+            &page,
+            "{\"format\": 7, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
+             \"nodes\": [{\"id\": 1, \"type\": \"window\", \"children\": [2], \
+               \"layout\": {\"type\": \"vbox\", \"spacing\": 8, \"margin\": 8}}, \
+               {\"id\": 2, \"type\": \"label\", \"constraints\": {\"min_height\": 24}}], \
+             \"states\": null, \"collections\": [], \
+             \"components\": {\"definitions\": [], \"instances\": [], \"variants\": []}, \
+             \"motion\": {\"motions\": []}}",
+        )
+        .expect("a page");
+        let lines = super::tier_frames(page.to_str().expect("a path"), None).expect("three tiers");
+        let _ = std::fs::remove_dir_all(&root);
+        for tier in ["compact", "medium", "expanded"] {
+            assert!(lines.iter().any(|line| line.starts_with(tier)), "{lines:?}");
+        }
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("node rect(s)"))
+                .count(),
+            3,
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("RW-117")),
+            "the boundary is named: {lines:?}"
+        );
+        // The root rect is the tier width, so the three solves differ.
+        let roots: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.starts_with("  node 1 (path [])"))
+            .collect();
+        assert_eq!(roots.len(), 3, "{lines:?}");
+        assert!(roots[0] != roots[1] && roots[1] != roots[2], "{roots:?}");
+    }
+
+    #[test]
+    fn a_frame_directory_gets_one_svg_per_tier_from_the_same_solve() {
+        let root = std::env::temp_dir().join(format!("rustage-tier-frames-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("pages")).expect("a directory");
+        std::fs::write(root.join("project.json"), "{}").expect("a project file");
+        let page = root.join("pages/main.json");
+        std::fs::write(
+            &page,
+            "{\"format\": 7, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
+             \"nodes\": [{\"id\": 1, \"type\": \"window\", \"children\": [2], \
+               \"layout\": {\"type\": \"vbox\", \"spacing\": 8, \"margin\": 8}}, \
+               {\"id\": 2, \"type\": \"label\"}], \
+             \"states\": null, \"collections\": [], \
+             \"components\": {\"definitions\": [], \"instances\": [], \"variants\": []}, \
+             \"motion\": {\"motions\": []}}",
+        )
+        .expect("a page");
+        let frames = root.join("frames");
+        let lines = super::tier_frames(
+            page.to_str().expect("a path"),
+            Some(frames.to_str().expect("a frames path")),
+        )
+        .expect("three frames");
+        let mut svgs = Vec::new();
+        for tier in ["compact", "medium", "expanded"] {
+            let path = frames.join(format!("{tier}.svg"));
+            let svg = std::fs::read_to_string(&path).expect("a frame");
+            assert!(svg.starts_with("<svg"), "{tier}: {svg}");
+            assert!(svg.contains("width=\""), "{tier}: {svg}");
+            svgs.push(svg);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            svgs[0] != svgs[1] && svgs[1] != svgs[2],
+            "the three frames are three solves"
+        );
+        assert!(
+            lines.iter().filter(|line| line.contains("frame: ")).count() == 3,
+            "{lines:?}"
+        );
+    }
 }

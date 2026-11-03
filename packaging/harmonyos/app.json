@@ -51,6 +51,81 @@
       "path": "entry/src/main/resources/base/profile/main_pages.json",
       "role": "page routing profile",
       "substituted": false
+    },
+    {
+      "path": "entry/src/main/ets/entryability/EntryAbility.ets",
+      "role": "application entry ability (loads pages/Index)",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/ets/pages/Index.ets",
+      "role": "the page that carries the native bridge",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/cpp/napi_init.cpp",
+      "role": "NAPI module forwarding ArkTS calls to the rust_widgets C ABI",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/cpp/CMakeLists.txt",
+      "role": "native build definition for the bridge (imports the pinned header and library)",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/cpp/include/README.md",
+      "role": "where the pinned rw_generated.h is linked from",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/cpp/types/libentry/index.d.ts",
+      "role": "the native module's ArkTS declarations",
+      "substituted": false
+    },
+    {
+      "path": "entry/src/main/cpp/types/libentry/oh-package.json5",
+      "role": "native module package metadata",
+      "substituted": false
+    },
+    {
+      "path": "entry/libs/arm64-v8a/README.md",
+      "role": "where the prebuilt librust_widgets.so goes",
+      "substituted": false
+    },
+    {
+      "path": "entry/build-profile.json5",
+      "role": "module build profile, points at the native CMake project",
+      "substituted": false
+    },
+    {
+      "path": "entry/oh-package.json5",
+      "role": "entry module package metadata",
+      "substituted": false
+    },
+    {
+      "path": "entry/hvigorfile.ts",
+      "role": "entry module build script",
+      "substituted": false
+    },
+    {
+      "path": "entry/obfuscation-rules.txt",
+      "role": "release obfuscation rules (empty until a release build exercises them)",
+      "substituted": false
+    },
+    {
+      "path": "hvigorfile.ts",
+      "role": "project build script",
+      "substituted": false
+    },
+    {
+      "path": "hvigor/hvigor-config.json5",
+      "role": "hvigor model version and execution configuration",
+      "substituted": false
+    },
+    {
+      "path": "oh-package.json5",
+      "role": "project package metadata",
+      "substituted": false
     }
   ],
   "version_code": {
@@ -85,13 +160,15 @@
     "note": "The start window background is a $color resource, so the dark resource qualifier changes it without a second manifest; the committed values are the proposed surfaces from resources/host/icons/theme.json and are replaced by the host theme work at T05.02/T24.02."
   },
   "host_requirement": {
-    "arkts_shell": "entry/src/main/ets (EntryAbility, pages) is application code and is not part of this resource tree; the resource and manifest layer is what this directory provides.",
+    "arkts_shell": "entry/src/main/ets (EntryAbility, the page and the native bridge) is now part of this scaffold. It forwards to the pinned revision's C ABI; it is not a second UI implementation.",
     "native_candidate": "aarch64-unknown-linux-ohos",
+    "native_library": "librust_widgets.so built with the xcomponent feature, placed under entry/libs/arm64-v8a; CMake refuses to configure without it rather than linking a bridge-less module.",
+    "remaining_blocker": "the identity is recorded (T00.04/T25.02), so the build profile's minimum OS is substituted; what remains is signing (configured per release machine, never committed) and a 2in1 device to install the signed HAP on before any support claim.",
     "note": "The candidate Rust triple is a target this machine has installed through rustup. OpenHarmony documents Rust for system level builds and C ABI interop, while the application side native kit is documented for C/C++ and Node-API; no document describes a Rust windowing or event loop path. Whether the pinned GUI stack (winit/wgpu) can be hosted in an OpenHarmony native module on the 2in1 form factor is therefore UNVERIFIED and needs a spike before any support claim."
   },
   "distribution": {
-    "form": null,
-    "note": "AppGallery release, internal distribution and signing profiles follow T25.02; no credential or store identity is stored in this repository."
+    "form": "hap",
+    "note": "The HarmonyOS form is the .hap bundle. AppGallery release and internal distribution differ only in the signing profile and the store metadata, which follow T25.02; no credential or store identity is stored in this repository."
   },
   "verification_required": [
     "layered foreground and background reach the launcher on a 2in1 device",
@@ -106,6 +183,7 @@
     "OpenHarmony docs, module configuration file (module.json5): deviceTypes enum (2in1 is PC/2in1), startWindowIcon and startWindowBackground are required",
     "OpenHarmony docs, configuring the application icon and name: layered image resource shape and the entry ability skills",
     "OpenHarmony docs, common actions and entities: entity.system.home with ohos.want.action.home",
+    "OpenHarmony docs, Node-API and XComponent native interface: the NAPI module descriptor, OH_NATIVE_XCOMPONENT_OBJ, and the native module lifecycle",
     "measured with the system image tool: layered background and foreground are 1024 x 1024 in a DevEco generated project"
   ],
   "record": "../docs/plan/resources.md section 13.4"

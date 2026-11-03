@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "The rustage HarmonyOS entry module: ArkTS page plus the native bridge to rust_widgets.",
+  "main": "",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {}
+}

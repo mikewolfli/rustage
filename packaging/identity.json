@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "blocked-pending-decision",
+  "status": "decided",
   "binary_name": "rustage",
   "display_name": "rustage",
   "vendor": "mikewolfli",
@@ -9,20 +9,20 @@
     "key": "package.version"
   },
   "copyright": "Copyright (c) 2026 mikewolfli",
-  "application_id": null,
+  "application_id": "io.github.mikewolfli.rustage",
   "minimum_os": {
-    "windows": null,
-    "macos": null,
-    "linux": null,
-    "harmonyos": null
+    "windows": "10.0.17763",
+    "macos": "11.0",
+    "linux": "glibc 2.31",
+    "harmonyos": "5.1.0(18)"
   },
   "distribution": {
-    "windows": null,
-    "macos": null,
-    "linux": null,
-    "harmonyos": null
+    "windows": "zip",
+    "macos": "dmg",
+    "linux": "tar.gz",
+    "harmonyos": "hap"
   },
-  "install_prefix": null,
+  "install_prefix": "/usr/local",
   "tokens": [
     "@@APPLICATION_ID@@",
     "@@DISPLAY_NAME@@",
@@ -42,6 +42,6 @@
       "T25.02"
     ],
     "reference": "../docs/plan/resources.md section 17.2",
-    "blocked_reason": "The application identity (reverse-DNS identifier), minimum OS versions and distribution forms are product decisions that the plan leaves open. Token substitution and package metadata generation stay blocked until they are recorded here; the icon derivation itself does not depend on them. The shared identifier must also satisfy the HarmonyOS bundle rules, which forbid hyphens."
+    "record": "Decided 2026-11-04. The identifier is the project-controlled GitHub namespace in reverse DNS and is also the HarmonyOS bundle spelling, which forbids hyphens. Minimums: Windows 10.0.17763, macOS 11.0 (the aarch64-apple-darwin rustc floor), Linux glibc 2.31, HarmonyOS 5.1.0(18) (the API 18 SDK installed on this machine; API 20 / 6.0.0 is the other installed SDK). The first release is a directory, not a single file, because the interface catalogue under language/ is runtime data read from disk: a .dmg, a portable .zip, a .tar.gz and a .hap. Signing material is never recorded here; each release machine configures its own signing identity. The Linux installed icon basename follows the application id, so Icon= in the desktop entry resolves."
   }
 }

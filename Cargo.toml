@@ -25,18 +25,18 @@ publish = false
 linux-native = ["rust_widgets/gtk-native"]
 
 [dependencies]
-rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "1a30785842140e45789bf50a81bd7280c8f9b7a2", default-features = false, features = ["desktop", "runtime-fonts"] }
+rust_widgets = { git = "https://github.com/mikewolfli/rust-widgets", rev = "ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81", default-features = false, features = ["desktop", "runtime-fonts"] }
 # The form group is an opt-in suite package in the same pinned revision. The host installs it into
 # its own factory instead of expecting the parent crate to depend on the suite (which would be a
 # package cycle). `form` is the package's default; the other groups are enabled explicitly so the
 # designer's catalogue contains every control the pinned revision ships, not only the first group.
 # No group here pulls a heavy optional dependency: `js-engine` and `web-http` stay off.
 #
-# `maps`, `project` and `devtools` are deliberately *not* enabled: in 4.0.0 their manifests for
-# `map_overview`, `map_attribution`, `gantt_task_grid` and `terminal_find_bar` cannot be exported
-# (the suite registers no default value for some of their properties), which would make
-# `--catalog audit` fail. See docs/rw-feedback/feedback-20261103.md (RW-105).
-rust-widgets-suites = { git = "https://github.com/mikewolfli/rust-widgets", rev = "1a30785842140e45789bf50a81bd7280c8f9b7a2", package = "rust-widgets-suites", features = ["form", "webview", "finance", "media-playback"] }
+# `maps`, `project` and `devtools` are enabled since 4.0.1: RW-105 was fixed upstream
+# (`map_overview`, `map_attribution`, `gantt_task_grid` and `terminal_find_bar` now declare their
+# property defaults, so their designer manifests export). See
+# docs/rw-feedback/feedback-20261104.md and docs/log/log-20261103-2.md.
+rust-widgets-suites = { git = "https://github.com/mikewolfli/rust-widgets", rev = "ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81", package = "rust-widgets-suites", features = ["form", "webview", "finance", "media-playback", "maps", "project", "devtools"] }
 
 # Extension packages and the release SBOM need a real digest; `sha2` is already resolved through the
 # widget dependency, so this adds no download. A hand-rolled checksum would not be comparable with

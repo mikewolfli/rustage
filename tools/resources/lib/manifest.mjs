@@ -693,6 +693,18 @@ function checkHarmonyos(root, definition, identity, branding, errors) {
   }
   for (const field of ['app_scope_dir', 'module_dir']) checkString(config[field], `${file}: ${field}`, errors);
 
+  // `versionCode` is an integer on the platform. A quoted placeholder survives substitution as a
+  // string (`"versionCode": "1000000"`), which hvigor refuses at PreBuild; the token must sit
+  // outside the quotes so the generated manifest holds a number.
+  const appManifest = path.join(directory, 'AppScope/app.json5');
+  if (existsSync(appManifest)) {
+    const text = readFileSync(appManifest, 'utf8');
+    if (/"versionCode"\s*:\s*"@@[A-Z][A-Z0-9_]*@@"/.test(text)) {
+      errors.push(`${file}: AppScope/app.json5 quotes the versionCode placeholder; substitution `
+        + 'would write a string where the platform requires an integer');
+    }
+  }
+
   const declared = new Set();
   if (checkArray(config.templates, `${file}: templates`, errors)) {
     for (const [index, entry] of config.templates.entries()) {
@@ -701,6 +713,15 @@ function checkHarmonyos(root, definition, identity, branding, errors) {
       checkString(entry.role, `${label}: role`, errors);
       if (typeof entry.substituted !== 'boolean') errors.push(`${label}: substituted must be a boolean`);
       if (!checkString(entry.path, `${label}: path`, errors)) continue;
+      // A declared path is a file inside `packaging/harmonyos`; `../` or an absolute path would
+      // copy a file from outside the resource tree into the package (and `listFiles` below could
+      // not notice, because it only sees what is inside).
+      const resolved = path.resolve(directory, entry.path);
+      const inside = path.relative(directory, resolved);
+      if (inside === '' || inside.startsWith('..') || path.isAbsolute(inside)) {
+        errors.push(`${label}: ${entry.path} must stay inside packaging/harmonyos`);
+        continue;
+      }
       declared.add(entry.path);
       const target = path.join(directory, entry.path);
       if (!existsSync(target)) {
@@ -796,14 +817,25 @@ function checkHarmonyos(root, definition, identity, branding, errors) {
   }
 
   if (checkClosed('host_requirement', `${file}: host_requirement`, config.host_requirement,
-    ['arkts_shell', 'native_candidate', 'note'], errors)) {
-    for (const field of ['arkts_shell', 'native_candidate', 'note']) {
+    ['arkts_shell', 'native_candidate', 'native_library', 'remaining_blocker', 'note'], errors)) {
+    for (const field of ['arkts_shell', 'native_candidate', 'native_library', 'remaining_blocker', 'note']) {
       checkString(config.host_requirement[field], `${file}: host_requirement.${field}`, errors);
     }
+    // The scaffold ships the ArkTS shell (H-28), so the path it names must exist and must be a
+    // bridge shell: a page that never reaches `libentry.so` would be a second UI implementation
+    // rather than a use of the library.
     const shell = config.host_requirement.arkts_shell?.split(' ')[0];
-    if (shell !== undefined && shell.includes('/') && existsSync(path.join(root, `packaging/harmonyos/${shell}`))) {
-      errors.push(`${file}: host_requirement.arkts_shell names ${shell}, which should be provided by the host `
-        + 'application rather than this resource tree');
+    if (shell !== undefined && shell.includes('/')) {
+      const shellDirectory = path.join(root, `packaging/harmonyos/${shell}`);
+      if (!existsSync(shellDirectory)) {
+        errors.push(`${file}: host_requirement.arkts_shell names ${shell}, which does not exist`);
+      } else {
+        const page = path.join(shellDirectory, 'pages/Index.ets');
+        if (!existsSync(page) || !readFileSync(page, 'utf8').includes("'libentry.so'")) {
+          errors.push(`${file}: ${shell}/pages/Index.ets must import libentry.so; the shell is the `
+            + 'bridge consumer, not a second UI');
+        }
+      }
     }
   }
 
@@ -885,8 +917,8 @@ export function checkPackaging(root) {
     errors.push(`${identityFile}: status "blocked-pending-decision" requires at least one open value`);
   }
   if (checkClosed('decision', `${identityFile}: decision`, value.decision, [
-    'tasks', 'reference', 'blocked_reason',
-  ], errors)) {
+    'tasks', 'reference', 'blocked_reason', 'record',
+  ], errors, ['blocked_reason', 'record'])) {
     if (checkArray(value.decision.tasks, `${identityFile}: decision.tasks`, errors)) {
       for (const task of value.decision.tasks) {
         if (typeof task !== 'string' || !/^T\d{2}\.\d{2}$/.test(task)) {
@@ -902,7 +934,22 @@ export function checkPackaging(root) {
         errors.push(`${identityFile}: decision.reference ${reference} does not exist`);
       }
     }
-    checkString(value.decision.blocked_reason, `${identityFile}: decision.blocked_reason`, errors);
+    // The two states carry different records: a blocked identity explains what is missing, a
+    // decided one records what was chosen and why. Keeping both fields optional in the schema while
+    // requiring the one that matches `status` is what keeps the file from claiming both at once.
+    if (value.status === 'decided') {
+      checkString(value.decision.record, `${identityFile}: decision.record`, errors);
+      if (value.decision.blocked_reason !== undefined) {
+        errors.push(`${identityFile}: decision.blocked_reason belongs to the blocked state; `
+          + 'a decided identity records decision.record');
+      }
+    } else {
+      checkString(value.decision.blocked_reason, `${identityFile}: decision.blocked_reason`, errors);
+      if (value.decision.record !== undefined) {
+        errors.push(`${identityFile}: decision.record belongs to the decided state; `
+          + 'a blocked identity records decision.blocked_reason');
+      }
+    }
   }
 
   const declaredTokens = new Set();
@@ -999,6 +1046,32 @@ export function checkPackaging(root) {
           requiredKeys: ['"src"'],
           json: true,
         },
+        {
+          path: 'packaging/harmonyos/entry/src/main/ets/entryability/EntryAbility.ets',
+          requiredKeys: ['loadContent(\'pages/Index\'', 'UIAbility'],
+        },
+        {
+          path: 'packaging/harmonyos/entry/src/main/ets/pages/Index.ets',
+          requiredKeys: ['libentry.so', 'bindComponent', 'reportResize'],
+        },
+        {
+          path: 'packaging/harmonyos/entry/src/main/cpp/napi_init.cpp',
+          requiredKeys: ['rw_generated.h', 'rw_init', 'rw_harmony_bind_xcomponent',
+            'rw_harmony_bind_node', 'rw_harmony_on_click', 'rw_report_window_resize',
+            'rw_poll_widget_trigger_event'],
+        },
+        {
+          path: 'packaging/harmonyos/entry/src/main/cpp/CMakeLists.txt',
+          requiredKeys: ['RUST_WIDGETS_INCLUDE', 'RUST_WIDGETS_LIB_DIR', 'libace_napi.z.so'],
+        },
+        {
+          path: 'packaging/harmonyos/entry/src/main/cpp/types/libentry/index.d.ts',
+          requiredKeys: ['createWindow', 'bindComponent', 'pollTrigger'],
+        },
+        {
+          path: 'packaging/harmonyos/entry/build-profile.json5',
+          requiredKeys: ['externalNativeOptions', 'src/main/cpp/CMakeLists.txt'],
+        },
       ],
     },
   };
@@ -1020,6 +1093,12 @@ export function checkPackaging(root) {
     }
 
     for (const template of definition.templates) {
+      // A declared template that is missing is a report, not a crash: the first missing file must
+      // not hide every later finding.
+      if (!existsSync(path.join(root, template.path))) {
+        errors.push(`${template.path}: file is missing`);
+        continue;
+      }
       const text = readText(root, template.path);
       errors.push(...checkTextFormatting(text, template.path));
       for (const key of template.requiredKeys) {

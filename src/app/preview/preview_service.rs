@@ -27,9 +27,10 @@
 //! instance the acceptance line forbids.
 //!
 //! Focus is captured through `widget::runtime::focused_widget` and restored through
-//! `focus_widget`, keyed by the document's `NodeId`. Scroll has no generic accessor in the pinned
-//! revision; [`state_keep::SCROLL_GAP`] is the exact gap and the preview reports it rather than
-//! claiming a restore it cannot perform.
+//! `focus_widget`, keyed by the document's `NodeId`. Row scroll is captured and restored through the
+//! library's own `scroll_row` property (`ScrollableRows`, 31 containers); the only remaining
+//! boundary is the pixel pair, and [`state_keep::SCROLL_GAP`] names it rather than claiming a
+//! restore the library cannot perform.
 //!
 //! # A classified edit is a decision, not a patch
 //!
@@ -64,8 +65,29 @@ use rust_widgets::view::{Node, View, ViewEngine};
 use rust_widgets::widget::capability::CapabilityValue;
 
 use crate::app::preview::hot_update::{self, Edit};
-use crate::app::preview::state_keep::{self, Capture, FocusRestore};
+use crate::app::preview::state_keep::{self, Capture, FocusRestore, InputRestore};
 use crate::contracts::identity::NodeId;
+
+/// The text each node's declaration gives it, keyed by the id the node carries as its key.
+///
+/// A node's key is the decimal spelling of its `NodeId` ([`Document`]'s convention), and a key that
+/// is not a number, or a node whose declaration says nothing about text, contributes no entry. The
+/// walk covers the whole tree because a declared text can sit anywhere in it.
+fn declared_texts(root: &Node) -> BTreeMap<NodeId, String> {
+    fn walk(node: &Node, out: &mut BTreeMap<NodeId, String>) {
+        if let Some(raw) = node.key.as_deref().and_then(|key| key.parse::<u64>().ok())
+            && let Some(CapabilityValue::String(text)) = node.props.get("text")
+        {
+            out.insert(NodeId::from_raw(raw), text.clone());
+        }
+        for child in &node.children {
+            walk(child, out);
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(root, &mut out);
+    out
+}
 
 /// One node of a preview document.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -450,6 +472,13 @@ pub struct Preview {
     /// ([`Self::mount_json`]); `None` means it runs the host model. A failed JSON update restores
     /// this text, the way [`Self::mounted`] restores the host model.
     mounted_json: Option<String>,
+    /// The text each node's declaration gives it, keyed by the document's `NodeId`.
+    ///
+    /// This is what tells a node's live text apart from text a person typed: a control showing the
+    /// text its declaration gives holds no edit, so a rebuild must not restore it (see
+    /// [`state_keep::capture_with_declarations`]). Rebuilt with the tree; never written by a text
+    /// edit, because a declaration does not change when someone types.
+    declared_text: BTreeMap<NodeId, String>,
     /// Every control id this session created, including ones a later update removed.
     ///
     /// Tracked because `ViewEngine` has no `Drop` that unregisters its controls: without this list,
@@ -481,6 +510,13 @@ impl Preview {
     /// the declaration, so a frame is what the same controls draw when a window shows them. A
     /// session with nothing mounted, an empty size, or a root without a `Draw` is refused with the
     /// reason rather than answering an empty document.
+    ///
+    /// **`size` is the canvas, not a layout pass.** The mounted widgets keep the geometry they were
+    /// given at mount time; the declarative view path does not consume a root `layout` and the paint
+    /// entry has no viewport re-solve, so a larger `size` does not re-arrange the tree (upstream
+    /// RW-117/RW-118). A caller that needs solved coordinates should read
+    /// `GenerationReport::node_rects` (see `--preview tiers:<page>`), which is the generator's own
+    /// solve for a width and height.
     pub fn paint_svg(&self, size: Size) -> Result<String, String> {
         let index = self
             .view_index()
@@ -550,6 +586,11 @@ impl Preview {
         self.engine = Some(engine);
         self.mounted = Some(Rc::new(document.clone()));
         self.mounted_json = None;
+        self.declared_text = document
+            .nodes
+            .iter()
+            .map(|node| (node.node, node.text.clone()))
+            .collect();
         for node in document.nodes.iter() {
             self.install(node.node)?;
         }
@@ -596,6 +637,7 @@ impl Preview {
             id
         };
         let mut engine = ViewEngine::new();
+        let declared = declared_texts(&tree.root);
         let report = engine.mount_tree_shared(Rc::new(tree.root), &tracked);
         let created = created.into_inner();
         if report.widgets_created == 0 {
@@ -609,6 +651,7 @@ impl Preview {
         self.engine = Some(engine);
         self.mounted = None;
         self.mounted_json = Some(json.to_owned());
+        self.declared_text = declared;
         Ok(MountReport {
             widgets_created: report.widgets_created,
             issues: report.errors.len(),
@@ -637,6 +680,7 @@ impl Preview {
             return Err("no view is mounted, so there is nothing to update".to_owned());
         }
         let tree = rust_widgets::json::json_to_view_tree(json)?;
+        let declared = declared_texts(&tree.root);
         let previous = self.mounted_json.clone();
 
         let created = RefCell::new(Vec::new());
@@ -673,6 +717,9 @@ impl Preview {
 
         self.updates = self.updates.saturating_add(1);
         self.mounted_json = Some(json.to_owned());
+        // The declaration the tree was built from is the new one; a person's typing is not part of
+        // it, so capture still sees their text as different.
+        self.declared_text = declared;
         self.view_generation = self
             .engine
             .as_ref()
@@ -946,29 +993,65 @@ impl Preview {
         }
     }
 
-    /// Captures the focused control as a [`state_keep::Capture`].
+    /// Captures every node's scroll and the focused control as a [`state_keep::Capture`].
     ///
-    /// Only focus is captured: it is the one live state the library exposes generically. Scroll has
-    /// no library-wide read and is therefore absent, as [`state_keep::SCROLL_GAP`] explains.
+    /// Row scroll is read through the library's own `scroll_row` property (RW-58), so the state this
+    /// keeps is the control's current answer rather than a host-maintained copy.
     pub fn capture_state(&self) -> Capture {
         let Some(engine) = &self.engine else {
             return Capture::new();
         };
-        state_keep::capture_focus(
+        state_keep::capture_with_declarations(
             &engine.tree_index(),
             rust_widgets::widget::runtime::focused_widget(),
+            &self.declared_text,
         )
     }
 
-    /// Restores the captured focus onto controls whose node and kind still match.
+    /// Restores the text a person typed onto controls that are still the same node and kind.
     ///
-    /// The returned outcomes are the ordinary [`state_keep::restore`] decisions, so a gone or
-    /// retyped node is reported and nothing is focused for it.
+    /// The text goes back through the control's own `text` property, which is the same channel
+    /// [`Self::capture_state`] read it from. A node the rebuild removed, or one whose kind changed,
+    /// is reported and left alone; a node that merely shows its declaration again is not in the plan,
+    /// so a rebuilt control keeps the value the document gave it.
+    pub fn restore_input(&self, capture: &Capture) -> Result<Vec<InputRestore>, String> {
+        let Some(engine) = &self.engine else {
+            return Err("no view is mounted, so there is nothing to restore into".to_owned());
+        };
+        let plan = state_keep::restore_input(capture, &engine.tree_index());
+        let mut outcomes = Vec::with_capacity(plan.len());
+        let mut restored = 0usize;
+        for entry in plan {
+            if let Some(id) = entry.target
+                && entry.is_restored()
+                && state_keep::set_text(id, &entry.input)
+            {
+                restored += 1;
+            }
+            outcomes.push(entry);
+        }
+        if restored > 0 {
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::preview::service",
+                &format!("restored typed text on {restored} control(s)"),
+            );
+        }
+        Ok(outcomes)
+    }
+
+    /// Restores the captured focus and scroll onto controls whose node and kind still match.
+    ///
+    /// The returned outcomes are the ordinary [`state_keep::restore`] decisions for **focus**, so a
+    /// gone or retyped node is reported and nothing is focused for it. Scroll is applied through the
+    /// same property the control publishes; a container the library no longer has, or one typed as a
+    /// pixel surface, is skipped rather than approximated.
     pub fn restore_state(&self, capture: &Capture) -> Result<Vec<FocusRestore>, String> {
         let Some(engine) = &self.engine else {
             return Err("no view is mounted, so there is nothing to restore into".to_owned());
         };
-        let plan = state_keep::restore_focus(capture, &engine.tree_index());
+        let index = engine.tree_index();
+        let plan = state_keep::restore_focus(capture, &index);
         let mut outcomes = Vec::with_capacity(plan.len());
         for entry in plan {
             if let Some(id) = entry.target {
@@ -976,10 +1059,26 @@ impl Preview {
             }
             outcomes.push(entry);
         }
+        let mut scrolled = 0usize;
+        for entry in state_keep::restore_scroll(capture, &index) {
+            if entry.is_restored()
+                && let Some(id) = entry.target
+                && state_keep::set_scroll_row(id, entry.row)
+            {
+                scrolled += 1;
+            }
+        }
+        if scrolled > 0 {
+            crate::host::log::emit(
+                crate::host::log::Level::Info,
+                "app::preview::service",
+                &format!("restored scroll on {scrolled} control(s)"),
+            );
+        }
         Ok(outcomes)
     }
 
-    /// The exact scroll-restore gap in the pinned library.
+    /// The remaining scroll boundary in the pinned library: pixel containers only.
     pub fn scroll_gap() -> &'static str {
         state_keep::SCROLL_GAP
     }
@@ -1033,6 +1132,7 @@ impl Preview {
     fn release_engine(&mut self) {
         self.mounted = None;
         self.mounted_json = None;
+        self.declared_text.clear();
         if let Some(engine) = self.engine.take() {
             for id in std::mem::take(&mut self.view_ids) {
                 rust_widgets::widget::runtime::unregister(id);
@@ -1786,7 +1886,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_is_captured_and_restored_while_scroll_is_explicitly_diagnosed() {
+    fn focus_is_captured_and_restored_and_the_scroll_route_is_the_librarys() {
         let mut preview = running();
         let factory = WidgetFactory::new_with_defaults();
         let make = creator(&factory);
@@ -1807,6 +1907,8 @@ mod tests {
         let kept = capture.get(node(1)).expect("the focused node was captured");
         assert!(kept.focus);
         assert_eq!(kept.kind, "line_edit");
+        // A line edit is not a row container, so it contributes no scroll state.
+        assert_eq!(kept.scroll, 0);
 
         // Move focus away, then restore the capture: the library exposes both directions.
         assert!(runtime::focus_widget(root));
@@ -1815,14 +1917,112 @@ mod tests {
         assert!(outcomes[0].is_restored());
         assert_eq!(runtime::focused_widget(), Some(field));
 
-        // Scroll is the half the library does not expose generically, so it is a reported gap.
+        // Scroll is no longer a gap for row containers: the state this model keeps is the
+        // control's own `scroll_row` property. The remaining boundary is the pixel pair.
         let gap = Preview::scroll_gap();
-        assert!(gap.contains("no generic scroll accessor"));
-        assert!(gap.contains("ViewEngine"));
-        assert!(state_keep::SCROLL_GAP.contains("patch preservation"));
+        assert!(gap.contains("scroll_row"), "{gap}");
+        assert!(gap.contains("ScrollArea"), "{gap}");
 
         cleanup(preview);
     }
+
+    #[test]
+    fn a_row_containers_scroll_is_captured_and_restored_through_the_property() {
+        let mut preview = running();
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let document = Document::new("group_box").with(DocumentNode::new(node(1), "list_box", "a"));
+        preview.mount_view(&document, &make).expect("a mount");
+        let index = preview.view_index().expect("an index");
+        let list = index
+            .keys()
+            .into_iter()
+            .find(|(_, key, _)| *key == "1")
+            .map(|(_, _, id)| id)
+            .expect("the list control");
+        // Enough rows that the control has somewhere to scroll to, then move it through the
+        // library's own property route (the same one the preview restores through).
+        for row in 0..20 {
+            let _ = rust_widgets::list_box_add_item(list, &format!("row {row}"));
+        }
+        assert!(state_keep::set_scroll_row(list, 4));
+        let scrolled_to = read_widget_property_by_id(list, "scroll_row")
+            .ok()
+            .and_then(|value| match value {
+                CapabilityValue::UInt(row) => u32::try_from(row).ok(),
+                _ => None,
+            });
+        assert_eq!(scrolled_to, Some(4), "the control accepted the row");
+
+        let capture = preview.capture_state();
+        let kept = capture.get(node(1)).expect("the list was captured");
+        assert!(kept.scroll > 0, "the list's row was captured");
+
+        assert!(state_keep::set_scroll_row(list, 0));
+        preview.restore_state(&capture).expect("a restore");
+        let restored = read_widget_property_by_id(list, "scroll_row")
+            .ok()
+            .and_then(|value| match value {
+                CapabilityValue::UInt(row) => u32::try_from(row).ok(),
+                _ => None,
+            });
+        assert_eq!(restored, Some(kept.scroll));
+
+        cleanup(preview);
+    }
+
+    #[test]
+    fn typed_text_is_captured_only_when_it_differs_from_the_declaration_and_is_restored() {
+        let factory = WidgetFactory::new_with_defaults();
+        let make = creator(&factory);
+        let mut preview = running();
+        preview
+            .mount_json(PAGE_JSON, &make)
+            .expect("the page mounts");
+        let label = preview
+            .view_index()
+            .expect("an index")
+            .keys()
+            .into_iter()
+            .find(|(_, key, _)| *key == "2")
+            .map(|(_, _, id)| id)
+            .expect("the label's control");
+        assert_eq!(rust_widgets::get_widget_text(label), "Hello");
+
+        // A control showing the text its declaration gives holds no person's edit, so a rebuild
+        // must not "restore" it — that would freeze a value the document may have just changed.
+        let untouched = preview.capture_state();
+        assert!(
+            untouched.get(node(2)).expect("captured").input.is_empty(),
+            "an untouched control is not input"
+        );
+        assert!(
+            preview
+                .restore_input(&untouched)
+                .expect("a restore")
+                .is_empty(),
+            "nothing to put back"
+        );
+
+        // The person edits the field: the text now differs from the declaration.
+        assert!(state_keep::set_text(label, "Typed by hand"));
+        let capture = preview.capture_state();
+        let kept = capture.get(node(2)).expect("the label was captured");
+        assert_eq!(kept.input, "Typed by hand");
+
+        // The rebuild puts the declaration back; the restore returns the person's text.
+        preview
+            .update_json(PAGE_EDITED, &make)
+            .expect("the edit applies");
+        assert_eq!(rust_widgets::get_widget_text(label), "Goodbye");
+        let outcomes = preview.restore_input(&capture).expect("a restore");
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].is_restored());
+        assert_eq!(rust_widgets::get_widget_text(label), "Typed by hand");
+
+        cleanup(preview);
+    }
+
     #[test]
     fn a_page_document_mounts_through_the_library_converter() {
         let factory = WidgetFactory::new_with_defaults();

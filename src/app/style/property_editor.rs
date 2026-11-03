@@ -996,6 +996,7 @@ mod tests {
             events: Vec::new(),
             commands: Vec::new(),
             children: Vec::new(),
+            companion_of: Vec::new(),
         };
         let schema = Schema::from_manifest("button", &manifest);
 

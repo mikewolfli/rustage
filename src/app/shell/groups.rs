@@ -497,6 +497,46 @@ impl Groups {
         Ok(())
     }
 
+    /// Writes new text into one named document, wherever it is shown.
+    ///
+    /// [`Self::type_into`] addresses the focused view's document; a text control that reports a
+    /// change names the document it was showing when the change was emitted, which is not
+    /// necessarily the focused one by the time the change is applied. Addressing the document by
+    /// name is therefore what keeps a late report from writing into the wrong buffer.
+    ///
+    /// A document that is not open has no buffer to write; the call is refused instead of creating
+    /// a record nobody shows.
+    pub fn set_text(&mut self, document: &str, text: impl Into<String>) -> Result<(), String> {
+        match self.documents.get_mut(document) {
+            Some(buffer) => {
+                *buffer = text.into();
+                Ok(())
+            }
+            None => Err(format!(
+                "{document} is not open, so it has no buffer to write"
+            )),
+        }
+    }
+
+    /// Every open document that has unsaved changes, in name order.
+    ///
+    /// A document is dirty when *any* view of it is: a dirty flag belongs to the buffer, so a
+    /// clean tab beside a dirty one is still a buffer with unsaved changes. The answer is derived
+    /// from the tabs on every call rather than kept in a second set that could drift.
+    pub fn dirty_documents(&self) -> BTreeSet<String> {
+        let mut dirty = BTreeSet::new();
+        for group in self.group_ids() {
+            if let Some(tabs) = self.tabs(group) {
+                for tab in tabs.tabs() {
+                    if tab.is_dirty() {
+                        dirty.insert(tab.document().to_owned());
+                    }
+                }
+            }
+        }
+        dirty
+    }
+
     /// Scrolls the focused view. Exactly one view's viewport changes.
     pub fn scroll(&mut self, offset: u32) -> Result<(), String> {
         let index = self
@@ -1150,6 +1190,54 @@ mod tests {
         };
         assert!(area.rearrange(&stray, &[vec![], vec![]]).is_err());
         assert_eq!(area.render(), before);
+    }
+
+    #[test]
+    fn text_written_to_one_document_is_read_by_every_view_of_it() {
+        let mut area = groups();
+        area.open("pages/a.json");
+        area.split(Axis::LeftRight);
+        area.another_view("pages/a.json");
+
+        // The writer names the document, not the focused view: by the time a text control's report
+        // is applied the focus may have moved to the other view of the same buffer.
+        area.set_text("pages/a.json", "typed here").unwrap();
+        assert_eq!(area.text("pages/a.json"), Some("typed here"));
+        assert_eq!(area.views_of("pages/a.json").len(), 2);
+
+        // A document that is not open is refused rather than registered silently.
+        assert!(area.set_text("pages/missing.json", "x").is_err());
+        assert_eq!(area.text("pages/missing.json"), None);
+    }
+
+    #[test]
+    fn a_dirty_buffer_is_named_once_even_when_two_views_show_it() {
+        let mut area = groups();
+        area.open("pages/a.json");
+        area.open("pages/b.json");
+        area.split(Axis::LeftRight);
+        area.another_view("pages/a.json");
+        assert!(area.dirty_documents().is_empty());
+
+        // One view of `a` is marked dirty; the buffer is dirty, and it is named once.
+        let (group, _) = area
+            .views_of("pages/a.json")
+            .into_iter()
+            .next()
+            .expect("a view of the document");
+        area.tabs_mut(group)
+            .unwrap()
+            .mark_dirty("pages/a.json", true);
+        assert_eq!(
+            area.dirty_documents().into_iter().collect::<Vec<_>>(),
+            vec!["pages/a.json".to_owned()]
+        );
+
+        // Saving one view clears the buffer for every view, because the flag is the buffer's.
+        for id in area.group_ids() {
+            area.tabs_mut(id).unwrap().mark_dirty("pages/a.json", false);
+        }
+        assert!(area.dirty_documents().is_empty());
     }
 
     #[test]

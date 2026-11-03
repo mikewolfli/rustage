@@ -11,8 +11,9 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 
-use rust_widgets::core::{ObjectId, Rect as WidgetRect};
+use rust_widgets::core::{ObjectId, Point, Rect as WidgetRect};
 use rust_widgets::layout::{ChildInfo, Layout, LayoutContext};
+use rust_widgets::widget::special_widgets::canvas::CanvasTransform;
 
 #[cfg(test)]
 use crate::app::canvas::scene::{Handle, Stale};
@@ -959,61 +960,39 @@ impl Default for CanvasState {
     }
 }
 
-/// The uniform scale and centring offset that maps design space into a control rect.
+/// The design surface's fit: the uniform scale and centring offset that map design space into a
+/// control rect.
 ///
-/// Both the layout pass and the pointer callbacks use this one transform, so a click and the
-/// rectangle drawn under it cannot disagree about where a node is.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct CanvasTransform {
-    /// Widget pixels per design pixel.
-    pub scale: f32,
-    /// The widget-space x of design x = 0.
-    pub offset_x: i32,
-    /// The widget-space y of design y = 0.
-    pub offset_y: i32,
+/// The type itself is the library's (`canvas::CanvasTransform`), not a host copy: both the layout
+/// pass and the pointer callbacks use this one transform, and a second implementation of the same
+/// mapping is exactly the kind of parallel path that drifts. What stays host-side is the *policy*
+/// (fit the design, or a zoom a person asked for) — a canvas does not know what a design page is.
+pub(super) fn fit_transform(rect: WidgetRect) -> CanvasTransform {
+    let scale = (rect.width as f32 / DESIGN_WIDTH as f32)
+        .min(rect.height as f32 / DESIGN_HEIGHT as f32)
+        .max(0.01);
+    scaled_transform(rect, scale)
 }
 
-impl CanvasTransform {
-    /// The transform for a control rect (design space is centred in it, never stretched).
-    pub(super) fn new(rect: WidgetRect) -> Self {
-        let scale = (rect.width as f32 / DESIGN_WIDTH as f32)
-            .min(rect.height as f32 / DESIGN_HEIGHT as f32)
-            .max(0.01);
-        Self::with_scale(rect, scale)
+/// The transform for an explicit scale, still centring the design space in the control.
+///
+/// A zoom the person asked for (`actual size`) keeps its scale even when the control is too small
+/// for the whole design; the overflow is centred rather than clamped, so the centre stays where it
+/// was.
+pub(super) fn scaled_transform(rect: WidgetRect, scale: f32) -> CanvasTransform {
+    let scale = scale.max(0.01);
+    CanvasTransform {
+        scale,
+        offset: Point::new(
+            rect.x + ((rect.width as f32 - DESIGN_WIDTH as f32 * scale) / 2.0) as i32,
+            rect.y + ((rect.height as f32 - DESIGN_HEIGHT as f32 * scale) / 2.0) as i32,
+        ),
     }
+}
 
-    /// The transform for an explicit scale, still centring the design space in the control.
-    ///
-    /// A zoom the person asked for (`actual size`) keeps its scale even when the control is too
-    /// small for the whole design; the overflow is centred rather than clamped, so the centre stays
-    /// where it was.
-    pub(super) fn with_scale(rect: WidgetRect, scale: f32) -> Self {
-        let scale = scale.max(0.01);
-        Self {
-            scale,
-            offset_x: rect.x + ((rect.width as f32 - DESIGN_WIDTH as f32 * scale) / 2.0) as i32,
-            offset_y: rect.y + ((rect.height as f32 - DESIGN_HEIGHT as f32 * scale) / 2.0) as i32,
-        }
-    }
-
-    /// A design-space rectangle in widget space.
-    pub(super) fn place(&self, node: Rect) -> WidgetRect {
-        WidgetRect::new(
-            self.offset_x + (node.x as f32 * self.scale) as i32,
-            self.offset_y + (node.y as f32 * self.scale) as i32,
-            ((node.width as f32 * self.scale) as u32).max(1),
-            ((node.height as f32 * self.scale) as u32).max(1),
-        )
-    }
-
-    /// A widget-space point in design space (used by the pointer callbacks).
-    pub(super) fn to_design(self, x: i32, y: i32) -> (i32, i32) {
-        let scale = f64::from(self.scale).max(0.01);
-        (
-            ((x - self.offset_x) as f64 / scale).round() as i32,
-            ((y - self.offset_y) as f64 / scale).round() as i32,
-        )
-    }
+/// A design-space rectangle in the library's rectangle type, for a transform to map.
+pub(super) fn canvas_rect(node: Rect) -> WidgetRect {
+    WidgetRect::new(node.x, node.y, node.width, node.height)
 }
 
 /// The design surface's view state: the zoom and the design aids (roadmap `design.tool.*`).
@@ -1033,10 +1012,17 @@ pub(super) struct CanvasView {
 
 impl CanvasView {
     /// The transform this view asks for on a control rect.
+    ///
+    /// The type is the library's, and so is the mapping: the host uses `rect`/`inverse_point`
+    /// instead of a second copy of the same arithmetic. What is *not* shared yet is who applies
+    /// it: the host draws canvas commands in surface coordinates, so the control's own transform
+    /// stays the identity. Handing the mapping to the control (model-coordinate commands plus
+    /// `Canvas::set_transform`) is a separate change with a visible effect on the library's
+    /// surface-space grid and unit-less rulers (log-20261103-2 §15.6).
     pub(super) fn transform(&self, rect: WidgetRect) -> CanvasTransform {
         match self.zoom {
-            Some(scale) => CanvasTransform::with_scale(rect, scale),
-            None => CanvasTransform::new(rect),
+            Some(scale) => scaled_transform(rect, scale),
+            None => fit_transform(rect),
         }
     }
 }
@@ -1072,9 +1058,9 @@ impl Layout for CanvasLayout {
 
     fn update(&self, rect: WidgetRect, widgets: &mut dyn FnMut(ObjectId, WidgetRect)) {
         widgets(self.canvas, rect);
-        let transform = CanvasTransform::new(rect);
+        let transform = fit_transform(rect);
         for (id, node) in &self.nodes {
-            widgets(*id, transform.place(*node));
+            widgets(*id, transform.rect(canvas_rect(*node)));
         }
     }
 
@@ -1122,7 +1108,7 @@ impl Layout for CanvasLayout {
 
 #[cfg(test)]
 mod tests {
-    use super::{CanvasState, CanvasView};
+    use super::{CanvasState, CanvasView, canvas_rect};
     use crate::app::canvas::drag::Move;
     use crate::app::canvas::scene::Rect;
     use crate::contracts::identity::NodeId;
@@ -1160,11 +1146,11 @@ mod tests {
         }
         .transform(WidgetRect::new(0, 0, 300, 200));
         assert!((actual.scale - 1.0).abs() < f32::EPSILON);
-        let placed = actual.place(Rect::new(0, 0, 100, 50));
+        let placed = actual.rect(canvas_rect(Rect::new(0, 0, 100, 50)));
         assert_eq!((placed.width, placed.height), (100, 50));
         // The design is centred in the smaller control, so the overflow is split evenly.
-        assert_eq!(actual.offset_x, -150);
-        assert_eq!(actual.offset_y, -100);
+        assert_eq!(actual.offset.x, -150);
+        assert_eq!(actual.offset.y, -100);
     }
 
     #[test]

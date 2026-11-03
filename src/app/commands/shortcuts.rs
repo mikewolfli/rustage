@@ -300,6 +300,71 @@ impl fmt::Display for Key {
     }
 }
 
+/// The host key for one library shortcut.
+///
+/// The library's window key handler speaks `shortcut::Shortcut` (canonical modifiers and a
+/// semantic key); this keymap speaks its own [`Key`]. The conversion is explicit because the two
+/// vocabularies differ: the library renders `Esc`/`Del`, and its `Primary` modifier is `Cmd` on
+/// macOS and `Ctrl` on the other hosts — which is exactly how [`Platform::keymap`] spells the
+/// bindings. A conversion that always wrote `Ctrl` would therefore match on Windows/Linux and miss
+/// every primary chord on macOS.
+///
+/// `None` when the key has no host spelling (an `F` key, a media key): the keymap cannot resolve
+/// it, so the window handler must not claim it.
+pub fn key_of_shortcut(
+    shortcut: &rust_widgets::shortcut::Shortcut,
+    platform: Platform,
+) -> Option<Key> {
+    use rust_widgets::shortcut::Key as LibraryKey;
+    use rust_widgets::shortcut::Modifiers as LibraryModifiers;
+
+    let code = match shortcut.key {
+        LibraryKey::Escape => KeyCode::Named(NamedKey::Escape),
+        LibraryKey::Tab => KeyCode::Named(NamedKey::Tab),
+        LibraryKey::Enter => KeyCode::Named(NamedKey::Enter),
+        LibraryKey::Space => KeyCode::Named(NamedKey::Space),
+        LibraryKey::Backspace => KeyCode::Named(NamedKey::Backspace),
+        LibraryKey::Delete => KeyCode::Named(NamedKey::Delete),
+        LibraryKey::Left => KeyCode::Named(NamedKey::Left),
+        LibraryKey::Right => KeyCode::Named(NamedKey::Right),
+        LibraryKey::Up => KeyCode::Named(NamedKey::Up),
+        LibraryKey::Down => KeyCode::Named(NamedKey::Down),
+        other => {
+            // Letters, digits and punctuation render as one character; `F1` and the like are two
+            // or three, and this keymap has no name for them.
+            let mut characters = other.format_key().chars();
+            match (characters.next(), characters.next()) {
+                (Some(character), None) => KeyCode::Char(character),
+                _ => return None,
+            }
+        }
+    };
+
+    let held = shortcut.modifiers;
+    let mut parts: Vec<&str> = Vec::new();
+    if held.contains(LibraryModifiers::PRIMARY) {
+        parts.push(platform.primary_name());
+    }
+    if held.contains(LibraryModifiers::CTRL) {
+        parts.push("Ctrl");
+    }
+    if held.contains(LibraryModifiers::ALT) {
+        parts.push("Alt");
+    }
+    if held.contains(LibraryModifiers::SHIFT) {
+        parts.push("Shift");
+    }
+    if held.contains(LibraryModifiers::META) && !held.contains(LibraryModifiers::PRIMARY) {
+        parts.push("Cmd");
+    }
+    let modifiers = if parts.is_empty() {
+        Modifiers::NONE
+    } else {
+        Modifiers::parse(&parts.join("+")).ok()?
+    };
+    Some(Key::new(modifiers, code))
+}
+
 /// A chord: one key, or two in sequence.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Chord(Vec<Key>);
@@ -912,6 +977,52 @@ mod tests {
         Key::parse(text).expect("a key")
     }
 
+    #[test]
+    fn a_library_shortcut_becomes_the_key_this_keymap_spells() {
+        use rust_widgets::shortcut::{Key as LibraryKey, Modifiers as LibraryModifiers, Shortcut};
+
+        let primary_z = Shortcut::new(LibraryKey::Z, LibraryModifiers::PRIMARY);
+
+        // On the desktop hosts the primary modifier is Ctrl, which is the spelling `built_in()`
+        // uses; the key resolves to edit.undo through the real table.
+        let linux = Platform::Linux;
+        let host = key_of_shortcut(&primary_z, linux).expect("a host key");
+        assert_eq!(host.code(), KeyCode::Char('Z'));
+        assert!(host.modifiers().uses_ctrl(), "primary is Ctrl here");
+        assert_eq!(
+            linux
+                .keymap()
+                .resolve(&[host], &Scene::in_mode("design", None)),
+            Resolution::Triggered {
+                command: "edit.undo".to_owned()
+            }
+        );
+
+        // On macOS the *bindings* are spelled with Cmd, so the incoming key must be too; a bridge
+        // that always wrote Ctrl would pass on Linux and miss every primary chord on macOS.
+        let mac = Platform::MacOs;
+        let host = key_of_shortcut(&primary_z, mac).expect("a host key");
+        assert!(host.modifiers().uses_meta(), "primary is Cmd here");
+        assert_eq!(
+            mac.keymap()
+                .resolve(&[host], &Scene::in_mode("design", None)),
+            Resolution::Triggered {
+                command: "edit.undo".to_owned()
+            }
+        );
+
+        let escape = Shortcut::new(LibraryKey::Escape, LibraryModifiers::NONE);
+        assert_eq!(
+            key_of_shortcut(&escape, linux).map(|key| key.code()),
+            Some(KeyCode::Named(NamedKey::Escape))
+        );
+
+        // The host keymap has no name for F5, so the window handler must decline rather than
+        // invent one.
+        let f5 = Shortcut::new(LibraryKey::F5, LibraryModifiers::NONE);
+        assert!(key_of_shortcut(&f5, linux).is_none());
+    }
+
     fn keymap() -> Keymap {
         let mut keymap = Keymap::new();
         keymap
@@ -934,7 +1045,7 @@ mod tests {
         keymap
             .add(Binding::new(
                 chord("Escape"),
-                "panel.close",
+                "view.panel-hide-current",
                 Scope::Panel("outline".into()),
             ))
             .expect("no conflict");
@@ -1048,7 +1159,7 @@ mod tests {
         assert_eq!(
             keymap.resolve(&[key("Escape")], &outline),
             Resolution::Triggered {
-                command: "panel.close".to_owned()
+                command: "view.panel-hide-current".to_owned()
             }
         );
         assert_eq!(

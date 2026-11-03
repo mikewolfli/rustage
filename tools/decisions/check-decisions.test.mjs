@@ -59,8 +59,8 @@ after(() => {
 test('the committed register, document and whitepaper pass', () => {
   const result = checkDecisions(root);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.stats.decisions, 10);
-  assert.equal(result.stats.open, 5);
+  assert.equal(result.stats.decisions, 13);
+  assert.equal(result.stats.open, 2);
 });
 
 test('describe names the decisions, the questions and the open items', () => {
@@ -155,10 +155,13 @@ test('a duplicate id across decisions and open entries is refused', () => {
 });
 
 test('an open entry without a reason is refused', () => {
+  // The index is the fixture's; the id comes from the committed register, so moving a decision
+  // between `decisions` and `openDecisions` does not silently retarget this negative case.
+  const first = register.openDecisions[0].id;
   const directory = fixture((data) => {
     data.openDecisions[0].reason = '';
   });
-  assert.match(messages(directory), /O-APP-ID\.reason must be a non-empty string/);
+  assert.match(messages(directory), new RegExp(`${first}\\.reason must be a non-empty string`));
 });
 
 test('an open entry that pretends to be decided is refused', () => {

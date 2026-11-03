@@ -73,34 +73,36 @@
 
 ## 2. 输出 profile 与设备（T00.03 的 15 格 + F18 多目标与部署）
 
-[支持矩阵](../plan/support-matrix.md) 的 15 格在 4.0.0 上重估：macOS 与 Linux x86_64 各五格取得
-`--lib` 构建记录，两个宿主各完成一次有界真实窗口运行；Windows 五格被上游 RW-101 阻断。
-构建通过不等于运行，因此没有任何 profile 格写成 `certified`：
+[支持矩阵](../plan/support-matrix.md) 的 15 格在 4.0.1 上重估：macOS 五格与 Windows 五格取得
+`--lib` 构建记录（Windows 为 xwin 交叉，RW-101 已修），macOS 完成一次有界真实窗口运行；
+Linux 尚未在 4.0.1 重跑，五格保持 `unverified`。构建通过不等于运行，因此没有任何 profile 格
+写成 `certified`：
 
-> **3.1.0 边界：** 下面 B1–B3 的 Linux 记录仍指向 2.8.11，不冒充 3.1.0 证据；B4–B7 已按
-> 3.1.0 重跑；3.0.0 的 Windows embedded `ToOwned` 缺口已由 3.1.0 关闭。
+> **4.0.1 边界：** B1–B3 的 Linux 记录停在 4.0.0，未冒充 4.0.1 证据；B4–B11 已按 4.0.1 重跑；
+> 3.1.0 的 Windows embedded `ToOwned` 缺口已在后续修订关闭。
 
 | # | 格 | 需要什么 | 状态 |
 |---|---|---|---|
-| B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ✅ `build-verified`：4.0.0 的 `--features desktop --lib` 与宿主 `cargo build --features linux-native --bin rustage` 均通过，并以 `--workbench-gui --exit-after-ms 3000` 建立真实窗口会话（[log-20261103-1](../log/log-20261103-1.md)）；生成物本身未链接，故不写 `certified` |
-| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接 | ✅ `build-verified`：4.0.0 以 `--no-default-features --features tablet|mobile --lib` 在 Linux x86_64 真实构建通过（[log-20261103-1](../log/log-20261103-1.md)）；未运行 |
-| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建 | ✅ `build-verified`：4.0.0 的 mini 与 embedded `--lib` 在 Linux x86_64 均构建通过（[log-20261103-1](../log/log-20261103-1.md)）；无目标设备，未运行 |
-| B4 | macos × desktop | macOS 机器 | ✅ `build-verified`：3.1.0 的 desktop rlib 与 `cargo build --bin rustage` 通过；有界真实窗口会话已运行（[log-20261029-1](../log/archived/log-20261029-11.md)） |
-| B5 | macos × tablet / mobile | macOS 上的 profile 构建（运行仍需目标 SDK/设备） | ✅ `build-verified`：3.1.0 的 tablet/mobile rlib 构建通过；未运行（[log-20261029-1](../log/archived/log-20261029-11.md)） |
-| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ✅ `build-verified`：3.1.0 的 mini/embedded rlib 构建通过；无目标设备，未运行（[log-20261029-1](../log/archived/log-20261029-11.md)） |
-| B7–B11 | windows × 五个 profile | Windows 机器（构建用交叉编译，运行仍需机器） | ✅ `build-verified`：3.1.0 的 desktop/tablet/mobile/mini/embedded 用 xwin 交叉构建通过；未运行（[log-20261029-11](../log/archived/log-20261029-11.md)） |
+| B1 | linux × desktop（模式 2 产物） | 生成本机 desktop 产物并构建 | ⏳ 待重跑：4.0.0 的 `--features desktop --lib` 与 `linux-native` GUI 会话通过（[log-20261103-1](../log/log-20261103-1.md)），但 4.0.1 未在 Linux 上复验；支持矩阵据此为 `unverified` |
+| B2 | linux × tablet / mobile | Linux target 的 profile rlib 与 cdylib 链接 | ⏳ 待重跑：4.0.0 的 tablet/mobile `--lib` 通过（[log-20261103-1](../log/log-20261103-1.md)），4.0.1 未复验 |
+| B3 | linux × mini / embedded | Linux target 的 `no_std` 构建 | ⏳ 待重跑：4.0.0 的 mini/embedded `--lib` 通过（[log-20261103-1](../log/log-20261103-1.md)），4.0.1 未复验 |
+| B4 | macos × desktop | macOS 机器 | ✅ `build-verified`：4.0.1 的 `cargo check`、目标套件与 `--workbench-gui --exit-after-ms 4000` 真实窗口会话通过（[log-20261103-2](../log/log-20261103-2.md)）；生成物本身未链接，不写 `certified` |
+| B5 | macos × tablet / mobile | macOS 上的 profile 构建（运行仍需目标 SDK/设备） | ✅ `build-verified`：4.0.1 的 tablet/mobile `--lib` 构建通过（[log-20261103-2](../log/log-20261103-2.md)）；未运行 |
+| B6 | macos × mini / embedded | 嵌入式工具链与板卡 | ✅ `build-verified`：4.0.1 的 mini/embedded `--lib` 构建通过（[log-20261103-2](../log/log-20261103-2.md)）；无目标设备，未运行 |
+| B7–B11 | windows × 五个 profile | Windows 机器（构建用交叉编译，运行仍需机器） | ✅ `build-verified`：4.0.1 的 desktop/tablet/mobile/mini/embedded 用 xwin 交叉构建通过（RW-101 已修），宿主 `--bin rustage` 也通过；未运行（[log-20261103-2](../log/log-20261103-2.md)） |
 | B12 | tablet/mobile 的**真设备**运行 | Android/iOS 真机 | ⏳ 待真机：路线图 T18.04 要求**模拟器与真设备分别记录**，不得互相顶替 |
 | B13 | mini/embedded 的容量与链接审计 | 目标设备 + 容量门禁 | ⏳ 部分：实际 profile build 通过，链接审计基于真实 `cargo tree`；无目标设备 |
 | B14 | 本地设备发现/选择/认证、打包导出与安装 | 每类设备 | ⏳ 部分：iOS/Android SDK 自动探测与真实设备发现已验证（xcrun simctl 11 台、adb 0 台）；macOS `codesign` 与 Linux `gpg` 均真实签名并验证；Windows `signtool` 与安装仍只到计划（[log-20261019-2 §5.8](../log/log-20261019-2.md)、[log-20261020-2 §6.3](../log/log-20261020-2.md)） |
-| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；3.1.0 有 macOS 与 Windows 各五格的构建级证据，没有 profile 产物在对应设备/OS 上运行（[log-20261029-11](../log/archived/log-20261029-11.md)） |
+| B15 | 五 profile 与静态核心一致性认证报告 | 需要以上全部证据 | ⏳ 部分：报告与一致性实测可用；4.0.1 有 macOS 与 Windows 各五格的构建级证据，Linux 待重跑；没有 profile 产物在对应设备/OS 上运行（[log-20261103-2](../log/log-20261103-2.md)） |
+| B16 | 工作台键盘路由（T04.08/T05.05） | 任一桌面真机会话（macOS/Windows/Linux） | ⏳ 待真机：窗口已安装 `set_key_handler`，单键 chord 应在 `app::run::workbench-keys` 日志中写出 `Ctrl+Z -> edit.undo`（macOS 为 `Cmd+Z`）；无头会话无法注入平台键事件，映射/解析由 `cargo test shortcuts` 与 `cargo test workbench_gui` 覆盖（[log-20261103-2 §13.8](../log/log-20261103-2.md)） |
 
 ## 3. 鸿蒙 2in1（不在"三宿主"内，单独跟踪）
 
 | # | 项 | 需要什么 | 状态 | 证据 / 缺口 |
 |---|---|---|---|---|
-| C1 | DevEco 工程 + ArkTS 入口 + Rust GUI 小样 | HarmonyOS SDK / DevEco | ⛔ 阻塞 | 当前只有清单与资源模板（[issue-20261013 §5](../issues/issue-20261013.md)） |
+| C1 | DevEco 工程 + ArkTS 入口 + NAPI 桥 | HarmonyOS SDK / DevEco | ⏳ 部分 | 脚手架已入库，Rust `.so`、NAPI 模块与 CMake 均实编实链；应用身份已于 2026-11-04 落定，`generate-resources.mjs` 可产出完整包树（`package-metadata: ok`、`installed-icon-name: ok`）。用一次性测试身份在 `/tmp` 跑 `hvigorw assembleHap` 得到 **unsigned HAP**（含 `libentry.so`/`librust_widgets.so`）（[log-20261103-2 §8/§14](../log/log-20261103-2.md)）。签名与真机启动仍待 C3 |
 | C2 | 2in1 设备上的窗口/绘制/事件循环承载 | 一台 2in1 设备 | ⛔ 阻塞 | 未通过承载小样前不得声明支持 |
-| C3 | 签名包安装、桌面分层图标、启动页、应用身份 | 签名身份 + 设备 | ⛔ 阻塞 | [issue-20261013 §5、§6](../issues/issue-20261013.md) |
+| C3 | 签名包安装、桌面分层图标、启动页、应用身份 | 签名身份 + 设备 | ⛔ 阻塞 | 应用身份已定（`io.github.mikewolfli.rustage`），剩余为签名与设备验收；[issue-20261013 §5、§6](../issues/issue-20261013.md) |
 
 ## 4. 性能与质量基线（T00.07 / T21）
 

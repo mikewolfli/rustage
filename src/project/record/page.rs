@@ -1,28 +1,31 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 mikewolfli
 // SPDX-License-Identifier: MIT
 
-//! A page's own document, format version 5: contract **C-PROJECT**.
+//! A page's own document, format version 7: contract **C-PROJECT**.
 //!
-//! A version 5 page document adds `motion` to the version 4 members:
+//! A version 7 page document adds the per-node `constraints` member to the version 6 nodes:
 //!
 //! | member | kind | meaning |
 //! |---|---|---|
-//! | `format` | whole number | the format version; required, and this build writes `5` |
+//! | `format` | whole number | the format version; required, and this build writes `7` |
 //! | `page` | object | `id`, `name` and `root`, all required |
-//! | `nodes` | array | one entry per node: `id` and `type` (both required), `children`, `properties` |
+//! | `nodes` | array | one entry per node: `id` and `type` (both required), `children`, `properties`, `layout`, `constraints` |
 //! | `states` | object or null | one explicit state machine, or null |
 //! | `collections` | array | one entry per collection control: columns, rows and source |
 //! | `components` | object | definitions, instances and variants |
 //! | `motion` | object | transitions and animations with their timing |
 //!
-//! Version 2 added `states` (T13.06), 3 `collections` (T27.01), 4 `components` (T12.01–T12.03)
-//! and 5 `motion` (T11.06). Older documents are read with the members they have and written back
-//! as version 5; a caller that writes a migrated document keeps the bytes it read (decision `Q6`).
+//! Version 2 added `states` (T13.06), 3 `collections` (T27.01), 4 `components` (T12.01–T12.03),
+//! 5 `motion` (T11.06), 6 the root node's `layout`, and 7 the per-node `constraints` (upstream
+//! RW-109, released in rust-widgets 4.0.1). Older documents are read with the members they have and
+//! written back as version 7; a caller that writes a migrated document keeps the bytes it read
+//! (decision `Q6`).
 //!
 //! A node is:
 //!
 //! ```json
-//! { "id": 2, "type": "button", "children": [3], "properties": [ { "name": "label", "value": { "text": "Save" } } ] }
+//! { "id": 2, "type": "button", "children": [3], "properties": [ { "name": "label", "value": { "text": "Save" } } ],
+//!   "layout": null, "constraints": { "min_width": 120, "margin": [8, 4] } }
 //! ```
 //!
 //! `children` and `properties` may be left out, which means "none" — the one place a version 1
@@ -78,13 +81,14 @@ use crate::project::record::json::{self, Json, JsonKind, JsonObject, Number};
 ///
 /// Its own sequence: a page document and a project document are different formats, and a member
 /// added to one of them says nothing about the other.
-pub const PAGE_FORMAT: FormatVersion = FormatVersion::from_raw(6);
+pub const PAGE_FORMAT: FormatVersion = FormatVersion::from_raw(7);
 
 /// The oldest page format this build reads. Version 1 has no `states`; version 2 has no
-/// `collections`; version 3 has no `components`; version 4 has no `motion`.
+/// `collections`; version 3 has no `components`; version 4 has no `motion`; version 5 has no root
+/// `layout`; version 6 has no per-node `constraints`.
 pub const PAGE_OLDEST_READABLE: FormatVersion = FormatVersion::from_raw(1);
 
-/// The member names a page document version 5 defines, in the order the writer writes them.
+/// The member names a page document version 7 defines, in the order the writer writes them.
 pub const PAGE_DOCUMENT_MEMBERS: [&str; 7] = [
     "format",
     "page",
@@ -96,7 +100,30 @@ pub const PAGE_DOCUMENT_MEMBERS: [&str; 7] = [
 ];
 
 /// The member names a node may have, in the order the writer writes them.
-pub const PAGE_NODE_MEMBERS: [&str; 5] = ["id", "type", "children", "properties", "layout"];
+pub const PAGE_NODE_MEMBERS: [&str; 6] = [
+    "id",
+    "type",
+    "children",
+    "properties",
+    "layout",
+    "constraints",
+];
+
+/// The constraint names a node's `constraints` object may carry (upstream RW-109).
+///
+/// Six size bounds, a margin and an overflow policy — the same spellings the library's
+/// `ChildLayoutAttrs` reads from a node's attribute object. Spelled here once so the page model,
+/// the translation and the panel cannot drift from each other or from the library.
+pub const PAGE_CONSTRAINT_MEMBERS: [&str; 8] = [
+    "min_width",
+    "min_height",
+    "pref_width",
+    "pref_height",
+    "max_width",
+    "max_height",
+    "margin",
+    "overflow",
+];
 
 /// One guarded transition in a page's state machine.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -1322,6 +1349,186 @@ impl PageLayout {
     }
 }
 
+/// One node's size, margin and overflow constraints (page format 7, upstream RW-109).
+///
+/// The members are kept in the order the document writes them and copied verbatim into the
+/// document generation consumes, where the library reads them from the node's attribute object as
+/// `ChildLayoutAttrs`. This module validates the *shape* of the eight known members; whether a
+/// layout kind honours one is the library's answer, reported in `GenerationReport::layout_issues`
+/// as a dropped field (for example `overflow`, which has no runtime carrier yet).
+///
+/// A member this build does not know is kept too: a newer build's constraint reaches the library,
+/// which names it, instead of being silently dropped by an older reader (the document's
+/// unknown-member policy).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PageConstraints {
+    members: Vec<(String, Json)>,
+}
+
+impl PageConstraints {
+    /// Constraints from their declarations, in the order given.
+    ///
+    /// The caller is responsible for the values being the shape the library reads; use
+    /// [`Self::from_json`] for a declaration read from a file.
+    pub fn new(members: impl IntoIterator<Item = (String, Json)>) -> Self {
+        Self {
+            members: members.into_iter().collect(),
+        }
+    }
+
+    /// The declarations, in the order they were written.
+    pub fn members(&self) -> &[(String, Json)] {
+        &self.members
+    }
+
+    /// One declared value by name.
+    pub fn get(&self, name: &str) -> Option<&Json> {
+        self.members
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    }
+
+    /// Whether nothing is declared.
+    pub fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
+
+    /// The declaration in one line, for a panel row.
+    pub fn render(&self) -> String {
+        self.members
+            .iter()
+            .map(|(name, value)| format!("{name}={}", value.render_compact()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The constraints as the object the page document carries.
+    pub fn to_json(&self) -> Json {
+        let mut out = JsonObject::new();
+        for (name, value) in &self.members {
+            out.insert(name.as_str(), value.clone());
+        }
+        Json::Object(out)
+    }
+
+    /// Reads a declaration, keeping every member verbatim after checking the shape of the ones
+    /// this build knows.
+    fn from_json(path: &str, value: &Json) -> Result<Self, ProjectError> {
+        let Some(object) = value.as_object() else {
+            return Err(ProjectError::WrongType {
+                path: path.to_owned(),
+                expected: "an object of node constraints",
+                found: value.kind(),
+            });
+        };
+        let mut members = Vec::with_capacity(object.len());
+        for (name, member) in object.iter() {
+            if name == "children" {
+                return Err(ProjectError::Inconsistent {
+                    path: format!("{path}.children"),
+                    reason: "the node's `children` array is the tree; a constraints object cannot \
+                             hold a second one"
+                        .to_owned(),
+                });
+            }
+            check_constraint(&format!("{path}.{name}"), name, member)?;
+            members.push((name.to_owned(), member.clone()));
+        }
+        Ok(Self { members })
+    }
+}
+
+/// Refuses a known constraint whose value the library could not read.
+///
+/// An unknown name is not refused: the library reports it as an unknown child attribute during
+/// generation, which is the one place that knows the complete attribute vocabulary (principle 12).
+fn check_constraint(path: &str, name: &str, value: &Json) -> Result<(), ProjectError> {
+    match name {
+        "min_width" | "min_height" | "pref_width" | "pref_height" | "max_width" | "max_height" => {
+            let Some(raw) = value.as_u64() else {
+                return Err(ProjectError::WrongType {
+                    path: path.to_owned(),
+                    expected: "a non-negative whole number of logical pixels",
+                    found: value.kind(),
+                });
+            };
+            if u32::try_from(raw).is_err() {
+                return Err(ProjectError::Unrepresentable {
+                    path: path.to_owned(),
+                    reason: format!("`{raw}` is larger than a logical-pixel extent can be"),
+                });
+            }
+        }
+        "margin" => {
+            // The library accepts one uniform value, `[vertical, horizontal]` or
+            // `[top, right, bottom, left]`; any other length is a typo, not a third spelling.
+            let mut lengths = Vec::new();
+            match value {
+                Json::Number(_) => {
+                    if value.as_u64().is_none() {
+                        return Err(ProjectError::WrongType {
+                            path: path.to_owned(),
+                            expected: "a non-negative whole number of logical pixels",
+                            found: value.kind(),
+                        });
+                    }
+                }
+                Json::Array(items) => {
+                    lengths.push(items.len());
+                    for (index, item) in items.iter().enumerate() {
+                        if item.as_u64().is_none() {
+                            return Err(ProjectError::WrongType {
+                                path: format!("{path}[{index}]"),
+                                expected: "a non-negative whole number of logical pixels",
+                                found: item.kind(),
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    return Err(ProjectError::WrongType {
+                        path: path.to_owned(),
+                        expected: "a whole number or a list of 1, 2 or 4 whole numbers",
+                        found: value.kind(),
+                    });
+                }
+            }
+            if let Some(length) = lengths.pop()
+                && !matches!(length, 1 | 2 | 4)
+            {
+                return Err(ProjectError::Inconsistent {
+                    path: path.to_owned(),
+                    reason: format!(
+                        "a margin list has 1, 2 or 4 values, not {length}; the library would \
+                         refuse this rather than reinterpret it"
+                    ),
+                });
+            }
+        }
+        "overflow" => {
+            let Some(token) = value.as_str() else {
+                return Err(ProjectError::WrongType {
+                    path: path.to_owned(),
+                    expected: "`clip`, `visible` or `scroll`",
+                    found: value.kind(),
+                });
+            };
+            if !matches!(token, "clip" | "visible" | "scroll") {
+                return Err(ProjectError::Inconsistent {
+                    path: path.to_owned(),
+                    reason: format!(
+                        "`{token}` is not an overflow policy; the library reads `clip`, \
+                         `visible` or `scroll`"
+                    ),
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// One node of a page document, as the file holds it.
 ///
 /// Deliberately not [`crate::contracts::model::Node`]: that type's parent and children links are
@@ -1336,6 +1543,7 @@ pub struct PageNode {
     properties: BTreeMap<PropertyName, PropertyValue>,
     children: Vec<NodeId>,
     layout: Option<PageLayout>,
+    constraints: Option<PageConstraints>,
     preserved: Preserved,
 }
 
@@ -1348,6 +1556,7 @@ impl PageNode {
             properties: BTreeMap::new(),
             children: Vec::new(),
             layout: None,
+            constraints: None,
             preserved: Preserved::default(),
         }
     }
@@ -1367,6 +1576,12 @@ impl PageNode {
     /// The same node with a container layout declaration.
     pub fn with_layout(mut self, layout: PageLayout) -> Self {
         self.layout = Some(layout);
+        self
+    }
+
+    /// The same node with size, margin and overflow constraints.
+    pub fn with_constraints(mut self, constraints: PageConstraints) -> Self {
+        self.constraints = Some(constraints);
         self
     }
 
@@ -1403,6 +1618,11 @@ impl PageNode {
     /// The container layout this node declares, when it declares one.
     pub fn layout(&self) -> Option<&PageLayout> {
         self.layout.as_ref()
+    }
+
+    /// The size, margin and overflow constraints this node declares (format 7).
+    pub fn constraints(&self) -> Option<&PageConstraints> {
+        self.constraints.as_ref()
     }
 
     /// What interpretation left over.
@@ -1850,6 +2070,13 @@ fn encode_node(node: &PageNode) -> Result<Json, ProjectError> {
         node.layout
             .as_ref()
             .map(PageLayout::to_json)
+            .unwrap_or(Json::Null),
+    );
+    out.insert(
+        "constraints",
+        node.constraints
+            .as_ref()
+            .map(PageConstraints::to_json)
             .unwrap_or(Json::Null),
     );
     node.preserved.adopt(&mut out);
@@ -2755,7 +2982,7 @@ fn interpret(
     let mut reader = Reader::object(String::new(), value)?;
     let _ = reader.take("format");
     let (page, page_preserved) = decode_page(&mut reader)?;
-    let mut nodes = decode_nodes(&mut reader)?;
+    let mut nodes = decode_nodes(&mut reader, version)?;
     let states = if version.get() >= 2 {
         decode_states(&mut reader)?
     } else {
@@ -2789,6 +3016,19 @@ fn interpret(
                 path: format!("nodes[{}].layout", node.id.get()),
                 reason: "a layout declaration belongs to the page's root node; the library solves \
                          one container per document"
+                    .to_owned(),
+            });
+        }
+    }
+    // Constraints describe how a parent places a node. The root is placed by the generation
+    // request's client size, so a constraint on it would be read by this build and ignored by the
+    // solve — the silent drop the format refuses rather than a second placement rule.
+    for node in &nodes {
+        if node.constraints.is_some() && node.id == page.root() {
+            return Err(ProjectError::Inconsistent {
+                path: format!("nodes[{}].constraints", node.id.get()),
+                reason: "size constraints describe how a parent places a node; the root is placed \
+                         by the generation request's size"
                     .to_owned(),
             });
         }
@@ -2891,10 +3131,13 @@ fn decode_page(reader: &mut Reader<'_>) -> Result<(Page, Preserved), ProjectErro
     Ok((page, member.finish()))
 }
 
-fn decode_nodes(reader: &mut Reader<'_>) -> Result<Vec<PageNode>, ProjectError> {
+fn decode_nodes(
+    reader: &mut Reader<'_>,
+    version: FormatVersion,
+) -> Result<Vec<PageNode>, ProjectError> {
     let mut nodes = Vec::new();
     for entry in sub_objects(reader, "nodes")? {
-        nodes.push(decode_node(entry)?);
+        nodes.push(decode_node(entry, version)?);
     }
     Ok(nodes)
 }
@@ -2963,7 +3206,9 @@ fn optional_string(reader: &mut Reader<'_>, name: &str) -> Result<Option<String>
 /// Public because a batch of edits (T03.02) writes the same node shape a page document writes, and
 /// a second decoder for it would be a second answer to "what is a node".
 pub fn node_from_json(at: &str, value: &Json) -> Result<PageNode, ProjectError> {
-    decode_node(Reader::object(at.to_owned(), value)?)
+    // A batch edit writes one node in the shape this build writes, so the current format's members
+    // (including `constraints`) are read exactly as the page reader reads them.
+    decode_node(Reader::object(at.to_owned(), value)?, PAGE_FORMAT)
 }
 
 /// The same node, written the way a page document writes it.
@@ -2985,7 +3230,7 @@ pub fn property_to_json(at: &str, value: &PropertyValue) -> Result<Json, Project
     encode_property_value(at, value)
 }
 
-fn decode_node(mut entry: Reader<'_>) -> Result<PageNode, ProjectError> {
+fn decode_node(mut entry: Reader<'_>, version: FormatVersion) -> Result<PageNode, ProjectError> {
     {
         let id = entry.required_u64("id")?;
         let kind = entry.required_string("type")?;
@@ -3052,12 +3297,26 @@ fn decode_node(mut entry: Reader<'_>) -> Result<PageNode, ProjectError> {
             None | Some(Json::Null) => None,
             Some(value) => Some(PageLayout::from_json(&entry.member_path("layout"), value)?),
         };
+        let constraints = if version.get() >= 7 {
+            match entry.take("constraints") {
+                None | Some(Json::Null) => None,
+                Some(value) => Some(PageConstraints::from_json(
+                    &entry.member_path("constraints"),
+                    value,
+                )?),
+            }
+        } else {
+            // A version 6 document does not define this member; leaving it in `preserved` keeps a
+            // newer build's content intact instead of reading it under an older version's rules.
+            None
+        };
         Ok(PageNode {
             id: NodeId::from_raw(id),
             kind,
             properties,
             children,
             layout,
+            constraints,
             preserved: entry.finish(),
         })
     }
@@ -3159,11 +3418,12 @@ mod tests {
     use crate::contracts::revision::FormatVersion;
     use crate::host::paths::ProjectRoot;
     use crate::project::record::format::{ProjectError, ReferenceVerdict};
+    use crate::project::record::json::Json;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The smallest document this build writes, spelled exactly the way the writer spells it.
-    const EMPTY: &str = "{\n  \"format\": 6,\n  \"page\": {\n    \"id\": 1,\n    \"name\": \"Main window\",\n    \"root\": 1\n  },\n  \"nodes\": [\n    {\n      \"id\": 1,\n      \"type\": \"page\",\n      \"children\": [],\n      \"properties\": [],\n      \"layout\": null\n    }\n  ],\n  \"states\": null,\n  \"collections\": [],\n  \"components\": {\n    \"definitions\": [],\n    \"instances\": [],\n    \"variants\": []\n  },\n  \"motion\": {\n    \"motions\": []\n  }\n}\n";
+    const EMPTY: &str = "{\n  \"format\": 7,\n  \"page\": {\n    \"id\": 1,\n    \"name\": \"Main window\",\n    \"root\": 1\n  },\n  \"nodes\": [\n    {\n      \"id\": 1,\n      \"type\": \"page\",\n      \"children\": [],\n      \"properties\": [],\n      \"layout\": null,\n      \"constraints\": null\n    }\n  ],\n  \"states\": null,\n  \"collections\": [],\n  \"components\": {\n    \"definitions\": [],\n    \"instances\": [],\n    \"variants\": []\n  },\n  \"motion\": {\n    \"motions\": []\n  }\n}\n";
 
     struct TempDirectory(PathBuf);
 
@@ -3514,7 +3774,7 @@ mod tests {
     fn a_version_this_build_does_not_write_is_refused_with_a_reason() {
         let sandbox = sandbox();
         let newer = sandbox.failure(
-            "{\"format\": 7, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
+            "{\"format\": 8, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
              \"nodes\": [{\"id\": 1, \"type\": \"page\"}]}",
         );
         assert!(matches!(newer, ProjectError::NewerFormat { .. }));
@@ -3725,7 +3985,7 @@ mod tests {
             version_one
         );
         let saved = std::fs::read_to_string(written.target()).expect("the written page");
-        assert!(saved.starts_with("{\n  \"format\": 6,"), "{saved}");
+        assert!(saved.starts_with("{\n  \"format\": 7,"), "{saved}");
         assert!(saved.contains("\"states\": null"), "{saved}");
     }
 
@@ -4073,6 +4333,111 @@ mod tests {
     }
 
     #[test]
+    fn node_constraints_round_trip_verbatim() {
+        let sandbox = sandbox();
+        let text = "{\"format\": 7, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
+             \"nodes\": [{\"id\": 1, \"type\": \"page\", \"children\": [2]}, \
+               {\"id\": 2, \"type\": \"button\", \"constraints\": \
+                 {\"min_width\": 120, \"pref_height\": 32, \"margin\": [8, 4], \
+                  \"overflow\": \"clip\"}}], \
+             \"states\": null, \"collections\": [], \
+             \"components\": {\"definitions\": [], \"instances\": [], \"variants\": []}, \
+             \"motion\": {\"motions\": []}}";
+        let document = sandbox.document(text);
+        let child = document
+            .nodes()
+            .iter()
+            .find(|node| node.id().get() == 2)
+            .expect("the child");
+        let constraints = child.constraints().expect("constraints");
+        assert_eq!(
+            constraints.get("min_width").and_then(Json::as_u64),
+            Some(120)
+        );
+        assert_eq!(
+            constraints.get("overflow").and_then(Json::as_str),
+            Some("clip")
+        );
+        assert_eq!(
+            constraints.render(),
+            "min_width=120, pref_height=32, margin=[8,4], overflow=\"clip\""
+        );
+
+        let saved = document.render().expect("writable");
+        let again = sandbox.document(&saved);
+        assert_eq!(again, document);
+        assert_eq!(again.render().expect("writable"), saved);
+    }
+
+    #[test]
+    fn invalid_constraints_are_refused_with_the_reason() {
+        let sandbox = sandbox();
+        let page = |node: &str| {
+            format!(
+                "{{\"format\": 7, \"page\": {{\"id\": 1, \"name\": \"P\", \"root\": 1}}, \
+                 \"nodes\": [{{\"id\": 1, \"type\": \"page\", \"children\": [2]}}, {node}], \
+                 \"states\": null, \"collections\": [], \
+                 \"components\": {{\"definitions\": [], \"instances\": [], \"variants\": []}}, \
+                 \"motion\": {{\"motions\": []}}}}"
+            )
+        };
+        for (node, reason) in [
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": [8]}",
+                "an object of node constraints",
+            ),
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": {\"min_width\": \"wide\"}}",
+                "non-negative whole number",
+            ),
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": {\"min_width\": 4294967296}}",
+                "larger than a logical-pixel extent",
+            ),
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": {\"margin\": [1, 2, 3]}}",
+                "1, 2 or 4 values",
+            ),
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": {\"margin\": [1, \"x\"]}}",
+                "non-negative whole number",
+            ),
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": {\"overflow\": \"hide\"}}",
+                "not an overflow policy",
+            ),
+            (
+                "{\"id\": 2, \"type\": \"button\", \"constraints\": {\"children\": []}}",
+                "second one",
+            ),
+        ] {
+            let error = sandbox.failure(&page(node));
+            assert!(
+                error.message().contains(reason),
+                "{node}: expected {reason:?}, found {}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
+    fn constraints_on_the_root_are_refused_by_name() {
+        let sandbox = sandbox();
+        let text = "{\"format\": 7, \"page\": {\"id\": 1, \"name\": \"P\", \"root\": 1}, \
+             \"nodes\": [{\"id\": 1, \"type\": \"page\", \"constraints\": {\"min_width\": 100}}], \
+             \"states\": null, \"collections\": [], \
+             \"components\": {\"definitions\": [], \"instances\": [], \"variants\": []}, \
+             \"motion\": {\"motions\": []}}";
+        let error = sandbox.failure(text);
+        assert!(
+            error.message().contains("nodes[1].constraints")
+                && error.message().contains("parent places a node"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
     fn the_generator_sees_which_members_it_cannot_consume() {
         let sandbox = sandbox();
         assert!(sandbox.document(EMPTY).unconsumed_by_generator().is_empty());
@@ -4138,7 +4503,7 @@ mod tests {
         assert!(document.states().is_none());
         assert_eq!(document.migrated_from(), Some(FormatVersion::from_raw(1)));
         let saved = document.render().expect("writable");
-        assert!(saved.starts_with("{\n  \"format\": 6,"), "{saved}");
+        assert!(saved.starts_with("{\n  \"format\": 7,"), "{saved}");
         assert!(saved.contains("\"states\": null"), "{saved}");
         assert!(saved.contains("\"collections\": []"), "{saved}");
         assert!(saved.contains("\"definitions\": []"), "{saved}");

@@ -1,0 +1,6 @@
+# Obfuscation rules for the release build.
+#
+# The native bridge is reached by name from ArkTS (`libentry.so`), and the page
+# names it as a module, so the module name must survive obfuscation. The rule is
+# empty on purpose until a release build exercises it; an invented exclusion list
+# would imply verification this scaffold does not have.

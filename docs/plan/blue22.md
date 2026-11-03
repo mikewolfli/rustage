@@ -4,7 +4,9 @@
 > 评审准则 [principle.md](./principle.md)；任务总账 [roadmap.md](./roadmap.md)；证据矩阵 [support-matrix.md](./support-matrix.md)。
 > 基线：宿主固定 rust-widgets **3.2.1（`be69fa2b`）**；probe 契约 **19/19 Verified**（2026-11-02，Linux x86_64，`cargo test probe::`）。
 > **本文只做任务登记与排序，不重复扫描证据**：每条的证据行号与消费点见 feedback-20261101.md 对应编号/章节。
-> 任务记号：`H-*` 宿主侧改动；`RW-*` 上游请求（blocked upstream）；`VCS-*` 既有缺陷；`M-*` 验证补证（回写支持矩阵）。
+> 任务记号：`H-*` 宿主侧改动；`RW-*` 上游请求；`VCS-*` 既有缺陷；`M-*` 验证补证（回写支持矩阵）。
+> **RW-1..100 已于 rust-widgets 4.0.0 关闭**（上游 `docs/log/log-20261102-1.md` §1 逐条落点；
+> 部分实现项见该文 §2 与本文 §4.0），§4.1–4.3 的表保留为**原始请求记录**；宿主收编进度见 §7。
 > 状态：全部 `open`，另注明依赖。不修改上游代码；不改宿主既有属性/方法/变量名（原则 #34）。
 >
 > **执行更新（2026-11-03）：** 宿主已升级到 rust-widgets **4.0.0（`1a30785`）**；批次 A 与
@@ -13,6 +15,33 @@
 > （Windows `WA_INACTIVE` 类型不匹配，4.0.0 源码未变）阻断；批次 C 的可行性结论见 §7。证据：
 > [log-20261103-1.md](../log/log-20261103-1.md) 与
 > [feedback-20261103.md](../rw-feedback/feedback-20261103.md)。
+>
+> **执行更新（第二轮）：** 宿主已升级到 rust-widgets **4.0.1（`ee4260d8`）**。RW-101 修复后
+> **M-3 关闭**（Windows xwin `--bin` + 五 profile `--lib` 全通过）；M-1/M-2 在 4.0.1 重跑通过；
+> 4.0.1 关闭的 RW-102/103/105/106/107/109/111/112/114/116 已在宿主收编，suites 增开
+> `maps`/`project`/`devtools`（目录 279 kind），页面格式升至 **v7**（节点 `constraints`）；
+> H-29 交付`--preview tiers:<page>`（三档求解），分档子树受 RW-117/118 阻塞；H-28 需产品决策。
+> M-4 需在 Linux 上按 4.0.1 重跑。证据：[log-20261103-2.md](../log/log-20261103-2.md)、
+> [feedback-20261104.md](../rw-feedback/feedback-20261104.md)。
+>
+> **执行更新（第三轮）：** 复核发现 **RW-1..100 已在 4.0.0 全部关闭**（上游
+> `docs/log/log-20261102-1.md` §1；7 项为具名部分实现），§4 长期标注的 “blocked upstream”
+> 已过期。本轮把宿主已有消费者的闭合项收编进工作台：**RW-11**（Inspector 差量行）、
+> **RW-12**（行级错误 + `cell_change_rejected`）、**RW-15**（命令面板 `with_enabled`/原因），
+> 见 [log-20261103-2.md](../log/log-20261103-2.md) §13。RW-117/118/119 仍为上游开放项。
+>
+> **执行更新（第四轮）：** T00.04 的应用身份/最低版本/发行形态已按项目方授权落定
+> （`O-APP-ID`/`O-MIN-OS`/`O-DIST` 登记为 `ratified`）；`packaging/identity.json` 为
+> `decided`，`generate-resources` 的 `package-metadata` 与 `installed-icon-name` 不再阻塞，
+> Linux 安装图标改用应用 ID 命名；签名与 2in1 真机仍待。证据：
+> [log-20261103-2.md](../log/log-20261103-2.md) §14。
+>
+> **执行更新（第五轮，2026-11-04）：** 宿主收编 **RW-53**（关窗否决 / 未保存修改拦截；拒绝后用库
+> `ConfirmDialog` 问“退出并放弃 / 继续编辑”，菜单退出走同一道闸）。
+> 其前置缺陷一并修复：GUI 编辑器从不把文本写回文档模型，导致保存写入旧内容、命令回写抹掉输入、
+> 脏状态永远为假、状态栏永远指着 `src/main.rs`；同时发现 `CodeEditor::set_text` 会压入撤销
+> 检查点，宿主加载文档后必须 `clear_history()`，否则 Ctrl+Z 会清空缓冲区。证据：
+> [log-20261103-2.md](../log/log-20261103-2.md) §15。**未修改上游代码**；RW-117/118/119 仍未关闭。
 
 ## 0. 已关闭（不再计入任务）
 
@@ -97,16 +126,36 @@
 |---|---|---|---|
 | M-1 | macOS 五 profile `--lib` 构建（3.2.1） | `cargo build --manifest-path <rust-widgets>/Cargo.toml --no-default-features --features <profile> --lib`（macOS aarch64） | `macos × tablet/mobile/mini/embedded` 四格由 `unverified` 升级 |
 | M-2 | macOS GUI 有界会话（3.2.1） | `--workbench-gui --exit-after-ms 4000` 真实窗口 | `macos` 宿主由 `build-verified` 恢复 `certified` |
-| M-3 | Windows xwin 交叉构建（3.2.1） | rust-lld + xwin 的 `--bin rustage` 与五 profile `--lib` | `windows` 行五格升级 |
+| M-3 | Windows xwin 交叉构建（3.2.1） | rust-lld + xwin 的 `--bin rustage` 与五 profile `--lib`；**4.0.1 已完成（RW-101 已修），见 log-20261103-2 §7** | `windows` 行五格升级 |
 | M-4 | Linux `linux-native`（GTK）构建与 GUI 运行（3.2.1） | `cargo build --features linux-native` + 窗口会话 | `linux` 宿主由 `build-verified` 评估 `certified` |
 
-当前矩阵基线（2026-11-03，4.0.0）：10 `unverified` / 5 `build-verified`（macOS 宿主 `certified`；校验脚本 PASS）。补证必须附命令、环境、日期，不拿旧修订证据冒充（矩阵规则 2/4）。
+当前矩阵基线（2026-11-03 第二轮，4.0.1）：5 `unverified` / 10 `build-verified`（macOS 宿主 `certified`，Windows 五格 `build-verified`，Linux 因未在本修订重跑为 `unverified`；校验脚本 PASS）。补证必须附命令、环境、日期，不拿旧修订证据冒充（矩阵规则 2/4）。
 
-## 4. 上游请求（RW 系列，blocked upstream）
+## 4. 上游请求（RW 系列）
 
-共 105 条，证据与修法建议全部见 feedback-20261101.md 对应编号（本表只登记标题与宿主阻塞点）。上游未关闭前，相关宿主任务标注 `blocked`，不自行实现替代语义（原则 #25）。
+### 4.0 状态（2026-11-04 复核）
 
-### 4.1 P1（25 条，阻断 roadmap 验收或迫使宿主手写绕行）
+**RW-1..100 已全部关闭，不再构成上游阻塞。** 证据：上游
+`docs/log/log-20261102-1.md` §1（第 1–13 轮逐条落点）与 §2（完成度）；
+`CHANGELOG.md` 的 4.0.0 节把其中 RW-44/58/63 列为公开发布项。
+
+**具名部分实现（7 项，上游已写明边界，不是遗留缺口）：**
+
+| 条目 | 上游状态 | 宿主是否可消费 |
+|---|---|---|
+| RW-36 设计器图标名 | 13 个有真实字形的别名；6 个无字形不伪造 | 可（目录按别名解析） |
+| RW-44 隐藏 setter 面 | slider 的 9 个 setter 进表，其余记入 `PROGRAMMATIC_ONLY_SETTERS` | 可 |
+| RW-45 绑定/发射计数 | `bindings_of` 可读；运行时无每信号订阅计数 | 可（有边界） |
+| RW-58 通用滚动 | 3.2.1 的 `ScrollableSurface` + 4.0.0 的 `ScrollableRows`（31 行容器） | 可 |
+| RW-60 文档/脚本漂移 | 快照门控与多份 census 已重生成，未逐项复核 | 可 |
+| RW-63 handle 平价 | 新增四类 handle + `geometry/is_focused`；`on_focus_gained/lost` 未加 | 可（宿主按 kind downcast） |
+| RW-98 占位符格式化 | 类型化插值 + 数字格式；Calendar 月/星期名未接 i18n | 可（有边界） |
+
+因此 §4.1–4.3 的表**只作为原始请求记录保留**（便于追溯“当时为什么阻塞”），不再
+表示当前状态。宿主侧收编是按消费者的排产问题，见 §7 与
+[feedback-20261104.md](../rw-feedback/feedback-20261104.md) §0.1。
+
+### 4.1 原始记录：P1（25 条）
 
 | ID | 标题 | 宿主阻塞点 |
 |---|---|---|
@@ -133,14 +182,14 @@
 | RW-88 | macOS 像素滚动增量当槽计数 | macOS 画布滚动手感 |
 | RW-89 | Windows/Linux 横向滚轮分量被丢 | 画布/时间线横向平移 |
 | RW-96 | 运行时语言切换无失效机制 | 设计器语言切换 |
-| RW-109 | 声明式文档无每节点 min/max/pref、margin、overflow 字段 | T10.03 约束进入生成、`panel.layout` |
-| RW-111 | 默认产物不带已求解布局坐标，文件头仍声称已求解 | `panel.layout` 的“声明进生成”、默认产物布局 |
+| RW-109 | 声明式文档无每节点 min/max/pref、margin、overflow 字段 | T10.03 约束进入生成、`panel.layout` —— **4.0.1 已解决（`ChildLayoutAttrs` + `child_hints`/`child_margin`），宿主已消费（页面格式 v7 节点 `constraints`、`panel.layout`），见 log-20261103-2 §4** |
+| RW-111 | 默认产物不带已求解布局坐标，文件头仍声称已求解 | `panel.layout` 的“声明进生成”、默认产物布局 —— **4.0.1 已解决（`layout_geometry_gaps`），宿主已消费（`panel.layout` 逐条显示），见 log-20261103-2 §3** |
 
-### 4.2 P2（40 条）
+### 4.2 原始记录：P2（40 条）
 
 RW-2（StatusBar/ToolBar 嵌入只收 Box<dyn Widget>）、RW-3（ToolButton 无 tooltip）、RW-6（ColumnSpec 无数据类型）、RW-8（无公开内存表模型）、RW-10（树项无图标）、RW-11（PropertyGrid 无差量行更新）、RW-12（PropertyGrid 无行级错误）、RW-15（CommandPalette 条目无 enabled）、RW-17（集合控件无空态/错误态）、RW-22（书签生命周期）、RW-23（导航栈）、RW-27（类型化校验通道）、RW-31（模型空间网格）、RW-32（标尺与对齐参考线）、RW-34（A11yRole 无 name）、RW-36（IconName 缺 19 个语义名）、RW-38（i18n 无逐语言目录访问）、RW-39（inject_translations 无热重载路径）、RW-44（隐藏 setter 面未收编）、RW-47（layout schema 未接生成器——**4.0.0 已接通诊断与根容器求解**）、RW-49（apply_layout_with_context）、RW-54（窗口位置 get/set）、RW-57（整树断言工具）、RW-58（通用 scroll 原语）、RW-62（条目级 tooltip 永不渲染）、RW-63（handle 平价 Top15）、RW-64（SaveState 未实现清单）、RW-65（a11y 表 132/230 Unknown）、RW-66（信号命名混乱）、RW-68（图表数据不进 data_binding）、RW-69（数据变更不可观测）、RW-70（Heatmap 数据无属性）、RW-71（RadarChart axes/series 无属性）、RW-81（媒体三伴件未注册）、RW-82（VideoPlayer 缺 source 属性）、RW-90（无 debounce/throttle）、RW-91（无 queued connection）、RW-92（Tab 焦点不按窗口限定）、RW-97（无 BCP-47 回退链）、RW-112（`CodeEditorConfig` 只在构造时可设，运行期无 `set_config`/逐字段 setter；行号/空白/小地图/自动折行无法切换，见 feedback-20261103）。
 
-### 4.3 P3（39 条）
+### 4.3 原始记录：P3（39 条）
 
 RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14（cell_changed 只带 row/text；Inspector 选型已定，见决策 4）、RW-16（CommandPalette 无动态 provider；过滤归属已定，见决策 4）、RW-18（懒加载失败无消息位/TreeTable、ListView 无编辑）、RW-24（环绕选择/inline diff）、RW-28（无取消信号）、RW-33（光标形状/平移手势）、RW-35（无逐控件 role 覆盖）、RW-37（图标 RTL 镜像）、RW-40（方向映射/复数类别）、RW-45（bindings_of/发射计数）、RW-46（verify_target 无离线通道）、RW-50（Absolute 无 by-id 改位）、RW-51（Grid 无分数单位）、RW-55（IME/Linux text_scale）、RW-59（基准缺口）、RW-60（上游文档漂移）、RW-72（图表动画无进度 setter）、RW-73（BarChart 多序列无增量）、RW-74（LineChart 点级无增量）、RW-75（ChartDataTable/ZoomStrip attach 未上移）、RW-76（Gantt 任务无差量 CRUD）、RW-77（ChartCrosshair 未注册）、RW-78（Volume/Indicator 无流式入口）、RW-79（QuoteBoard 无属性/增量）、RW-80（OrderBook book 无属性）、RW-83（Lottie/AnimatedImage 缺 current_frame）、RW-84（AnimatedImage 无文件加载）、RW-85（Rive 无 progress setter）、RW-86（AudioVisualizer 无样例数据）、RW-87（ChapterListPanel 无差量）、RW-93（FocusPolicy 未接运行时）、RW-94（无信号级整体暂停）、RW-95（手势引擎只吃 Touch）、RW-98（占位符无类型化/本地化格式化）、RW-99（token 编辑不发 on_theme_changed）、RW-100（drum_column/preset_chip_bar/thumbnail_cache 未注册）、RW-113（跳转栏只有 open/commit，无写入目标行的入口，`nav.open.*` 无法命令化）、RW-114（结构选择只有扩大没有缩小）、RW-115（CodeLens 只能整体替换，无可见性开关）、RW-116（设计器不公开已求解的节点几何，页面无法绑定画布）。
 
@@ -152,16 +201,24 @@ RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14�
 
 ## 5. 依赖与建议执行顺序
 
-**上游依赖链（宿主任务先等上游）**：
-- H-14 的剩余收编 ⇢ RW-63；H-4 的更完整形态 ⇢ RW-14；H-5 的完全退役 ⇢ 上游逐行 set text；H-20 的条目级 tooltip ⇢ RW-62；H-12 的完整精度 ⇢ RW-13；H-10 的接线覆盖面 ⇢ RW-45。
-- 依赖已就绪、可立即动的：H-1、H-2、H-3、H-6、H-7、H-8、H-12（基础字段）、H-13、H-25、H-15、H-16、H-18、H-19、H-21、H-22、H-23、H-24。
+**上游依赖链（已解除）**：H-14 的剩余收编 ⇢ RW-63（4.0.0 已提供 `geometry/is_focused` 与四类
+handle，每控件焦点订阅仍未加）；H-4 的更完整形态 ⇢ RW-14（`property_committed` 已提供）；
+H-5 的完全退役 ⇢ 上游逐行 set text（4.0.0 的 `ScrollableRows` 只解决行滚动）；H-20 的条目级
+tooltip ⇢ RW-62（已提供 `entry_tooltip_at` + `note_entry_hover`）；H-12 的完整精度 ⇢ RW-13
+（已提供 `NumberBounds{min,max,step}`）；H-10 的接线覆盖面 ⇢ RW-45（`bindings_of` 可读，无发射计数）。
+
+- 宿主侧可立即动的上游闭合项（按真实消费者挑选，不为了“用上 API”而加开关）：
+  RW-11/12/15（本轮已收编）、RW-62（ToolBar/TabWidget 条目 hint 已存在，宿主无长文本条目）、
+  RW-63（已有 typed handle 的控件）、RW-96（`on_language_changed` + `register_retranslator`，
+  但宿主尚无运行期语言切换命令）。
 
 **建议顺序**：
 1. **批次 A**（1.1，全部即改即消，无上游依赖）——先关闭 H-1..H-8/H-12..H-16/H-25。
 2. **VCS-1** 与 **M-1..M-4** 可与 A 并行（互不改同一文件：VCS-1 在 `tests/`，M 在构建验证）。
 3. **批次 B**（1.2）——按 H-18 → H-19/H-20/H-21 → H-22/H-23/H-24 排。
 4. **批次 C**（1.3）——逐项可行性验证后再排产。
-5. **RW 系列**：按 4.1 → 4.2 → 4.3 向上游提；每次上游升级后重扫本表状态并回写 feedback。
+5. **RW 系列**：RW-1..100 已关闭；剩余工作是把闭合项按真实消费者收编进宿主（不新造开关）。
+   RW-117/118/119 仍是上游开放项，其中 RW-117/118 阻塞 H-29 完整形态。
 
 **统一验收**：每条任务完成后回写 (a) 本表状态、(b) feedback 对应编号的关闭证据、(c) roadmap 任务行（如适用）、(d) 涉及矩阵的写 support-matrix JSON+MD 并跑校验脚本。
 
@@ -173,23 +230,26 @@ RW-4（TabWidgetHandle 便利层）、RW-13（Number 无边界参数）、RW-14�
 - 不新增自造控件：宿主侧任务一律优先消费上游能力（原则：控件全部来自 rust-widgets）。
 - 已知未覆盖：`benches/` 性能实测、Windows/macOS 实机运行、GPU 呈现路径运行行为；这些属 M 系列扩展，见 support-matrix 规则 2/4。
 
-## 7. 执行状态（2026-11-03）
+## 7. 执行状态（2026-11-04）
 
-证据与验证命令见 [log-20261103-1.md](../log/log-20261103-1.md)。
+证据与验证命令见 [log-20261103-1.md](../log/log-20261103-1.md)、
+[log-20261103-2.md](../log/log-20261103-2.md)（第三轮见其 §13）。
 
 | 组 | 已关闭 | 未完成 / 依据 |
 |---|---|---|
 | 批次 A | H-1、H-2、H-3、H-4、H-6、H-7、H-8、H-12、H-15、H-16、H-17、H-25；H-13/H-14 复核为已满足 | 无 |
 | 批次 B | H-5、H-10、H-11、H-18、H-19、H-21、H-22、H-23、H-24、H-20、H-36 | 无（H-21 前置资产面板、H-22/H-23 前置主题面板已装配） |
-| 批次 C | H-26（`--catalog census`）、H-27（`--catalog svg:<dir>`）、H-30（`--style … resolve`）、H-31（`--catalog icons`）、H-33（目录逐列对齐 manifest + 单一工厂测试）、H-34（`--preview paint:<path>:<w>x<h>` 的 SVG 帧）、H-32/H-35（`--audit` 每平台清点 + `--launch --smoke` 前置检查） | H-28：缺 HarmonyOS SDK/工具链；H-29：文档模型尚无断点字段 |
+| 批次 C | H-26（`--catalog census`）、H-27（`--catalog svg:<dir>`）、H-30（`--style … resolve`）、H-31（`--catalog icons`）、H-33（目录逐列对齐 manifest + 单一工厂测试）、H-34（`--preview paint:<path>:<w>x<h>` 的 SVG 帧）、H-32/H-35（`--audit` 每平台清点 + `--launch --smoke` 前置检查）、**H-28（`packaging/harmonyos` 的 ArkTS 页 + NAPI 桥 + CMake；C++/CMake 实编实链；应用身份已于 2026-11-04 落定，生成器可产出完整包树；签名仍按发布机配置、未上真机）** | H-29：`--preview tiers:<page>[:<dir>]` 已交付三档宽度求解与可选三份 SVG 帧，分档子树受上游 RW-117/118 阻塞 |
 | VCS | VCS-1 | 无 |
-| M | M-1（macOS 四 profile）、M-2（GUI 有界会话）、M-4（Linux native GTK 构建与 GUI 会话；Linux 五 profile `--lib` 构建） | M-3：上游 RW-101 阻断（4.0.0 `types.rs:540` 未变） |
-| RW | 新增 RW-101（Windows 编译回归，P1）、RW-102（manifest 配套类型未根级重导出，P3）、RW-103（命令枚举参数无 tokens，P2）、RW-104（无事件/无命令控件清单待上游确认，P3）、RW-105（suites 四个控件的 designer manifest 不可导出，P1）、RW-106（新注册控件缺设计期写路径，P2）、RW-107（manifest 不表达伴件与宿主配对，P3）；**复核关闭 RW-42（逐节点锚点）、RW-43（JSON↔ViewEngine）、RW-47（layout 诊断/根容器求解）——4.0.0 已落地，见 feedback-20261103 §RW-108/§RW-110**；新增 RW-108..RW-116（4.0.0 复核、编辑器设置/跳转栏入口、结构选择缩小、CodeLens 可见性与设计器求解几何，见 feedback-20261103）；RW-42 已在宿主侧消费（`panel.outline` 节点关联，log §44） | 其余 RW 仍待上游 |
+| M | M-1（macOS 四 profile，4.0.1 重跑）、M-2（macOS GUI 有界会话，4.0.1）、M-3（Windows xwin `--bin` + 五 profile `--lib`，RW-101 已修） | M-4：需在 Linux 上按 4.0.1 重跑 |
+| RW | 4.0.1 关闭并已收编：RW-101/102/103/105/106/107/109/111/112/114/116；4.0.0 已关闭、本轮收编：**RW-11**（Inspector 差量行）、**RW-12**（行级错误 + `cell_change_rejected`）、**RW-15**（命令面板启用态）、**RW-16**（命令面板刷新保留高亮）、**RW-58 的行滚动半**（预览状态保留）；**RW-53**（关窗否决：脏缓冲区拒绝关闭并具名，确认用库 `ConfirmDialog`；前置的编辑器→模型同步与脏状态同轮修复）；说明：RW-113 由控件内置跳转栏覆盖、RW-115 宿主无 CodeLens 生产者故不加假开关；新增 RW-117（JSON 预览不消费根 `layout`、无 breakpoint 子树）、RW-118（preview paint 不按视口重解）、RW-119（Harmony NAPI 流程文档未写“必须带设备 profile”），见 feedback-20261104；RW-1..100 其余**已在 4.0.0 关闭**，宿主按真实消费者逐步收编 | 上游开放：RW-117/118/119；宿主收编待排：RW-62/63/96 等 |
 
-**4.0.0 suites 分组（2026-11-03）：** 宿主启用 `form`/`webview`/`finance`/`media-playback` 后目录
-242 → **261 kind**（新增 19），`--catalog audit` 为 0 unsupported / 0 caveat。`maps`/`project`/`devtools`
-因 RW-105 暂不启用，原因写在 `Cargo.toml` 注释与 feedback-20261103 §RW-105；修好后可一行开启。
+**4.0.1 suites 分组（2026-11-03）：** 宿主在 4.0.0 已启用 `form`/`webview`/`finance`/`media-playback`
+（242 → 261 kind）；4.0.1 修复 RW-105 后追加 `maps`/`project`/`devtools`，目录 **279 kind**，
+`--catalog audit` 为 0 unsupported / 0 caveat、279 manifest 全部可读。原因与证据见
+[log-20261103-2.md](../log/log-20261103-2.md) §1。
 
-**矩阵（JSON+MD 同步，校验 PASS：5 `unverified` / 10 `build-verified`）：** macOS 与 Linux 宿主
-均为 `certified`，两宿主 × 五 profile 均 `build-verified`；windows × 五 profile 因 RW-101 维持
-`unverified`。Linux 证据为 4.0.0 上五个 `--lib` 构建与 `linux-native`（GTK3）GUI 有界会话。
+**矩阵（JSON+MD 同步，校验 PASS：5 `unverified` / 10 `build-verified`）：** macOS 宿主 `certified`，
+macOS 五格 `build-verified`；Windows 五格升为 `build-verified`（xwin 交叉构建，未实机运行，
+设计器宿主仍 `unverified`）；Linux 因未在 4.0.1 重跑降为 `unverified`（4.0.0 证据保留引用）。
+证据与命令见 [log-20261103-2.md](../log/log-20261103-2.md) §7/§10。

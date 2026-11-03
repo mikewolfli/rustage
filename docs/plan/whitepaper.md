@@ -1375,6 +1375,13 @@ my-app/
 `F1`、`F2`、`U1`、`C1` 是本轮新增的四项策略，不属于 §8 悬置问题，同样登记在
 [decisions.md](decisions.md)。
 
+**应用身份与发行形态（2026-11-04 按项目方授权落定）**：不属于 §8 悬置问题，但同样登记为
+`ratified`——`O-APP-ID`（`io.github.mikewolfli.rustage`）、`O-MIN-OS`（Windows 10.0.17763 /
+macOS 11.0 / Linux glibc 2.31 / HarmonyOS 5.1.0(18)）、`O-DIST`（macOS .dmg、Windows 便携
+.zip、Linux .tar.gz、HarmonyOS .hap；首版不要求单文件）。取值、备选与理由见
+[decisions.md](decisions.md) 与 [`packaging/identity.json`](../../packaging/identity.json)；
+签名凭据不入库，由各发布机自行配置。
+
 ### 17.8 分阶段开发与验收门槛
 
 各阶段的验收以可操作结果为准，不以控件数量或界面截图代替。

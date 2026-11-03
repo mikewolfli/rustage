@@ -166,6 +166,16 @@ impl Menu {
         found
     }
 
+    /// The command id a leaf names, without its `?name=value` arguments.
+    ///
+    /// A menu leaf may carry arguments (`view.panel-show?panel=outline`), the same spelling the
+    /// palette and a key action use. The registry knows the id, not the argument string, so every
+    /// registry comparison goes through this split. Duplicate detection keeps the full spelling:
+    /// two leaves with different arguments are different places, not an alias.
+    pub fn command_id(command: &str) -> &str {
+        command.split('?').next().unwrap_or(command)
+    }
+
     /// Checks the menu against the registry, and reports what does not line up.
     ///
     /// The three checks are the acceptance line plus the two mismatches around it: an implemented
@@ -176,19 +186,21 @@ impl Menu {
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
         for (path, item) in self.leaves() {
             match item {
-                Item::Command { command, .. } => match registry.why_not_exists(command) {
-                    None => {
-                        if let Some(previous) = seen.insert(command.clone(), path.clone()) {
-                            problems.push(format!(
-                                "{path} and {previous} both bind {command}; a menu item is a place, so an \
-                                 alias is a second command with its own id"
-                            ));
+                Item::Command { command, .. } => {
+                    match registry.why_not_exists(Self::command_id(command)) {
+                        None => {
+                            if let Some(previous) = seen.insert(command.clone(), path.clone()) {
+                                problems.push(format!(
+                                    "{path} and {previous} both bind {command}; a menu item is a \
+                                     place, so an alias is a second command with its own id"
+                                ));
+                            }
                         }
+                        Some(reason) => problems.push(format!("{path} binds {command}: {reason}")),
                     }
-                    Some(reason) => problems.push(format!("{path} binds {command}: {reason}")),
-                },
+                }
                 Item::Planned { command, task, .. } => {
-                    if registry.why_not_exists(command).is_none() {
+                    if registry.why_not_exists(Self::command_id(command)).is_none() {
                         problems.push(format!(
                             "{path} is marked planned for {task} but {command} is registered; the menu \
                              would be hiding a command that works"
@@ -377,14 +389,13 @@ pub fn built_in() -> Vec<Menu> {
                         Item::command("Release", "view.mode-release"),
                     ],
                 ),
-                Item::planned("Close Panel", "panel.close", "T04.02"),
                 Item::planned("Activate Tree Item", "tree.activate", "T04.02"),
                 Item::submenu(
                     "panels",
                     "Panels",
                     vec![
-                        Item::planned("Outline", "panel.outline", "T04.02"),
-                        Item::planned("Inspector", "panel.inspector", "T04.02"),
+                        Item::command("Outline", "view.panel-show?panel=outline"),
+                        Item::command("Inspector", "view.panel-show?panel=inspector"),
                     ],
                 ),
             ],
@@ -421,6 +432,12 @@ pub fn built_in() -> Vec<Menu> {
                         Item::command("Show Outline", "code.outline"),
                         Item::command("Show Breadcrumbs", "code.breadcrumbs"),
                         Item::command("Toggle Inlay Hints", "code.inlay-hints"),
+                        Item::separator(),
+                        Item::command("Toggle Line Numbers", "code.line-numbers"),
+                        Item::command("Toggle Minimap", "code.minimap"),
+                        Item::command("Toggle Word Wrap", "code.word-wrap"),
+                        Item::command("Toggle Whitespace", "code.whitespace"),
+                        Item::separator(),
                         Item::command("Toggle Bookmark", "code.bookmark-toggle"),
                     ],
                 ),
@@ -651,7 +668,7 @@ mod tests {
             .expect("a View menu");
         let render = view.render().join("\n");
         assert!(
-            render.contains("View > Panels -> panel.outline (planned: T04.02)"),
+            render.contains("View > Panels -> view.panel-show?panel=outline"),
             "{render}"
         );
         assert!(render.contains("View -> view.welcome"), "{render}");
@@ -691,10 +708,28 @@ mod tests {
         for menu in built_in() {
             for (title, command) in menu.commands() {
                 assert!(
-                    CommandId::parse(&command).is_some(),
+                    CommandId::parse(Menu::command_id(&command)).is_some(),
                     "{title} names {command}, which is not a command id"
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_leaf_with_arguments_names_a_registered_command_and_two_arguments_are_two_places() {
+        let registry = registry();
+        let menu = Menu::new(
+            "view",
+            "View",
+            vec![
+                Item::command("Outline", "view.panel-show?panel=outline"),
+                Item::command("Inspector", "view.panel-show?panel=inspector"),
+            ],
+        );
+        assert!(
+            menu.problems(&registry).is_empty(),
+            "{:?}",
+            menu.problems(&registry)
+        );
     }
 }

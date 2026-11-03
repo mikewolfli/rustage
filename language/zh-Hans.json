@@ -118,6 +118,24 @@
     "cmd.code.inlay-hints.title": {
       "message": "切换内联提示"
     },
+    "cmd.code.line-numbers.category": {
+      "message": "代码"
+    },
+    "cmd.code.line-numbers.description": {
+      "message": "运行时显示或隐藏行号槽"
+    },
+    "cmd.code.line-numbers.title": {
+      "message": "切换行号"
+    },
+    "cmd.code.minimap.category": {
+      "message": "代码"
+    },
+    "cmd.code.minimap.description": {
+      "message": "运行时显示或隐藏小地图"
+    },
+    "cmd.code.minimap.title": {
+      "message": "切换小地图"
+    },
     "cmd.code.outline.category": {
       "message": "代码"
     },
@@ -144,6 +162,24 @@
     },
     "cmd.code.unfold.title": {
       "message": "展开块"
+    },
+    "cmd.code.whitespace.category": {
+      "message": "代码"
+    },
+    "cmd.code.whitespace.description": {
+      "message": "运行时显示或隐藏空白标记"
+    },
+    "cmd.code.whitespace.title": {
+      "message": "切换空白标记"
+    },
+    "cmd.code.word-wrap.category": {
+      "message": "代码"
+    },
+    "cmd.code.word-wrap.description": {
+      "message": "运行时开启或关闭自动换行"
+    },
+    "cmd.code.word-wrap.title": {
+      "message": "切换自动换行"
     },
     "cmd.debug.continue.category": {
       "message": "调试"
@@ -1516,6 +1552,12 @@
     "menu.navigate.submenu.code.item.code.inlay-hints": {
       "message": "切换内联提示"
     },
+    "menu.navigate.submenu.code.item.code.line-numbers": {
+      "message": "切换行号"
+    },
+    "menu.navigate.submenu.code.item.code.minimap": {
+      "message": "切换小地图"
+    },
     "menu.navigate.submenu.code.item.code.outline": {
       "message": "显示大纲"
     },
@@ -1524,6 +1566,12 @@
     },
     "menu.navigate.submenu.code.item.code.unfold-all": {
       "message": "全部展开"
+    },
+    "menu.navigate.submenu.code.item.code.whitespace": {
+      "message": "切换空白标记"
+    },
+    "menu.navigate.submenu.code.item.code.word-wrap": {
+      "message": "切换自动换行"
     },
     "menu.navigate.submenu.code.item.nav.code-back": {
       "message": "后退"
@@ -1633,9 +1681,6 @@
     "menu.view.item.keys.show": {
       "message": "键盘快捷键"
     },
-    "menu.view.item.panel.close": {
-      "message": "关闭面板"
-    },
     "menu.view.item.tree.activate": {
       "message": "激活树项目"
     },
@@ -1711,10 +1756,10 @@
     "menu.view.submenu.modes.title": {
       "message": "模式"
     },
-    "menu.view.submenu.panels.item.panel.inspector": {
+    "menu.view.submenu.panels.item.view.panel-show?panel=inspector": {
       "message": "检查器"
     },
-    "menu.view.submenu.panels.item.panel.outline": {
+    "menu.view.submenu.panels.item.view.panel-show?panel=outline": {
       "message": "大纲"
     },
     "menu.view.submenu.panels.title": {
@@ -1975,6 +2020,18 @@
     "ui.dialog.goto-label": {
       "message": "行 或 行:列"
     },
+    "ui.dialog.close-dirty-accept": {
+      "message": "退出并放弃"
+    },
+    "ui.dialog.close-dirty-message": {
+      "message": "还有 {count} 个文档有未保存修改。要退出并放弃这些修改吗？"
+    },
+    "ui.dialog.close-dirty-reject": {
+      "message": "继续编辑"
+    },
+    "ui.dialog.close-dirty-title": {
+      "message": "有未保存的修改"
+    },
     "ui.dialog.goto-title": {
       "message": "跳转到行"
     },
@@ -2184,6 +2241,9 @@
     },
     "ui.error.widget-not-inserted": {
       "message": "未插入：{reason}"
+    },
+    "ui.error.window-close-dirty": {
+      "message": "还有 {count} 个文档有未保存修改；请先保存，或确认放弃这些修改"
     },
     "ui.extensions.none": {
       "message": "未安装扩展"
@@ -2527,6 +2587,9 @@
     "ui.status.clipboard-empty": {
       "message": "剪贴板没有文本，或编辑器为只读"
     },
+    "ui.status.close-cancelled": {
+      "message": "窗口保持打开；没有丢弃任何修改"
+    },
     "ui.status.closing": {
       "message": "正在关闭"
     },
@@ -2656,11 +2719,23 @@
     "ui.status.layout-unlocked": {
       "message": "布局已解锁"
     },
+    "ui.status.line-numbers-off": {
+      "message": "已隐藏行号"
+    },
+    "ui.status.line-numbers-on": {
+      "message": "已显示行号"
+    },
     "ui.status.locked": {
       "message": "已锁定 {name}"
     },
     "ui.status.migration-previewed": {
       "message": "迁移预览已写入消息面板"
+    },
+    "ui.status.minimap-off": {
+      "message": "已隐藏小地图"
+    },
+    "ui.status.minimap-on": {
+      "message": "已显示小地图"
     },
     "ui.status.mode-changed": {
       "message": "模式 {mode}"
@@ -2817,6 +2892,9 @@
     },
     "ui.status.preview-started": {
       "message": "预览已启动"
+    },
+    "ui.status.preview-state-not-restored": {
+      "message": "预览状态未恢复："
     },
     "ui.status.preview-stopped": {
       "message": "预览已停止"
@@ -2976,6 +3054,18 @@
     },
     "ui.status.widget-inserted": {
       "message": "已插入 {name}，节点 {node}"
+    },
+    "ui.status.whitespace-off": {
+      "message": "已隐藏空白标记"
+    },
+    "ui.status.whitespace-on": {
+      "message": "已显示空白标记"
+    },
+    "ui.status.word-wrap-off": {
+      "message": "已关闭自动换行"
+    },
+    "ui.status.word-wrap-on": {
+      "message": "已开启自动换行"
     },
     "ui.status.workspace-symbol-jumped": {
       "message": "已移动到 {name}（{path}:{line}）"

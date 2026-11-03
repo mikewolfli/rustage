@@ -1,0 +1,6 @@
+{
+  "name": "libentry.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "The rustage HarmonyOS native bridge: forwards ArkTS calls to the pinned rust_widgets C ABI."
+}

@@ -3,8 +3,10 @@
 //
 // Project level build profile. `compatibleSdkVersion` is where the minimum supported API
 // level lives: app.json5 cannot carry it, because the platform derives minAPIVersion from
-// this file and ignores a hand written value. Signing material is never committed; the
-// signing configuration is created per machine and recorded in the release task.
+// this file and ignores a hand written value. The token below is substituted from
+// packaging/identity.json by tools/resources/generate-resources.mjs; the template keeps the
+// token so a build cannot silently use a guessed minimum. Signing material is never committed;
+// the signing configuration is created per machine and recorded in the release task.
 {
   "app": {
     "signingConfigs": [],

@@ -118,6 +118,24 @@
     "cmd.code.inlay-hints.title": {
       "message": "Toggle Inlay Hints"
     },
+    "cmd.code.line-numbers.category": {
+      "message": "Code"
+    },
+    "cmd.code.line-numbers.description": {
+      "message": "show or hide the gutter line numbers at runtime"
+    },
+    "cmd.code.line-numbers.title": {
+      "message": "Toggle Line Numbers"
+    },
+    "cmd.code.minimap.category": {
+      "message": "Code"
+    },
+    "cmd.code.minimap.description": {
+      "message": "show or hide the minimap at runtime"
+    },
+    "cmd.code.minimap.title": {
+      "message": "Toggle Minimap"
+    },
     "cmd.code.outline.category": {
       "message": "Code"
     },
@@ -144,6 +162,24 @@
     },
     "cmd.code.unfold.title": {
       "message": "Unfold Block"
+    },
+    "cmd.code.whitespace.category": {
+      "message": "Code"
+    },
+    "cmd.code.whitespace.description": {
+      "message": "show or hide whitespace markers at runtime"
+    },
+    "cmd.code.whitespace.title": {
+      "message": "Toggle Whitespace"
+    },
+    "cmd.code.word-wrap.category": {
+      "message": "Code"
+    },
+    "cmd.code.word-wrap.description": {
+      "message": "turn soft wrapping on or off at runtime"
+    },
+    "cmd.code.word-wrap.title": {
+      "message": "Toggle Word Wrap"
     },
     "cmd.debug.continue.category": {
       "message": "Debug"
@@ -1516,6 +1552,12 @@
     "menu.navigate.submenu.code.item.code.inlay-hints": {
       "message": "Toggle Inlay Hints"
     },
+    "menu.navigate.submenu.code.item.code.line-numbers": {
+      "message": "Toggle Line Numbers"
+    },
+    "menu.navigate.submenu.code.item.code.minimap": {
+      "message": "Toggle Minimap"
+    },
     "menu.navigate.submenu.code.item.code.outline": {
       "message": "Show Outline"
     },
@@ -1524,6 +1566,12 @@
     },
     "menu.navigate.submenu.code.item.code.unfold-all": {
       "message": "Unfold All"
+    },
+    "menu.navigate.submenu.code.item.code.whitespace": {
+      "message": "Toggle Whitespace"
+    },
+    "menu.navigate.submenu.code.item.code.word-wrap": {
+      "message": "Toggle Word Wrap"
     },
     "menu.navigate.submenu.code.item.nav.code-back": {
       "message": "Go Back"
@@ -1633,9 +1681,6 @@
     "menu.view.item.keys.show": {
       "message": "Keyboard Shortcuts"
     },
-    "menu.view.item.panel.close": {
-      "message": "Close Panel"
-    },
     "menu.view.item.tree.activate": {
       "message": "Activate Tree Item"
     },
@@ -1711,10 +1756,10 @@
     "menu.view.submenu.modes.title": {
       "message": "Modes"
     },
-    "menu.view.submenu.panels.item.panel.inspector": {
+    "menu.view.submenu.panels.item.view.panel-show?panel=inspector": {
       "message": "Inspector"
     },
-    "menu.view.submenu.panels.item.panel.outline": {
+    "menu.view.submenu.panels.item.view.panel-show?panel=outline": {
       "message": "Outline"
     },
     "menu.view.submenu.panels.title": {
@@ -1975,6 +2020,18 @@
     "ui.dialog.goto-label": {
       "message": "Line or line:column"
     },
+    "ui.dialog.close-dirty-accept": {
+      "message": "Quit and Discard"
+    },
+    "ui.dialog.close-dirty-message": {
+      "message": "{count} document(s) have unsaved changes. Quit and discard them?"
+    },
+    "ui.dialog.close-dirty-reject": {
+      "message": "Keep Editing"
+    },
+    "ui.dialog.close-dirty-title": {
+      "message": "Unsaved Changes"
+    },
     "ui.dialog.goto-title": {
       "message": "Go to Line"
     },
@@ -2184,6 +2241,9 @@
     },
     "ui.error.widget-not-inserted": {
       "message": "not inserted: {reason}"
+    },
+    "ui.error.window-close-dirty": {
+      "message": "{count} document(s) have unsaved changes; save them first, or confirm discarding them"
     },
     "ui.extensions.none": {
       "message": "no extension is installed"
@@ -2527,6 +2587,9 @@
     "ui.status.clipboard-empty": {
       "message": "the clipboard has no text, or the editor is read-only"
     },
+    "ui.status.close-cancelled": {
+      "message": "the window stays open; nothing was discarded"
+    },
     "ui.status.closing": {
       "message": "closing"
     },
@@ -2656,11 +2719,23 @@
     "ui.status.layout-unlocked": {
       "message": "the layout is unlocked"
     },
+    "ui.status.line-numbers-off": {
+      "message": "line numbers hidden"
+    },
+    "ui.status.line-numbers-on": {
+      "message": "line numbers shown"
+    },
     "ui.status.locked": {
       "message": "{name} locked"
     },
     "ui.status.migration-previewed": {
       "message": "migration preview written to Messages"
+    },
+    "ui.status.minimap-off": {
+      "message": "minimap hidden"
+    },
+    "ui.status.minimap-on": {
+      "message": "minimap shown"
     },
     "ui.status.mode-changed": {
       "message": "mode {mode}"
@@ -2817,6 +2892,9 @@
     },
     "ui.status.preview-started": {
       "message": "preview started"
+    },
+    "ui.status.preview-state-not-restored": {
+      "message": "preview state not restored:"
     },
     "ui.status.preview-stopped": {
       "message": "preview stopped"
@@ -2976,6 +3054,18 @@
     },
     "ui.status.widget-inserted": {
       "message": "inserted {name} as node {node}"
+    },
+    "ui.status.whitespace-off": {
+      "message": "whitespace markers hidden"
+    },
+    "ui.status.whitespace-on": {
+      "message": "whitespace markers shown"
+    },
+    "ui.status.word-wrap-off": {
+      "message": "soft wrapping off"
+    },
+    "ui.status.word-wrap-on": {
+      "message": "soft wrapping on"
     },
     "ui.status.workspace-symbol-jumped": {
       "message": "moved to {name} at {path}:{line}"

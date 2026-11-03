@@ -163,6 +163,16 @@ fn node_body(
     if let Some(layout) = node.layout() {
         body.insert("layout", layout.to_json());
     }
+    // Size, margin and overflow constraints travel as flat node attributes, which is where the
+    // library reads them (`ChildLayoutAttrs::from_value`) and where its solve looks for them
+    // (`child_hints`/`child_margin`). Page format 7 keeps them in a `constraints` object because
+    // the page document's node has a fixed member list; nesting them in the generator's document
+    // would be a second spelling of the same fact.
+    if let Some(constraints) = node.constraints() {
+        for (name, value) in constraints.members() {
+            body.insert(name.as_str(), value.clone());
+        }
+    }
     Ok(body)
 }
 
@@ -323,6 +333,90 @@ mod tests {
                 (NodeId::from_raw(3), "n_1".to_owned()),
                 (NodeId::from_raw(4), "n_1_0".to_owned()),
             ],
+        );
+    }
+
+    #[test]
+    fn constraints_travel_as_the_flat_attributes_the_library_reads() {
+        use crate::project::record::json::{Json, Number};
+        use crate::project::record::page::PageConstraints;
+
+        let root =
+            PageNode::new(NodeId::from_raw(1), kind("window")).with_children([NodeId::from_raw(2)]);
+        let child = PageNode::new(NodeId::from_raw(2), kind("button")).with_constraints(
+            PageConstraints::new([
+                ("min_width".to_owned(), Json::Number(Number::from_i64(120))),
+                (
+                    "margin".to_owned(),
+                    Json::Array(vec![
+                        Json::Number(Number::from_i64(8)),
+                        Json::Number(Number::from_i64(4)),
+                    ]),
+                ),
+            ]),
+        );
+        let document = to_library_document(NodeId::from_raw(1), &[root, child]).expect("document");
+        // Flat, not nested: this is where `ChildLayoutAttrs::from_value` reads them.
+        let value = crate::project::record::json::parse(&document).expect("the document parses");
+        let button = value
+            .as_object()
+            .and_then(|object| object.get("window"))
+            .and_then(Json::as_object)
+            .and_then(|window| window.get("children"))
+            .and_then(Json::as_array)
+            .and_then(|children| children.first())
+            .and_then(Json::as_object)
+            .and_then(|child| child.get("button"))
+            .and_then(Json::as_object)
+            .expect("the button node");
+        assert_eq!(button.get("min_width").and_then(Json::as_u64), Some(120));
+        assert_eq!(
+            button
+                .get("margin")
+                .and_then(Json::as_array)
+                .map(|items| items.iter().filter_map(Json::as_u64).collect::<Vec<_>>()),
+            Some(vec![8, 4])
+        );
+        assert!(button.get("constraints").is_none(), "{document}");
+    }
+
+    #[test]
+    fn a_declared_minimum_height_reaches_the_generated_solve() {
+        // RW-109, host half: the page document's constraint must arrive at the library's solve as
+        // a `Hints.height.min`, not merely be stored in the file. The generator publishes the
+        // solved rect per node (RW-116), so the assertion reads the solve's own answer.
+        use crate::project::record::json::{Json, Number};
+        use crate::project::record::page::{PageConstraints, PageLayout};
+        use rust_widgets::designer::{GenerationRequest, TargetProfile, generate};
+
+        let root = PageNode::new(NodeId::from_raw(1), kind("window"))
+            .with_layout(PageLayout::new(
+                "vbox",
+                ["spacing", "margin"]
+                    .map(|name| (name.to_owned(), Json::Number(Number::from_i64(0)))),
+            ))
+            .with_children([NodeId::from_raw(2)]);
+        let child = PageNode::new(NodeId::from_raw(2), kind("button")).with_constraints(
+            PageConstraints::new([("min_height".to_owned(), Json::Number(Number::from_i64(80)))]),
+        );
+        let json = to_library_document(NodeId::from_raw(1), &[root, child]).expect("document");
+        let generated = generate(&GenerationRequest {
+            json,
+            target: TargetProfile::Default,
+            width: 200,
+            height: 300,
+            function_name: "build_ui".to_owned(),
+        })
+        .expect("the library generates");
+        let rect = generated
+            .report
+            .node_rects
+            .iter()
+            .find(|rect| rect.path == vec![0])
+            .expect("the child has a solved rect");
+        assert!(
+            rect.height >= 80,
+            "the declared minimum height reached the solve: {rect:?}"
         );
     }
 

@@ -263,6 +263,10 @@ pub struct Command {
     undo: Undo,
     task: Option<String>,
     needs_trust: bool,
+    /// Refuses while the focused editor has nothing to undo.
+    needs_undo: bool,
+    /// Refuses while the focused editor has nothing to redo.
+    needs_redo: bool,
     focus: Focus,
     blocks_on: Option<String>,
     help: String,
@@ -280,6 +284,8 @@ impl Command {
             undo: Undo::None,
             task: None,
             needs_trust: false,
+            needs_undo: false,
+            needs_redo: false,
             focus: Focus::Any,
             blocks_on: None,
             help: String::new(),
@@ -315,6 +321,21 @@ impl Command {
     /// Requires the project to be trusted.
     pub fn needing_trust(mut self) -> Self {
         self.needs_trust = true;
+        self
+    }
+
+    /// Refuses while the focused editor's own history says there is nothing to undo.
+    ///
+    /// The fact comes from the control (`CodeEditor::can_undo`), not from a host counter, so a
+    /// document whose last edit was undone right back to its saved text answers honestly.
+    pub fn needing_undo(mut self) -> Self {
+        self.needs_undo = true;
+        self
+    }
+
+    /// Refuses while the focused editor's own history says there is nothing to redo.
+    pub fn needing_redo(mut self) -> Self {
+        self.needs_redo = true;
         self
     }
 
@@ -376,6 +397,16 @@ impl Command {
         self.needs_trust
     }
 
+    /// Whether the command needs the focused editor to have something to undo.
+    pub const fn needs_undo(&self) -> bool {
+        self.needs_undo
+    }
+
+    /// Whether the command needs the focused editor to have something to redo.
+    pub const fn needs_redo(&self) -> bool {
+        self.needs_redo
+    }
+
     /// The one-line help.
     pub fn help(&self) -> &str {
         &self.help
@@ -426,6 +457,14 @@ pub struct Context {
     authorized: BTreeSet<EffectClass>,
     /// The tasks that are running now.
     running: BTreeSet<String>,
+    /// Whether the focused editor can undo, when the caller knows.
+    ///
+    /// `None` means "the caller did not say", which leaves a history command enabled: guessing a
+    /// disabled state from a fact nobody supplied would grey out a command that may well work. The
+    /// window supplies the editor's own `can_undo`/`can_redo` on every dispatch.
+    can_undo: Option<bool>,
+    /// The redo half of [`Self::can_undo`].
+    can_redo: Option<bool>,
 }
 
 impl Context {
@@ -455,6 +494,26 @@ impl Context {
         self
     }
 
+    /// The same context with what the focused editor's history can do.
+    ///
+    /// `None` for either half means the caller has no answer, which leaves the command enabled
+    /// rather than inventing a refusal.
+    pub fn with_history(mut self, can_undo: Option<bool>, can_redo: Option<bool>) -> Self {
+        self.can_undo = can_undo;
+        self.can_redo = can_redo;
+        self
+    }
+
+    /// Whether the focused editor can undo, when the caller said.
+    pub const fn undo_state(&self) -> Option<bool> {
+        self.can_undo
+    }
+
+    /// Whether the focused editor can redo, when the caller said.
+    pub const fn redo_state(&self) -> Option<bool> {
+        self.can_redo
+    }
+
     /// Where the keyboard is.
     pub fn focus(&self) -> &str {
         &self.focus
@@ -475,11 +534,15 @@ pub enum Refusal {
         id: String,
     },
     /// The context does not allow it.
+    /// The command exists but is not available here and now.
     Disabled {
         /// The command.
         id: CommandId,
-        /// Why.
-        reason: String,
+        /// Why, as a value rather than a finished sentence.
+        ///
+        /// The sentence depends on the interface language, which this layer does not own; the
+        /// palette, the menu and the log all read the same reason.
+        reason: Disabled,
     },
     /// A required parameter was not given.
     Missing {
@@ -506,6 +569,65 @@ pub enum Refusal {
     },
 }
 
+/// Why a command is not available here and now.
+///
+/// A value rather than a finished sentence: the sentence has to be in the interface language, and
+/// this layer only knows what is true. [`Self::localized`] reads the catalogue; [`Self::message`]
+/// keeps an English form for logs and diagnostics that must not change with the UI language.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Disabled {
+    /// The keyboard is in another area.
+    Focus {
+        /// The one area the command is available in.
+        area: String,
+        /// Where the keyboard is.
+        focus: String,
+    },
+    /// The project is not trusted.
+    Untrusted,
+    /// A task the command waits on is running.
+    Running {
+        /// The task.
+        task: String,
+    },
+    /// The focused editor has nothing to undo.
+    NothingToUndo,
+    /// The focused editor has nothing to redo.
+    NothingToRedo,
+}
+
+impl Disabled {
+    /// The reason in the interface language.
+    pub fn localized(&self) -> String {
+        let catalog = crate::app::locale::catalog::Catalog::current();
+        match self {
+            Self::Focus { area, focus } => catalog.fill(
+                "cmd.reason.focus",
+                &[("area", area.as_str()), ("focus", focus.as_str())],
+            ),
+            Self::Untrusted => catalog.fill("cmd.reason.untrusted", &[]),
+            Self::Running { task } => {
+                catalog.fill("cmd.reason.running", &[("task", task.as_str())])
+            }
+            Self::NothingToUndo => catalog.fill("cmd.reason.nothing-to-undo", &[]),
+            Self::NothingToRedo => catalog.fill("cmd.reason.nothing-to-redo", &[]),
+        }
+    }
+
+    /// The reason in English, for a log line or a report that is not the interface.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Focus { area, focus } => {
+                format!("it is only available in {area}, and the keyboard is in {focus}")
+            }
+            Self::Untrusted => "the project is not trusted".to_owned(),
+            Self::Running { task } => format!("{task} is already running"),
+            Self::NothingToUndo => "the focused editor has nothing to undo".to_owned(),
+            Self::NothingToRedo => "the focused editor has nothing to redo".to_owned(),
+        }
+    }
+}
+
 impl Refusal {
     /// The refusal in one sentence.
     ///
@@ -519,9 +641,10 @@ impl Refusal {
             Self::Unknown { id } => catalog.fill("diag.command.unknown", &[("id", id)]),
             Self::Disabled { id, reason } => {
                 let id = id.to_string();
+                let reason = reason.localized();
                 catalog.fill(
                     "diag.command.disabled",
-                    &[("id", id.as_str()), ("reason", reason)],
+                    &[("id", id.as_str()), ("reason", reason.as_str())],
                 )
             }
             Self::Missing { id, name } => {
@@ -722,16 +845,16 @@ impl Registry {
         {
             return Err(Refusal::Disabled {
                 id: parsed.clone(),
-                reason: format!(
-                    "it is only available in {area}, and the keyboard is in {}",
-                    context.focus()
-                ),
+                reason: Disabled::Focus {
+                    area: area.clone(),
+                    focus: context.focus().to_owned(),
+                },
             });
         }
         if command.needs_trust && !context.is_trusted() {
             return Err(Refusal::Disabled {
                 id: parsed.clone(),
-                reason: "the project is not trusted".to_owned(),
+                reason: Disabled::Untrusted,
             });
         }
         if let Some(task) = &command.blocks_on
@@ -739,7 +862,19 @@ impl Registry {
         {
             return Err(Refusal::Disabled {
                 id: parsed.clone(),
-                reason: format!("{task} is already running"),
+                reason: Disabled::Running { task: task.clone() },
+            });
+        }
+        if command.needs_undo && context.undo_state() == Some(false) {
+            return Err(Refusal::Disabled {
+                id: parsed.clone(),
+                reason: Disabled::NothingToUndo,
+            });
+        }
+        if command.needs_redo && context.redo_state() == Some(false) {
+            return Err(Refusal::Disabled {
+                id: parsed.clone(),
+                reason: Disabled::NothingToRedo,
             });
         }
         for effect in &command.effects {
@@ -913,7 +1048,8 @@ pub fn built_in() -> Registry {
             "Edit",
         )
         .with_undo(Undo::None)
-        .described_as("take back the newest change, in its own domain"),
+        .described_as("take back the newest change, in its own domain")
+        .needing_undo(),
         Command::new(
             CommandId::parse("edit.cut").expect("a valid id"),
             "Cut",
@@ -1251,6 +1387,34 @@ pub fn built_in() -> Registry {
         .with_undo(Undo::None)
         .described_as("show or hide inlay hints without discarding them"),
         Command::new(
+            CommandId::parse("code.line-numbers").expect("a valid id"),
+            "Toggle Line Numbers",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide the gutter line numbers at runtime"),
+        Command::new(
+            CommandId::parse("code.minimap").expect("a valid id"),
+            "Toggle Minimap",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide the minimap at runtime"),
+        Command::new(
+            CommandId::parse("code.word-wrap").expect("a valid id"),
+            "Toggle Word Wrap",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("turn soft wrapping on or off at runtime"),
+        Command::new(
+            CommandId::parse("code.whitespace").expect("a valid id"),
+            "Toggle Whitespace",
+            "Code",
+        )
+        .with_undo(Undo::None)
+        .described_as("show or hide whitespace markers at runtime"),
+        Command::new(
             CommandId::parse("code.bookmark-toggle").expect("a valid id"),
             "Toggle Bookmark",
             "Code",
@@ -1354,7 +1518,8 @@ pub fn built_in() -> Registry {
             "Edit",
         )
         .with_undo(Undo::None)
-        .described_as("put back the newest change that was taken back"),
+        .described_as("put back the newest change that was taken back")
+        .needing_redo(),
         // The window's own layout and editor actions, reachable from the menu, the toolbar and
         // the palette as the same commands (T05.02/T04.02).
         Command::new(
@@ -1883,6 +2048,32 @@ mod tests {
 
         context = context.authorizing(EffectClass::Command);
         assert!(registry.resolve(&call, &context).is_ok());
+    }
+
+    #[test]
+    fn a_history_command_refuses_only_when_the_editor_says_there_is_nothing_to_do() {
+        let registry = built_in();
+        let undo = Call::to("edit.undo");
+        let redo = Call::to("edit.redo");
+
+        // The caller did not say: the command stays available rather than being greyed out on a
+        // guess, and the handler still answers honestly when it runs.
+        let unknown = Context::in_area("design");
+        assert!(registry.resolve(&undo, &unknown).is_ok());
+        assert!(registry.resolve(&redo, &unknown).is_ok());
+
+        // The editor said "nothing to undo" / "nothing to redo": refused, with the reason.
+        let empty = Context::in_area("design").with_history(Some(false), Some(false));
+        for (call, needle) in [(&undo, "nothing to undo"), (&redo, "nothing to redo")] {
+            let refusal = registry.resolve(call, &empty).expect_err("refused");
+            assert!(matches!(refusal, Refusal::Disabled { .. }), "{refusal:?}");
+            assert!(refusal.message().contains(needle), "{}", refusal.message());
+        }
+
+        // The halves are independent: undo available, redo not.
+        let mixed = Context::in_area("design").with_history(Some(true), Some(false));
+        assert!(registry.resolve(&undo, &mixed).is_ok());
+        assert!(registry.resolve(&redo, &mixed).is_err());
     }
 
     #[test]

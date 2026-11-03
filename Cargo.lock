@@ -2457,13 +2457,13 @@ dependencies = [
 
 [[package]]
 name = "rust-widgets-font"
-version = "4.0.0"
-source = "git+https://github.com/mikewolfli/rust-widgets?rev=1a30785842140e45789bf50a81bd7280c8f9b7a2#1a30785842140e45789bf50a81bd7280c8f9b7a2"
+version = "4.0.1"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81#ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81"
 
 [[package]]
 name = "rust-widgets-suites"
-version = "4.0.0"
-source = "git+https://github.com/mikewolfli/rust-widgets?rev=1a30785842140e45789bf50a81bd7280c8f9b7a2#1a30785842140e45789bf50a81bd7280c8f9b7a2"
+version = "4.0.1"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81#ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81"
 dependencies = [
  "log",
  "rust_widgets",
@@ -2472,8 +2472,8 @@ dependencies = [
 
 [[package]]
 name = "rust_widgets"
-version = "4.0.0"
-source = "git+https://github.com/mikewolfli/rust-widgets?rev=1a30785842140e45789bf50a81bd7280c8f9b7a2#1a30785842140e45789bf50a81bd7280c8f9b7a2"
+version = "4.0.1"
+source = "git+https://github.com/mikewolfli/rust-widgets?rev=ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81#ee4260d83329da255c8f3dbf4e7bdeafc3ab4c81"
 dependencies = [
  "aes",
  "cbc",

@@ -11,6 +11,10 @@
 > `GenerationReport.node_anchors` 侧信道提供。仍未解决的是**嵌套容器**与**每节点约束**：上游只解根
 > 容器一层。详见 [feedback-20261103.md](../rw-feedback/feedback-20261103.md) §RW-108。
 >
+> **2026-11-03 后续（4.0.1 `ee4260d8`）：** 本文件 §2 的每节点约束已由
+> [format-v7-constraints-proposal.md](./format-v7-constraints-proposal.md) 实现（页面格式 7 的
+> 节点 `constraints`），RW-109/RW-111 已关闭；本文件的“未实现部分”描述保留为历史记录。
+>
 > 依据：[roadmap.md](./roadmap.md) T10.01–T10.04、§2.2 `panel.layout`；
 > [format-v2-proposal.md](./format-v2-proposal.md) … [format-v5-proposal.md](./format-v5-proposal.md)
 > 的版本/迁移约定；[decisions.md](./decisions.md) Q6/F1。

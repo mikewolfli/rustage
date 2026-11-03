@@ -350,10 +350,45 @@ test('a decided identity that still holds open values is refused', () => {
   const directory = fixture((base) => {
     const file = 'packaging/identity.json';
     const identity = readJson(base, file);
+    // The repository's identity is decided; reopen one value to exercise the other half of the
+    // rule without depending on the repository still being blocked.
     identity.status = 'decided';
+    identity.application_id = null;
     writeJson(base, file, identity);
   });
   assert.match(messages(checkResources(directory)), /status "decided" requires every identity/);
+});
+
+test('a decided identity keeps a record and a blocked one keeps the reason', () => {
+  const withRecord = fixture((base) => {
+    const file = 'packaging/identity.json';
+    const identity = readJson(base, file);
+    identity.decision = {
+      ...identity.decision,
+      blocked_reason: 'still waiting',
+    };
+    writeJson(base, file, identity);
+  });
+  assert.match(
+    messages(checkResources(withRecord)),
+    /blocked_reason belongs to the blocked state/,
+  );
+
+  const blockedWithRecord = fixture((base) => {
+    const file = 'packaging/identity.json';
+    const identity = readJson(base, file);
+    identity.status = 'blocked-pending-decision';
+    identity.application_id = null;
+    identity.decision = {
+      ...identity.decision,
+      record: 'decided too early',
+    };
+    writeJson(base, file, identity);
+  });
+  assert.match(
+    messages(checkResources(blockedWithRecord)),
+    /record belongs to the decided state/,
+  );
 });
 
 test('an undeclared packaging token is refused', () => {
@@ -399,6 +434,58 @@ test('a dark HarmonyOS colour resource that drops a name is refused', () => {
   const errors = messages(checkResources(directory));
   assert.match(errors, /does not override "start_window_background".*fall back to the light value/);
   assert.match(errors, /defines "start_window_background_dark", which is not a colour name the module uses/);
+});
+
+test('a HarmonyOS shell page that does not reach the native bridge is refused', () => {
+  const directory = fixture((base) => {
+    const file = 'packaging/harmonyos/entry/src/main/ets/pages/Index.ets';
+    writeFileSync(
+      path.join(base, file),
+      readFileSync(path.join(base, file), 'utf8').replace("import nativeUi from 'libentry.so';", '// no bridge'),
+    );
+  });
+  assert.match(
+    messages(checkResources(directory)),
+    /Index\.ets must import libentry\.so; the shell is the bridge consumer, not a second UI/,
+  );
+});
+
+test('a HarmonyOS shell the host requirement names but does not ship is refused', () => {
+  const directory = fixture((base) => {
+    rmSync(path.join(base, 'packaging/harmonyos/entry/src/main/ets'), { recursive: true, force: true });
+  });
+  assert.match(
+    messages(checkResources(directory)),
+    /host_requirement\.arkts_shell names entry\/src\/main\/ets, which does not exist/,
+  );
+});
+
+test('a HarmonyOS template path that escapes the tree is refused', () => {
+  const directory = fixture((base) => {
+    const file = 'packaging/harmonyos/app.json';
+    const config = readJson(base, file);
+    config.templates.push({ path: '../outside.txt', role: 'escaped file', substituted: false });
+    writeJson(base, file, config);
+  });
+  assert.match(
+    messages(checkResources(directory)),
+    /must stay inside packaging\/harmonyos/,
+  );
+});
+
+test('a HarmonyOS versionCode placeholder inside quotes is refused', () => {
+  const directory = fixture((base) => {
+    const file = 'packaging/harmonyos/AppScope/app.json5';
+    writeFileSync(
+      path.join(base, file),
+      readFileSync(path.join(base, file), 'utf8')
+        .replace('"versionCode": @@VERSION_CODE@@,', '"versionCode": "@@VERSION_CODE@@",'),
+    );
+  });
+  assert.match(
+    messages(checkResources(directory)),
+    /quotes the versionCode placeholder; substitution would write a string/,
+  );
 });
 
 test('a HarmonyOS device type outside the documented set is refused', () => {

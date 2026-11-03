@@ -94,7 +94,7 @@ pub const TEMPLATE_KEYS: [&str; 7] = [
 /// The workbench window's own labels, keyed by what they name.
 ///
 /// The keys of the workbench window's labels.
-pub const WINDOW_KEYS: [&str; 442] = [
+pub const WINDOW_KEYS: [&str; 457] = [
     "ui.panel.pages",
     "ui.panel.outline",
     "ui.panel.source-outline",
@@ -171,6 +171,7 @@ pub const WINDOW_KEYS: [&str; 442] = [
     "ui.context.preview.start",
     "ui.context.preview.stop",
     "ui.status.preview-started",
+    "ui.status.preview-state-not-restored",
     "ui.status.preview-stopped",
     "ui.placeholder.program",
     "ui.placeholder.terminal",
@@ -223,6 +224,10 @@ pub const WINDOW_KEYS: [&str; 442] = [
     "ui.status.no-cursor-line",
     "ui.dialog.goto-title",
     "ui.dialog.goto-label",
+    "ui.dialog.close-dirty-title",
+    "ui.dialog.close-dirty-message",
+    "ui.dialog.close-dirty-accept",
+    "ui.dialog.close-dirty-reject",
     "ui.error.goto-refused",
     "ui.status.goto-cancelled",
     "ui.status.goto-done",
@@ -344,6 +349,7 @@ pub const WINDOW_KEYS: [&str; 442] = [
     "ui.status.group-merged",
     "ui.status.group-not-merged",
     "ui.status.closing",
+    "ui.status.close-cancelled",
     "ui.status.unknown-action",
     "ui.status.document-closed",
     "ui.status.nothing-to-close",
@@ -501,6 +507,14 @@ pub const WINDOW_KEYS: [&str; 442] = [
     "ui.error.tab-not-moved",
     "ui.status.inlay-hints-shown",
     "ui.status.inlay-hints-hidden",
+    "ui.status.line-numbers-on",
+    "ui.status.line-numbers-off",
+    "ui.status.minimap-on",
+    "ui.status.minimap-off",
+    "ui.status.whitespace-on",
+    "ui.status.whitespace-off",
+    "ui.status.word-wrap-on",
+    "ui.status.word-wrap-off",
     "ui.status.bookmark-added",
     "ui.status.bookmark-removed",
     "ui.status.saved",
@@ -531,6 +545,7 @@ pub const WINDOW_KEYS: [&str; 442] = [
     "ui.status.resources-cleaned",
     "ui.error.resources-clean-refused",
     "ui.error.project-close-dirty",
+    "ui.error.window-close-dirty",
     "ui.status.project-closed",
     "ui.status.history-empty",
     "ui.status.history-shown",
@@ -805,7 +820,7 @@ pub fn coverage() -> Coverage {
             // A leaf that claims a command must name one that exists; a *planned* leaf is the honest
             // opposite — it names the command a later task will register — so it is not required to.
             if let Item::Command { command, .. } = item
-                && !known(command)
+                && !known(crate::app::commands::menu::Menu::command_id(command))
             {
                 uncovered.push(format!("menu {} names {command}", menu.id()));
             }
@@ -871,7 +886,11 @@ mod tests {
         assert!(keys.contains(&"menu.file.title".to_owned()));
         assert!(keys.contains(&"menu.file.item.file.new-project".to_owned()));
         assert!(keys.contains(&"menu.view.submenu.panels.title".to_owned()));
-        assert!(keys.contains(&"menu.view.submenu.panels.item.panel.outline".to_owned()));
+        assert!(
+            keys.contains(
+                &"menu.view.submenu.panels.item.view.panel-show?panel=outline".to_owned()
+            )
+        );
     }
 
     #[test]

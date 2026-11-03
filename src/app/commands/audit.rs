@@ -102,7 +102,7 @@ pub fn audit(registry: &Registry, menus: &[Menu], keymap: &Keymap) -> Report {
     let mut named: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for menu in menus {
         for (_, command) in menu.commands() {
-            named.insert(command);
+            named.insert(crate::app::commands::menu::Menu::command_id(&command).to_owned());
         }
     }
     for binding in keymap.bindings() {
@@ -279,7 +279,7 @@ pub fn discoverability(
     let mut visible: BTreeSet<String> = BTreeSet::new();
     for menu in menus {
         for (_, command) in menu.commands() {
-            visible.insert(command);
+            visible.insert(crate::app::commands::menu::Menu::command_id(&command).to_owned());
         }
     }
     let mut toolbar: BTreeSet<String> = BTreeSet::new();

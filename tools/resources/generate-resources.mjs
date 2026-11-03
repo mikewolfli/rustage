@@ -44,8 +44,8 @@ const UNVERIFIED = [
     + 'verified here; the crate tests cover size, the disabled state and a forced-colour mode.',
   'Windows Explorer, shortcut, taskbar and Alt-Tab rendering, macOS Finder/Dock rendering and '
     + 'GNOME/KDE launcher rendering are not verified; no target system was available.',
-  'The packaged application identity is unset, so no package metadata was written and no '
-    + 'installer, notarisation or SBOM step ran.',
+  'The packaged identity is recorded, but no installer, notarisation or SBOM step ran; signing is '
+    + 'configured per release machine and is not stored in the repository.',
 ];
 
 
@@ -118,6 +118,54 @@ function substitute(template, values) {
     return value;
   });
   return { output, missing: [...missing].sort() };
+}
+
+/**
+ * Writes every file `packaging/harmonyos/app.json` declares.
+ *
+ * The declared list is the single source: a file that is declared but not copied, or copied but
+ * not declared, is what `check-resources` refuses, and a second list here would be the drift
+ * issue-20261013 §2.1 records. Static files are written even while the identity is undecided;
+ * only token-bearing ones are reported as blocked.
+ */
+export function writeHarmonyPackage(root, outDir, identity) {
+  const outputs = [];
+  const blocked = [];
+  const definitions = readJson(root, 'packaging/harmonyos/app.json').templates;
+  for (const entry of definitions) {
+    const file = `packaging/harmonyos/${entry.path}`;
+    // The declared path must stay inside the tree; `check-resources` refuses it too, and this guard
+    // keeps the generator from copying an outside file if it is ever called without that check.
+    const harmonyDirectory = path.join(root, 'packaging/harmonyos');
+    const resolved = path.resolve(harmonyDirectory, entry.path);
+    const inside = path.relative(harmonyDirectory, resolved);
+    if (inside === '' || inside.startsWith('..') || path.isAbsolute(inside)) {
+      blocked.push({ template: file, unresolved_tokens: ['path escapes packaging/harmonyos'] });
+      continue;
+    }
+    if (!existsSync(path.join(root, file))) {
+      blocked.push({ template: file, unresolved_tokens: ['file is missing'] });
+      continue;
+    }
+    const text = readFileSync(path.join(root, file), 'utf8');
+    if (entry.substituted === true) {
+      const values = tokenValues(root, identity, 'harmonyos', null);
+      const { output, missing } = substitute(text, values);
+      if (missing.length > 0) {
+        blocked.push({ template: file, unresolved_tokens: missing });
+        continue;
+      }
+      outputs.push(write(outDir, `package/harmonyos/${entry.path}`, output));
+      continue;
+    }
+    // A file declared as static must not carry a token: it would ship a placeholder unreplaced.
+    if (/@@[A-Z][A-Z0-9_]*@@/.test(text)) {
+      blocked.push({ template: file, unresolved_tokens: ['declared substituted:false but carries a token'] });
+      continue;
+    }
+    outputs.push(write(outDir, `package/harmonyos/${entry.path}`, text));
+  }
+  return { outputs, blocked };
 }
 
 function write(outDir, relative, contents) {
@@ -218,7 +266,7 @@ function deriveAt(rasterizer, sources, size, color, workDir, name) {
   return downscale(image, size, size);
 }
 
-export function generate(root, outDir) {
+export function generate(root, outDir, options = {}) {
   const verification = checkResources(root);
   if (verification.errors.length > 0) {
     throw new Error(`resource checks failed; refusing to derive from an invalid tree:\n${verification.errors.join('\n')}`);
@@ -227,7 +275,10 @@ export function generate(root, outDir) {
   const iconManifest = readJson(root, 'resources/host/icons/manifest.json');
   const branding = readJson(root, 'resources/branding/manifest.json');
   const theme = readJson(root, 'resources/host/icons/theme.json');
-  const identity = readJson(root, 'packaging/identity.json');
+  // `options.identity` is a test/CI seam: §2.2 of issue-20261013 asks for an end-to-end run with a
+  // fixture identity without writing a product decision into the repository. The structure checks
+  // above still validate the committed identity; only substitution uses the fixture.
+  const identity = options.identity ?? readJson(root, 'packaging/identity.json');
   const palette = colors(branding);
   const report = { schema_version: 1, stages: [], rasterizer: null, sources: [], unverified: UNVERIFIED };
 
@@ -350,18 +401,22 @@ export function generate(root, outDir) {
     }
 
     const base = identity.binary_name;
+    // The Linux icon theme resolves `Icon=` by file name, and the desktop entry names the
+    // application id; macOS and Windows manifests point at a file name instead, so they keep the
+    // binary name.
+    const installedBase = identity.application_id ?? identity.binary_name;
     for (const size of linuxSizes) {
       const frame = frames.get(size);
-      outputs.push(write(outDir, `package/linux/hicolor/${size}x${size}/apps/${base}.png`, encodePng(frame)));
+      outputs.push(write(outDir, `package/linux/hicolor/${size}x${size}/apps/${installedBase}.png`, encodePng(frame)));
     }
     const scalableSource = readFileSync(path.join(root, `resources/branding/${largeMaster.path}`));
     mkdirSync(path.join(outDir, `package/linux/hicolor/scalable/apps`), { recursive: true });
     copyFileSync(
       path.join(root, `resources/branding/${largeMaster.path}`),
-      path.join(outDir, `package/linux/hicolor/scalable/apps/${base}.svg`),
+      path.join(outDir, `package/linux/hicolor/scalable/apps/${installedBase}.svg`),
     );
     outputs.push({
-      path: `package/linux/hicolor/scalable/apps/${base}.svg`,
+      path: `package/linux/hicolor/scalable/apps/${installedBase}.svg`,
       bytes: scalableSource.length,
       sha256: digest(scalableSource),
     });
@@ -562,14 +617,6 @@ export function generate(root, outDir) {
     { platform: 'linux', file: 'packaging/linux/rustage.desktop', iconFile: null },
     { platform: 'windows', file: 'packaging/windows/app.json', iconFile: null },
     { platform: 'linux', file: 'packaging/linux/app.json', iconFile: null },
-    { platform: 'harmonyos', file: 'packaging/harmonyos/AppScope/app.json5', iconFile: null },
-    { platform: 'harmonyos', file: 'packaging/harmonyos/AppScope/resources/base/element/string.json', iconFile: null },
-    { platform: 'harmonyos', file: 'packaging/harmonyos/build-profile.json5', iconFile: null },
-    {
-      platform: 'harmonyos',
-      file: 'packaging/harmonyos/entry/src/main/resources/base/element/string.json',
-      iconFile: null,
-    },
   ];
   const blocked = [];
   const metadataOutputs = [];
@@ -584,6 +631,11 @@ export function generate(root, outDir) {
     const relative = template.file.slice(`packaging/${template.platform}/`.length);
     metadataOutputs.push(write(outDir, `package/${template.platform}/${relative}`, output));
   }
+
+  // HarmonyOS owns a directory rather than one template; the helper walks the declared list.
+  const harmony = writeHarmonyPackage(root, outDir, identity);
+  blocked.push(...harmony.blocked);
+  metadataOutputs.push(...harmony.outputs);
   report.stages.push({
     name: 'package-metadata',
     status: blocked.length === 0 ? 'ok' : 'blocked',
@@ -601,6 +653,13 @@ export function generate(root, outDir) {
         + `the binary name "${identity.binary_name}" until T00.04 records the id`,
       outputs: [],
     });
+  } else {
+    report.stages.push({
+      name: 'installed-icon-name',
+      status: 'ok',
+      detail: `Linux icons are installed as ${identity.application_id}.png/.svg, the name Icon= resolves`,
+      outputs: [],
+    });
   }
 
   const reportOutput = write(outDir, 'reports/generation-report.json', `${JSON.stringify(report, null, 2)}\n`);
@@ -612,8 +671,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const outIndex = process.argv.indexOf('--out');
   const outDir = path.resolve(root, outIndex >= 0 ? process.argv[outIndex + 1] : 'target/resources');
+  const identityIndex = process.argv.indexOf('--identity');
+  const identityPath = identityIndex >= 0 ? path.resolve(process.argv[identityIndex + 1]) : null;
   try {
-    const report = generate(root, outDir);
+    const identity = identityPath === null ? undefined : JSON.parse(readFileSync(identityPath, 'utf8'));
+    const report = generate(root, outDir, { identity });
     for (const stage of report.stages) {
       console.log(`${stage.status.padEnd(7)} ${stage.name}${stage.detail ? `: ${stage.detail}` : ''}`);
     }

@@ -237,7 +237,7 @@ rustage/
 ├── tools/
 │   └── resources/                     # 已实现：check-resources.mjs、generate-resources.mjs、lib/
 ├── packaging/
-│   ├── identity.json                  # 应用身份与最低版本（未决策，占位值为 null 并报告阻塞）
+│   ├── identity.json                  # 应用身份与最低版本（2026-11-04 已决策，见 §17.2）
 │   ├── windows/                       # rustage.rc、app.json
 │   ├── macos/                         # Info.plist、app.json
 │   ├── linux/                         # rustage.desktop、app.json
@@ -935,10 +935,27 @@ user-project/
   与 `versionName` 不会脱节；方案无法表示的版本直接报错，不做静默截断。
 * 单层图标在平台上是合法形态；本仓库选择分层图标，因为它是 2in1 上的常规形态，
   并且要求前景/背景分开的母版，这正好与 §2.2/§5.2 的分层留白规则一致。
-* ArkTS 入口代码（`EntryAbility`、`pages`）属于宿主应用，不放进资源树；本目录只提供
-  清单与资源层。Rust 侧候选三元组为 `aarch64-unknown-linux-ohos`，
-  但"固定版本的 winit/wgpu 能否在 2in1 上以原生模块方式承载"**未验证**，
-  在做出任何支持声明前需要先做小样。
+* ArkTS 入口代码（`EntryAbility`、`pages/Index`）与 NAPI 桥（`cpp/napi_init.cpp`、`CMakeLists.txt`）
+  属于宿主脚手架，自 2026-11-03 起随本目录提供：页面通过 `libentry.so` 调用固定修订的 C ABI
+  （`rw_init`/`rw_create_*`/`rw_harmony_bind_xcomponent`/`rw_harmony_bind_node`/
+  `rw_harmony_on_*`/`rw_report_window_resize`/`rw_poll_widget_trigger_event`），不是第二套 UI。
+  `rw_generated.h` 与 `librust_widgets.so` 不复制入库，由 `RUST_WIDGETS_INCLUDE`/
+  `RUST_WIDGETS_LIB_DIR` 指向固定修订；缺少它们时 CMake 配置报错，不链接一个没有桥的模块。
+  `tools/resources/generate-resources.mjs` 以 `packaging/harmonyos/app.json` 的模板清单为准
+  输出全部文件（静态项原样、替换项代入），不再需要手工复制清单/颜色/路由/应用代码。
+  Rust 侧候选三元组为 `aarch64-unknown-linux-ohos`：4.0.1 的 `embedded`/`desktop` 已实测
+  构建通过（含 `xcomponent` 组合），NAPI 模块已用 SDK clang 实际编译、链接，并用 DevEco 的
+  cmake/ninja + `ohos.toolchain.cmake` 完成 CMake configure/build；
+  **hvigor 完整 HAP 构建与真机启动仍未验证**；应用身份、最低系统版本与发行形态已于
+  2026-11-04 落定（`io.github.mikewolfli.rustage`、HarmonyOS `5.1.0(18)`、`.hap`），
+  `build-profile.json5` 的 `@@MINIMUM_OS@@` 由生成器按 `identity.json` 代入；剩下的只是签名
+  （按发布机配置、不入库）与 2in1 真机安装。重复验证用
+  `sh tools/harmony/bridge-check.sh`（建库 → 查 `rw_*` 导出 → CMake `--no-undefined` → 查
+  `EntryModuleInit`）。
+  2026-11-03 另用一次性测试身份在 `/tmp` 跑通 `hvigorw assembleHap`（unsigned HAP，含
+  `libentry.so` 与 `librust_widgets.so`），只证明工程与 ArkTS/NAPI 编译链，不进入仓库、
+  不代表已确定发行身份（[log-20261103-2 §8](../log/log-20261103-2.md)）。重复验证用
+  `sh tools/harmony/hap-check.sh`（fixture 身份 → 生成完整包树 → unsigned HAP 内容断言）。
 * 验收至少覆盖：真机桌面分层图标、明暗启动页底色、字符串资源解析、应用列表中的包身份，
   以及干净机器离线安装；同时与 §13.5 的共同要求一并检查。
 
@@ -1165,15 +1182,20 @@ derived digest / rustage semantic ID(s)
 
 ### 17.2 实施前需要确认但不影响目录方案的决策
 
-* 产品最终品牌稿、实际应用 ID、商标权属与最低 OS 支持版本。
-* 首版正式打包形态，是否硬性要求单可执行文件。
+* ~~产品最终品牌稿、实际应用 ID、商标权属与最低 OS 支持版本~~（2026-11-04 已决策：
+  应用 ID `io.github.mikewolfli.rustage`；最低版本 Windows `10.0.17763`、macOS `11.0`、
+  Linux `glibc 2.31`、HarmonyOS `5.1.0(18)`；品牌稿仍属 O-BRAND，见
+  [decisions.md](./decisions.md) 与 [`packaging/identity.json`](../../packaging/identity.json)）。
+* ~~首版正式打包形态，是否硬性要求单可执行文件~~（2026-11-04 已决策：macOS `.dmg`、
+  Windows 便携 `.zip`、Linux `.tar.gz`、HarmonyOS `.hap`；首版不要求单文件，因为 `language/`
+  是运行期读取并热重载的资源目录）。
 * ~~GUI 库固定依赖方式与版本~~（2026-10-13 更新三已决策：git 修订固定，见 §7.5；
   本地 path 仅作核验来源，发布不依赖个人目录）。
 * 若动态拥有型几何/图片需要进入 Action 或独立 Icon，是否提出最小上游 API 扩展；
   Button/ToolButton 当前的像素通道不可推定为全控件支持。
 * 小样验证后锁定 SVG 转换及平台编码工具。
 
-这些事项不在本次文档中冒充用户已经批准的品牌或发行决策。
+签名凭据与商店身份仍不入库；品牌稿（O-BRAND）仍是待定项。
 
 ## 18. 日常维护流程与最终放置原则
 
